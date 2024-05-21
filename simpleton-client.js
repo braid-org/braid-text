@@ -11,7 +11,7 @@
 //     this is to generate outgoing changes,
 //     and if there are changes, returns { patches, state }
 //
-// content_type: overrides the Accept and Content-Type headers
+// content_type: used for Accept and Content-Type headers
 //
 // returns { changed(): (diff_function) => {...} }
 //     this is for outgoing changes;
