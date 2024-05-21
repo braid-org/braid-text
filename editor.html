@@ -6,9 +6,9 @@
 </body>
 <script src="https://braid.org/code/myers-diff1.js"></script>
 <script src="https://unpkg.com/braid-http@~0.3/braid-http-client.js"></script>
-<script src="https://unpkg.com/braid-text/client.js"></script>
+<script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
 <script>
-  let braid_text = braid_text_client(location.pathname, {
+  let simpleton = simpleton_client(location.pathname, {
     apply_remote_update: ({ state, patches }) => {
       if (state !== undefined) texty.value = state;
       else apply_patches_and_update_selection(texty, patches);
@@ -22,7 +22,7 @@
   });
 
   texty.value = "";
-  texty.oninput = (e) => braid_text.changed();
+  texty.oninput = (e) => simpleton.changed();
 
   function diff(before, after) {
     let diff = diff_main(before, after);

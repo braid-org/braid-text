@@ -16,19 +16,17 @@ dom.BODY = -> DIV(WIKI())
 <script>
     window.fetch = window.statebus_fetch
 </script>
-<script src="https://unpkg.com/braid-text/client.js"></script>
+<script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
 
 <script>
 
-var apply_patches_and_update_selection, diff, first_time, i, j, render_delay, scroll, braid_text_key, t, timer, ting, toggle_editor, update_markdown, update_markdown_later;
-
-braid_text_key = location.pathname;
+var apply_patches_and_update_selection, diff, first_time, i, j, render_delay, scroll, t, timer, ting, toggle_editor, update_markdown, update_markdown_later;
 
 t = function() {
   return document.getElementById('the editor');
 };
 
-var braid_text = braid_text_client(braid_text_key, {
+var simpleton = simpleton_client(location.pathname, {
   apply_remote_update: function(x) {
     if (x.state !== void 0) {
       t().value = x.state;
@@ -188,7 +186,7 @@ dom.WIKI = function() {
       }
       // Bail on edits that try to wipe us out
       state.source = e.target.value;
-      braid_text.changed();
+      simpleton.changed();
       return update_markdown_later();
     },
     defaultValue: state.source

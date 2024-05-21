@@ -90,11 +90,11 @@ Check out the `server-demo.js` file to see examples for how to add access contro
 
 ## Use the Library on the Client
 
-    <script src="https://unpkg.com/braid-text/client.js"></script>
+    <script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
     
     ...
     // connect to the server
-    let braid_text = braid_text_client(SERVER_URL, {
+    let simpleton = simpleton_client(SERVER_URL, {
       apply_remote_update: ({ state, patches }) => {
         // apply incoming state / return new state
       },
@@ -105,18 +105,18 @@ Check out the `server-demo.js` file to see examples for how to add access contro
     
     ...
     
-    // when changes are made, let braid-text know
-    braid_text.changed()
+    // when changes are made, let the client know
+    simpleton.changed()
 
 See [editor.html](https://raw.githubusercontent.com/braid-org/braid-text/master/editor.html) for a simple working example.
 
 ## Full Client Library API
 
-    braid_text = braid_text_client(url, {
+    simpleton = simpleton_client(url, {
       apply_remote_update,
       generate_local_diff_update}
 
   - `url`: The url of the resource to synchronize with.
   - `apply_remote_update`: This function will be called whenever an update is received from the server. The function should look like `({state, patches}) => {...}`. Only one of `state` or `patches` will be set. If it is `state`, then this is the new value of the text. If it is `patches`, then patches is an array of values like `{range: [1, 3], content: "Hi"}`. Each such value represents a string-replace operation; the `range` specifies a start and end position — these characters will be deleted — and `content` says what text to put in its place. Note that these patches will always be in order, but that the range positions of each patch always reference the original string, e.g., the second patch's range values do not take into account applying the first patch. Finally, this function returns the new state, after the application of the `state` or `patches`.
   - `generate_local_diff_update`: This function will often be called whenever an update happens locally, but the system may delay calling it if the network is congested. The function should look like `(prev_state) => {...}`. The function should basically do a diff between `prev_state` and the current state, and express this diff as an array of patches similar to the ones discussed above. Finally, if there is an actual difference detected, this function should return an object `{state, patches}`, otherwise it should return nothing.
-  - `braid_text.changed()`: Call this to report local updates whenever they occur, e.g., in the `oninput` handler of a textarea being synchronized.
+  - `simpleton.changed()`: Call this to report local updates whenever they occur, e.g., in the `oninput` handler of a textarea being synchronized.

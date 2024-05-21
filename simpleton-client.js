@@ -17,7 +17,7 @@
 //     this is for outgoing changes;
 //     diff_function = () => ({patches, new_version}).
 //
-function braid_text_client(url, { apply_remote_update, generate_local_diff_update, content_type }) {
+function simpleton_client(url, { apply_remote_update, generate_local_diff_update, content_type }) {
     var peer = Math.random().toString(36).substr(2)
     var current_version = []
     var prev_state = ""
