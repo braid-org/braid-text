@@ -12,7 +12,25 @@ This library provides a simple http route handler, along with client code, enabl
   - Fast / Robust / Extensively fuzz-tested 
 - Developed in [braid.org](https://braid.org)
 
-## Use the Library on the Server
+## Demo
+
+This will run a collaboratively-editable wiki:
+
+```shell
+npm install
+node server-demo.js
+```
+
+Now open these URLs in your browser:
+  - http://localhost:8888/demo (to see the demo text)
+  - http://localhost:8888/demo?editor (to edit the text)
+  - http://localhost:8888/demo?markdown-editor (to edit it as markdown)
+
+Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chrome), or another Braid client, to edit it directly!
+
+Check out the `server-demo.js` file to see examples for how to add access control, and a `/pages` endpoint to show all the edited pages.
+
+## Use on Server
 
 Install it in your project:
 ```shell
@@ -32,25 +50,7 @@ server.on("request", (req, res) => {
 })
 ```
 
-## Run the Demo
-
-This will run a collaboratively-editable wiki:
-
-```shell
-npm install
-node server-demo.js
-```
-
-Now open these URLs in your browser:
-  - http://localhost:8888/demo (to see the demo text)
-  - http://localhost:8888/demo?editor (to edit the text)
-  - http://localhost:8888/demo?markdown-editor (to edit it as markdown)
-
-Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chrome), or another Braid client, to edit it directly!
-
-Check out the `server-demo.js` file to see examples for how to add access control, and a `/pages` endpoint to show all the edited pages.
-
-## Full Server Library API
+## Server API
 
 `braid_text.db_folder = './braid-text-db' // <-- this is the default`
   - This is where the Diamond-Types history files will be stored for each resource.
@@ -88,7 +88,7 @@ Check out the `server-demo.js` file to see examples for how to add access contro
     - `patches`: <small style="color:lightgrey">[optional]</small> Array of patches, each of the form `{unit: 'text', range: '[1:3]', content: 'hi'}`, which would replace the second and third unicode code-points in the text with `hi`.
     - `peer`: <small style="color:lightgrey">[optional]</small> Identifies this peer. This mutation will not be echoed back to `get` subscriptions that use this same `peer` header.
 
-## Use the Library on the Client
+## Use on Client
 
     <script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
     
@@ -110,7 +110,7 @@ Check out the `server-demo.js` file to see examples for how to add access contro
 
 See [editor.html](https://raw.githubusercontent.com/braid-org/braid-text/master/editor.html) for a simple working example.
 
-## Full Client Library API
+## Client API
 
     simpleton = simpleton_client(url, {
       apply_remote_update,
