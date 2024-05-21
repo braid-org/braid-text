@@ -12,7 +12,7 @@ This library provides a simple http route handler, along with client code, enabl
   - Fast / Robust / Extensively fuzz-tested 
 - Developed in [braid.org](https://braid.org)
 
-## Demo
+### Demo
 
 This will run a collaboratively-editable wiki:
 
@@ -30,7 +30,7 @@ Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chro
 
 Check out the `server-demo.js` file to see examples for how to add access control, and a `/pages` endpoint to show all the edited pages.
 
-## Use on Server
+## General Use on Server
 
 Install it in your project:
 ```shell
@@ -88,7 +88,7 @@ server.on("request", (req, res) => {
     - `patches`: <small style="color:lightgrey">[optional]</small> Array of patches, each of the form `{unit: 'text', range: '[1:3]', content: 'hi'}`, which would replace the second and third unicode code-points in the text with `hi`.
     - `peer`: <small style="color:lightgrey">[optional]</small> Identifies this peer. This mutation will not be echoed back to `get` subscriptions that use this same `peer` header.
 
-## Use on Client
+## General Use on Client
 
     <script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
     
