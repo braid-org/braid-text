@@ -12,7 +12,7 @@ This library provides a simple http route handler, along with client code, enabl
   - Fast / Robust / Extensively fuzz-tested 
 - Developed in [braid.org](https://braid.org)
 
-### Demo
+### Demo: a Wiki!
 
 This will run a collaboratively-editable wiki:
 
@@ -90,31 +90,38 @@ server.on("request", (req, res) => {
 
 ## General Use on Client
 
-    <script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
+```html
+<script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
+<script>
+
+  // connect to the server
+  let simpleton = simpleton_client('https://example.org/some-resource', {
+    apply_remote_update: ({ state, patches }) => {
+      // apply incoming state / return new state
+    },
+    generate_local_diff_update: (prev_state) => {
+      // report changes between prev_state and the current state
+    },
+  });
     
-    ...
-    // connect to the server
-    let simpleton = simpleton_client(SERVER_URL, {
-      apply_remote_update: ({ state, patches }) => {
-        // apply incoming state / return new state
-      },
-      generate_local_diff_update: (prev_state) => {
-        // report changes between prev_state and the current state
-      },
-    });
+  ...
     
-    ...
-    
-    // when changes are made, let the client know
-    simpleton.changed()
+  // when changes are made, let the client know
+  simpleton.changed()
+
+</script>
+```
 
 See [editor.html](https://raw.githubusercontent.com/braid-org/braid-text/master/editor.html) for a simple working example.
 
 ## Client API
 
-    simpleton = simpleton_client(url, {
-      apply_remote_update,
-      generate_local_diff_update})
+```javascript
+simpleton = simpleton_client(url, {
+  apply_remote_update,
+  generate_local_diff_update
+})
+```
 
   - `url`: The url of the resource to synchronize with.
   - `apply_remote_update`: This function will be called whenever an update is received from the server. The function should look like `({state, patches}) => {...}`. Only one of `state` or `patches` will be set. If it is `state`, then this is the new value of the text. If it is `patches`, then patches is an array of values like `{range: [1, 3], content: "Hi"}`. Each such value represents a string-replace operation; the `range` specifies a start and end position — these characters will be deleted — and `content` says what text to put in its place. Note that these patches will always be in order, but that the range positions of each patch always reference the original string, e.g., the second patch's range values do not take into account applying the first patch. Finally, this function returns the new state, after the application of the `state` or `patches`.
