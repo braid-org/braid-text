@@ -97,12 +97,14 @@ server.on("request", (req, res) => {
   // connect to the server
   let simpleton = simpleton_client('https://example.org/some-resource', {
     apply_remote_update: ({ state, patches }) => {
-      // apply incoming state / return new state
+      ...apply incoming state or patches to local text...
+      return new_state
     },
     generate_local_diff_update: (prev_state) => {
-      // report changes between prev_state and the current state
+      ...calculate changes between prev_state and the local text...
+      return {state, patches}
     },
-  });
+  })
     
   ...
     
@@ -117,14 +119,40 @@ See [editor.html](https://raw.githubusercontent.com/braid-org/braid-text/master/
 ## Client API
 
 ```javascript
-simpleton = simpleton_client(url, {
-  apply_remote_update,
-  generate_local_diff_update
-})
+simpleton = simpleton_client(url, options)
 ```
 
-  - `url`: The url of the resource to synchronize with.
-  - `apply_remote_update`: This function will be called whenever an update is received from the server. The function should look like `({state, patches}) => {...}`. Only one of `state` or `patches` will be set. If it is `state`, then this is the new value of the text. If it is `patches`, then patches is an array of values like `{range: [1, 3], content: "Hi"}`. Each such value represents a string-replace operation; the `range` specifies a start and end position — these characters will be deleted — and `content` says what text to put in its place. Note that these patches will always be in order, but that the range positions of each patch always reference the original string, e.g., the second patch's range values do not take into account applying the first patch. Finally, this function returns the new state, after the application of the `state` or `patches`.
-  - `generate_local_diff_update`: This function will often be called whenever an update happens locally, but the system may delay calling it if the network is congested. The function should look like `(prev_state) => {...}`. The function should basically do a diff between `prev_state` and the current state, and express this diff as an array of patches similar to the ones discussed above. Finally, if there is an actual difference detected, this function should return an object `{state, patches}`, otherwise it should return nothing.
-  - `content_type`: <small style="color:lightgrey">[optional]</small> If set, this will be sent in `Accept` and `Content-Type` headers to the server.
-  - `simpleton.changed()`: Call this to report local updates whenever they occur, e.g., in the `oninput` handler of a textarea being synchronized.
+- `url`: The URL of the resource to synchronize with.
+- `options`: An object containing the following properties:
+  - `apply_remote_update`: A function that will be called whenever an update is received from the server. It should have the following signature:
+
+    ```javascript
+    ({state, patches}) => {...}
+    ```
+
+    - `state`: If present, represents the new value of the text.
+    - `patches`: If present, an array of patch objects, each representing a string-replace operation. Each patch object has the following properties:
+      - `range`: An array of two numbers, `[start, end]`, specifying the start and end positions of the characters to be deleted.
+      - `content`: The text to be inserted in place of the deleted characters.
+
+    Note that patches will always be in order, but the range positions of each patch reference the original string, i.e., the second patch's range values do not take into account the application of the first patch.
+
+    The function should apply the `state` or `patches` to the local text and return the new state.
+
+  - `generate_local_diff_update`: A function that will be called whenever a local update occurs, but may be delayed if the network is congested. It should have the following signature:
+
+    ```javascript
+    (prev_state) => {...}
+    ```
+
+    The function should calculate the difference between `prev_state` and the current state, and express this difference as an array of patches (similar to the ones described in `apply_remote_update`).
+
+    If a difference is detected, the function should return an object with the following properties:
+    - `state`: The current state of the text.
+    - `patches`: An array of patch objects representing the changes.
+
+    If no difference is detected, the function should return `undefined` or `null`.
+
+  - `content_type`: <small style="color:lightgrey">[optional]</small> If set, this value will be sent in the `Accept` and `Content-Type` headers to the server.
+
+- `simpleton.changed()`: Call this function to report local updates whenever they occur, e.g., in the `oninput` event handler of a textarea being synchronized.
