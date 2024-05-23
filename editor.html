@@ -17,7 +17,7 @@
     generate_local_diff_update: (prev_state) => {
       var patches = diff(prev_state, texty.value);
       if (patches.length === 0) return null;
-      return { patches, state: texty.value };
+      return { patches, new_state: texty.value };
     },
   });
 

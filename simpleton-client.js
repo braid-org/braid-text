@@ -9,7 +9,7 @@
 //
 // generate_local_diff_update: (prev_state) => {...}
 //     this is to generate outgoing changes,
-//     and if there are changes, returns { patches, state }
+//     and if there are changes, returns { patches, new_state }
 //
 // content_type: used for Accept and Content-Type headers
 //
@@ -74,7 +74,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
         while (true) {
             var update = generate_local_diff_update(prev_state)
             if (!update) return   // Stop if there wasn't a change!
-            var {patches, state} = update
+            var {patches, new_state} = update
 
             // convert from js-indicies to code-points
             let c = 0
@@ -103,7 +103,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
 
             var parents = current_version
             current_version = version
-            prev_state = state
+            prev_state = new_state
 
             outstanding_changes++
             await braid_fetch_wrapper(url, {

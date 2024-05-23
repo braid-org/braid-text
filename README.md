@@ -108,7 +108,7 @@ server.on("request", (req, res) => {
       // Compute diff between prev_state ^ and the current textarea string...
 
       // Then return the new state (as a string) and the diff (as `patches`)
-      return {state, patches}
+      return {new_state, patches}
     },
   })
     
@@ -155,7 +155,7 @@ simpleton = simpleton_client(url, options)
     The function should calculate the difference between `prev_state` and the current state, and express this difference as an array of patches (similar to the ones described in `apply_remote_update`).
 
     If a difference is detected, the function should return an object with the following properties:
-    - `state`: The current state of the text.
+    - `new_state`: The current state of the text.
     - `patches`: An array of patch objects representing the changes.
 
     If no difference is detected, the function should return `undefined` or `null`.
