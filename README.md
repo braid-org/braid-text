@@ -97,18 +97,25 @@ server.on("request", (req, res) => {
   // connect to the server
   let simpleton = simpleton_client('https://example.org/some-resource', {
     apply_remote_update: ({ state, patches }) => {
-      ...apply incoming state or patches to local text...
+
+      // Apply the incoming state or patches to local text here.
+
+      // Then return the new state of textarea as a string:
       return new_state
     },
     generate_local_diff_update: (prev_state) => {
-      ...calculate changes between prev_state and the local text...
+
+      // Compute diff between prev_state ^ and the current textarea string...
+
+      // Then return the new state (as a string) and the diff (as `patches`)
       return {state, patches}
     },
   })
     
   ...
     
-  // when changes are made, let the client know
+  // When changes occur in client's textarea, let simpleton know,
+  // so that it can call generate_local_diff_update() to ask for them.
   simpleton.changed()
 
 </script>
