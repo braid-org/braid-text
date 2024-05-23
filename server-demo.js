@@ -27,11 +27,7 @@ var server = require("http").createServer(async (req, res) => {
     // which displays all the currently used keys
     // 
     // if (req.url === '/pages') {
-    //     var pages = new Set()
-    //     for (let x of await require('fs').promises.readdir(db_folder)) {
-    //         let m = x.match(/^(.*)\.\d+$/)
-    //         if (m) pages.add(decodeURIComponent(m[1]))
-    //     }
+    //     var pages = await braid_text.list()
     //     res.writeHead(200, {
     //         "Content-Type": "application/json",
     //         "Access-Control-Allow-Origin": "*",
@@ -39,7 +35,7 @@ var server = require("http").createServer(async (req, res) => {
     //         "Access-Control-Allow-Headers": "*",
     //         "Access-Control-Expose-Headers": "*"
     //     })
-    //     res.end(JSON.stringify([...pages.keys()]))
+    //     res.end(JSON.stringify(pages))
     //     return
     // }
 

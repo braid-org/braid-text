@@ -483,6 +483,15 @@ braid_text.put = async (key, options) => {
     await resource.db_delta(resource.doc.getPatchSince(v_before))
 }
 
+braid_text.list = async () => {
+    var pages = new Set()
+    for (let x of await require('fs').promises.readdir(braid_text.db_folder)) {
+        let m = x.match(/^(.*)\.\d+$/)
+        if (m) pages.add(decode_filename(m[1]))
+    }
+    return [...pages.keys()]
+}
+
 async function get_resource(key) {
     let cache = get_resource.cache || (get_resource.cache = {})
     if (cache[key]) return cache[key]
@@ -496,7 +505,7 @@ async function get_resource(key) {
     let { change, delete_me } = braid_text.db_folder
         ? await file_sync(
             braid_text.db_folder,
-            encodeURIComponent(key),
+            encode_filename(key),
             (bytes) => resource.doc.mergeBytes(bytes),
             () => resource.doc.toBytes()
         )
@@ -1258,6 +1267,32 @@ function codePoints_to_index(str, codePoints) {
         c++
     }
     return i
+}
+
+function encode_filename(filename) {
+  // Replace all '!' with '%21'
+  let encoded = filename.replace(/!/g, '%21');
+  
+  // Encode the filename using encodeURIComponent()
+  encoded = encodeURIComponent(encoded);
+  
+  // Replace all '%2F' (for '/') with '!'
+  encoded = encoded.replace(/%2F/g, '!');
+  
+  return encoded;
+}
+
+function decode_filename(encodedFilename) {
+  // Replace all '!' with '%2F'
+  let decoded = encodedFilename.replace(/!/g, '%2F');
+  
+  // Decode the filename using decodeURIComponent()
+  decoded = decodeURIComponent(decoded);
+  
+  // Replace all '%21' with '!'
+  decoded = decoded.replace(/%21/g, '!');
+  
+  return decoded;
 }
 
 module.exports = braid_text
