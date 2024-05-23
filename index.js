@@ -490,12 +490,14 @@ braid_text.put = async (key, options) => {
 }
 
 braid_text.list = async () => {
-    var pages = new Set()
-    for (let x of await require('fs').promises.readdir(braid_text.db_folder)) {
-        let m = x.match(/^(.*)\.\d+$/)
-        if (m) pages.add(decode_filename(m[1]))
-    }
-    return [...pages.keys()]
+    try {
+        var pages = new Set()
+        for (let x of await require('fs').promises.readdir(braid_text.db_folder)) {
+            let m = x.match(/^(.*)\.\d+$/)
+            if (m) pages.add(decode_filename(m[1]))
+        }
+        return [...pages.keys()]
+    } catch (e) { return [] }
 }
 
 async function get_resource(key) {
