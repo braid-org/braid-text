@@ -167,7 +167,13 @@ braid_text.serve = async (req, res, options = {}) => {
 }
 
 braid_text.get = async (key, options) => {
-    if (!options) return get_resource.cache?.[key]?.doc.get()
+    if (!options) {
+        let x = get_resource.cache?.[key]?.doc.get()
+        if (x !== undefined) return x
+        // if it doesn't exist on disk, don't create it in this case
+        if (!(await get_files_for_key(key)).length) return
+        return (await get_resource(key)).doc.get()
+    }
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
@@ -503,12 +509,9 @@ async function get_resource(key) {
     resource.doc = new Doc("server")
 
     let { change, delete_me } = braid_text.db_folder
-        ? await file_sync(
-            braid_text.db_folder,
-            encode_filename(key),
+        ? await file_sync(key,
             (bytes) => resource.doc.mergeBytes(bytes),
-            () => resource.doc.toBytes()
-        )
+            () => resource.doc.toBytes())
         : { change: () => { }, delete_me: () => { } }
 
     resource.db_delta = change
@@ -524,32 +527,30 @@ async function get_resource(key) {
     return (cache[key] = resource)
 }
 
-async function file_sync(db_folder, filename_base, process_delta, get_init) {
+async function get_files_for_key(key) {
+    try {
+        let re = new RegExp("^" + encode_filename(key).replace(/[^a-zA-Z0-9]/g, "\\$&") + "\\.\\d+$")
+        return (await fs.promises.readdir(braid_text.db_folder))
+            .filter((a) => re.test(a))
+            .map((a) => `${braid_text.db_folder}/${a}`)
+    } catch (e) { return [] }    
+}
+
+async function file_sync(key, process_delta, get_init) {
     let currentNumber = 0
     let currentSize = 0
     let threshold = 0
 
     // Ensure the existence of db_folder
     try {
-        await fs.promises.access(db_folder);
+        await fs.promises.access(braid_text.db_folder);
     } catch (err) {
-        if (err.code === 'ENOENT') {
-            await fs.promises.mkdir(db_folder, { recursive: true });
-        } else {
-            throw err;
-        }
+        await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
     }
 
     // Read existing files and sort by numbers.
-    async function get_sorted_files() {
-        let re = new RegExp("^" + filename_base.replace(/[^a-zA-Z0-9]/g, "\\$&") + "\\.\\d+$")
-        return (await fs.promises.readdir(db_folder))
-            .filter((a) => re.test(a))
-            .sort((a, b) => parseInt(a.match(/\d+$/)[0]) - parseInt(b.match(/\d+$/)[0]))
-            .map((a) => `${db_folder}/${a}`)
-    }
-
-    const files = await get_sorted_files()
+    const files = (await get_files_for_key(key))
+        .sort((a, b) => parseInt(a.match(/\d+$/)[0]) - parseInt(b.match(/\d+$/)[0]))
 
     // Try to process files starting from the highest number.
     let done = false
@@ -590,7 +591,7 @@ async function file_sync(db_folder, filename_base, process_delta, get_init) {
     return {
         change: async (bytes) => {
             currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
-            const filename = `${db_folder}/${filename_base}.${currentNumber}`
+            const filename = `${braid_text.db_folder}/${encode_filename(key)}.${currentNumber}`
             if (currentSize < threshold) {
                 console.log(`appending to db..`)
 
@@ -609,7 +610,7 @@ async function file_sync(db_folder, filename_base, process_delta, get_init) {
                     const buffer = Buffer.allocUnsafe(4)
                     buffer.writeUInt32LE(init.length, 0)
 
-                    const newFilename = `${db_folder}/${filename_base}.${currentNumber}`
+                    const newFilename = `${braid_text.db_folder}/${encode_filename(key)}.${currentNumber}`
                     await fs.promises.writeFile(newFilename, buffer)
                     await fs.promises.appendFile(newFilename, init)
 
@@ -628,7 +629,7 @@ async function file_sync(db_folder, filename_base, process_delta, get_init) {
         delete_me: async () => {
             await Promise.all(
                 (
-                    await get_sorted_files()
+                    await get_files_for_key(key)
                 ).map((file) => {
                     return new Promise((resolve, reject) => {
                         fs.unlink(file, (err) => {
