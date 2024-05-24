@@ -8,6 +8,7 @@ This library provides a simple http route handler, along with client code, enabl
     - As little as 50 lines of code!
     - With zero history overhead on client
   - Supports [backpressure](https://braid.org/meeting-81/simpleton) to run smoothly on constrained servers
+  - Sever merges with Diamond-Types
 - Supports [Diamond Types](https://github.com/josephg/diamond-types) merge-type
   - Fast / Robust / Extensively fuzz-tested 
 - Developed in [braid.org](https://braid.org)
