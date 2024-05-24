@@ -58,7 +58,7 @@ http_server.on("request", (req, res) => {
   - This folder will be created if it doesn't exist.
   - The files for a resource will all be prefixed with a url-encoding of `key` within this folder.
 
-`braid_text.server(req, res, options)`
+`braid_text.serve(req, res, options)`
   - `req`: The incoming HTTP request object.
   - `res`: The HTTP response object to send the response.
   - `options`: <small style="color:lightgrey">[optional]</small> An object containing additional options:
