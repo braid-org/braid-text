@@ -42,7 +42,7 @@ Import the request handler into your code, and use it to handle HTTP requests wh
 ```javascript
 var braid_text = require("braid-text")
 
-server.on("request", (req, res) => {
+http_server.on("request", (req, res) => {
   // Your server logic...
 
   // Whenever desired, serve braid text for this request/response:
