@@ -105,13 +105,12 @@ http_server.on("request", (req, res) => {
     },
     generate_local_diff_update: (prev_state) => {
 
-      // Compute diff between prev_state ^ and the current textarea string,
-      // which might look like:
+      // Compute diff between prev_state ^ and the current textarea string, such as:
       //
-      // var patches = [{
-      //   range: [5:5],
-      //   content: " World"
-      // }]
+      //   var patches = [{
+      //     range: [5:5],
+      //     content: " World"
+      //   }]
       //
       // ...to insert something after a prev_state of "Hello".
 
