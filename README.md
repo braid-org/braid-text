@@ -113,7 +113,7 @@ server.on("request", (req, res) => {
       //   content: " World"
       // }]
       //
-      // to insert something after a prev_state of "Hello"
+      // ...to insert something after a prev_state of "Hello".
 
       // Then return the new state (as a string) and the diff (as `patches`)
       return {new_state, patches}
