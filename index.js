@@ -261,7 +261,7 @@ braid_text.get = async (key, options) => {
                 let local_version = OpLog_remote_to_local(resource.doc, x.parents)
                 if (local_version) {
                     x.patches = get_xf_patches(resource.doc, local_version)
-                    if (x.patches.length) options.subscribe(x)
+                    options.subscribe(x)
                 }
             }
 
