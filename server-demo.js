@@ -1,5 +1,5 @@
 
-var port = 8888
+var port = process.argv[2] || 8888
 
 var braid_text = require("./index.js")
 
