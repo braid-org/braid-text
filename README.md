@@ -8,9 +8,10 @@ This library provides a simple http route handler, along with client code, enabl
     - As little as 50 lines of code!
     - With zero history overhead on client
   - Supports [backpressure](https://braid.org/meeting-81/simpleton) to run smoothly on constrained servers
-  - Sever merges with Diamond-Types
+  - Server merges with Diamond-Types
 - Supports [Diamond Types](https://github.com/josephg/diamond-types) merge-type
-  - Fast / Robust / Extensively fuzz-tested 
+  - Fully peer-to-peer CRDT
+  - Fast / Robust / Extensively fuzz-tested
 - Developed in [braid.org](https://braid.org)
 
 ### Demo: a Wiki!
@@ -59,8 +60,8 @@ http_server.on("request", (req, res) => {
   - The files for a resource will all be prefixed with a url-encoding of `key` within this folder.
 
 `braid_text.serve(req, res, options)`
-  - `req`: The incoming HTTP request object.
-  - `res`: The HTTP response object to send the response.
+  - `req`: Incoming HTTP request object.
+  - `res`: Outgoing HTTP response object.
   - `options`: <small style="color:lightgrey">[optional]</small> An object containing additional options:
     - `key`:  <small style="color:lightgrey">[optional]</small> ID of text resource to sync with.  Defaults to `req.url`.
   - This is the main method of this library, and does all the work to handle Braid-HTTP `GET` and `PUT` requests concerned with a specific text resource.
@@ -72,13 +73,12 @@ http_server.on("request", (req, res) => {
 `await braid_text.get(key, options)`
   - `key`: ID of text resource.
   - `options`: An object containing additional options, like http headers:
-    - `version`:  <small style="color:lightgrey">[optional]</small> The version to get.
-    - `subscribe: cb`:  <small style="color:lightgrey">[optional]</small> Transforms `get` into a subscription that calls `cb` with each update. The function `cb` is called with the argument `{version, parents, body, patches}` with each update to the text.
-    - `parents`:  <small style="color:lightgrey">[optional]</small> Array of parents — the subscription will only send newer updates than these.
-    - `merge_type`: <small style="color:lightgrey">[optional]</small> When subscribing, identifies the synchronization protocol. Defaults to `simpleton`, but can be set to `dt`.
-    - `peer`: <small style="color:lightgrey">[optional]</small> When subscribing, identifies this peer. Mutations will not be echoed back to the same peer that puts them, if that put also sets the same `peer` header.
-
-  - If we are NOT subscribing, returns `{version, body}`, with the `version` being returned, and the text as `body`. If we are subscribing, this returns nothing.
+    - `version`:  <small style="color:lightgrey">[optional]</small> The version to get, as an array of strings.  (See Braid [Versions](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-2)
+    - `parents`:  <small style="color:lightgrey">[optional]</small> The version to start the subscription at, as an array of strings.
+    - `subscribe: cb`:  <small style="color:lightgrey">[optional]</small> Instead of returning the state; subscribes to the state, and calls `cb` with the initial state and each update. The function `cb` will be called as `cb({version, parents, body, patches})`.  (See Braid [Subscriptions](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-4) and [Updates](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-3).)
+    - `merge_type`: <small style="color:lightgrey">[optional]</small> The CRDT/OT algorithm to emulate.  (See [Merge-Types](https://raw.githubusercontent.com/braid-org/braid-spec/master/draft-toomim-httpbis-merge-types-00.txt).) Currently supports `"simpleton"` (default) and `"dt"`.
+    - `peer`: <small style="color:lightgrey">[optional]</small> Unique string ID that identifies the peer making the subscription. Mutations will not be echoed back to the same peer that `PUT`s them, for any `PUT` setting the same `peer` header.
+  - If NOT subscribing, returns `{version: <current_version>, body: <current-text>}`. If subscribing, returns nothing.
 
 `await braid_text.put(key, options)`
   - `key`: ID of text resource.
