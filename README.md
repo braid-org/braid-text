@@ -73,20 +73,20 @@ http_server.on("request", (req, res) => {
 `await braid_text.get(key, options)`
   - `key`: ID of text resource.
   - `options`: An object containing additional options, like http headers:
-    - `version`:  <small style="color:lightgrey">[optional]</small> The version to get, as an array of strings.  (See Braid [Versions](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-2)
+    - `version`:  <small style="color:lightgrey">[optional]</small> The [version](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-2) to get, as an array of strings.  (The array is typically length 1.)
     - `parents`:  <small style="color:lightgrey">[optional]</small> The version to start the subscription at, as an array of strings.
-    - `subscribe: cb`:  <small style="color:lightgrey">[optional]</small> Instead of returning the state; subscribes to the state, and calls `cb` with the initial state and each update. The function `cb` will be called as `cb({version, parents, body, patches})`.  (See Braid [Subscriptions](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-4) and [Updates](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-3).)
-    - `merge_type`: <small style="color:lightgrey">[optional]</small> The CRDT/OT algorithm to emulate.  (See [Merge-Types](https://raw.githubusercontent.com/braid-org/braid-spec/master/draft-toomim-httpbis-merge-types-00.txt).) Currently supports `"simpleton"` (default) and `"dt"`.
+    - `subscribe: cb`:  <small style="color:lightgrey">[optional]</small> Instead of returning the state; [subscribes](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-4) to the state, and calls `cb` with the initial state and each update. The function `cb` will be called with a Braid [update](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-3) of the form `cb({version, parents, body, patches})`.
+    - `merge_type`: <small style="color:lightgrey">[optional]</small> The CRDT/OT [merge-type](https://raw.githubusercontent.com/braid-org/braid-spec/master/draft-toomim-httpbis-merge-types-00.txt) algorithm to emulate.  Currently supports `"simpleton"` (default) and `"dt"`.
     - `peer`: <small style="color:lightgrey">[optional]</small> Unique string ID that identifies the peer making the subscription. Mutations will not be echoed back to the same peer that `PUT`s them, for any `PUT` setting the same `peer` header.
   - If NOT subscribing, returns `{version: <current_version>, body: <current-text>}`. If subscribing, returns nothing.
 
 `await braid_text.put(key, options)`
   - `key`: ID of text resource.
   - `options`: An object containing additional options, like http headers:
-    - `version`:  <small style="color:lightgrey">[optional]</small> The version being supplied. Will be randomly generated if not supplied.
-    - `parents`:  <small style="color:lightgrey">[optional]</small> Array of versions this update depends on. Defaults to the server’s current version.
-    - `body`: <small style="color:lightgrey">[optional]</small> Use this to completely replace the existing text with this new text.
-    - `patches`: <small style="color:lightgrey">[optional]</small> Array of patches, each of the form `{unit: 'text', range: '[1:3]', content: 'hi'}`, which would replace the second and third unicode code-points in the text with `hi`.
+    - `version`:  <small style="color:lightgrey">[optional]</small> The [version](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-2) being `PUT`, as an array of strings. Will be generated if not provided.
+    - `parents`:  <small style="color:lightgrey">[optional]</small> The previous version being updated, as array of strings. Defaults to the server’s current version.
+    - `body`: <small style="color:lightgrey">[optional]</small> Use this to completely replace the existing text with this new text.  See Braid [updates](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-3).
+    - `patches`: <small style="color:lightgrey">[optional]</small> Array of patches, each of the form `{unit: 'text', range: '[1:3]', content: 'hi'}`, which would replace the second and third unicode code-points in the text with `hi`.  See Braid [Range-Patches](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-range-patch-01.txt).
     - `peer`: <small style="color:lightgrey">[optional]</small> Identifies this peer. This mutation will not be echoed back to `get` subscriptions that use this same `peer` header.
 
 ## General Use on Client
