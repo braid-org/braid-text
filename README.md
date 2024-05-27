@@ -29,8 +29,9 @@ Now open these URLs in your browser:
   - http://localhost:8888/demo (to see the demo text)
   - http://localhost:8888/demo?editor (to edit the text)
   - http://localhost:8888/demo?markdown-editor (to edit it as markdown)
+  - http://localhost:8888/any-other-path?editor (to create a new page, just go to its URL, and then start editing)
 
-Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chrome), or another Braid client, to edit it directly!
+Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chrome), or [another Braid client](https://bloop.monster/simpleditor), to edit it directly!
 
 Check out the `server-demo.js` file to see examples for how to add access control, and a `/pages` endpoint to show all the edited pages.
 
