@@ -85,7 +85,7 @@ function free_the_cors (req, res) {
     var free_the_cors = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "OPTIONS, HEAD, GET, PUT, UNSUBSCRIBE",
-        "Access-Control-Allow-Headers": "subscribe, client, version, parents, merge-type, content-type, patches, cache-control, peer"
+        "Access-Control-Allow-Headers": "subscribe, client, version, parents, merge-type, content-type, content-range, patches, cache-control, peer"
     }
     Object.entries(free_the_cors).forEach(x => res.setHeader(x[0], x[1]))
     if (req.method === 'OPTIONS') {
