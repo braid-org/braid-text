@@ -11,6 +11,11 @@ var braid_text = require("./index.js")
 var server = require("http").createServer(async (req, res) => {
     console.log(`${req.method} ${req.url}`)
 
+    // Free the CORS
+    free_the_cors(req, res)
+    if (req.method === 'OPTIONS') return
+
+
     if (req.url.endsWith("?editor")) {
         res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
         require("fs").createReadStream("./editor.html").pipe(res)
@@ -30,9 +35,6 @@ var server = require("http").createServer(async (req, res) => {
     //     var pages = await braid_text.list()
     //     res.writeHead(200, {
     //         "Content-Type": "application/json",
-    //         "Access-Control-Allow-Origin": "*",
-    //         "Access-Control-Allow-Methods": "*",
-    //         "Access-Control-Allow-Headers": "*",
     //         "Access-Control-Expose-Headers": "*"
     //     })
     //     res.end(JSON.stringify(pages))
@@ -73,3 +75,21 @@ var server = require("http").createServer(async (req, res) => {
 server.listen(port, () => {
     console.log(`server started on port ${port}`)
 })
+
+
+// Free the CORS!
+function free_the_cors (req, res) {
+    res.setHeader('Range-Request-Allow-Methods', 'PATCH, PUT')
+    res.setHeader('Range-Request-Allow-Units', 'json')
+    res.setHeader("Patches", "OK")
+    var free_the_cors = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "OPTIONS, HEAD, GET, PUT, UNSUBSCRIBE",
+        "Access-Control-Allow-Headers": "subscribe, client, version, parents, merge-type, content-type, patches, cache-control, peer"
+    }
+    Object.entries(free_the_cors).forEach(x => res.setHeader(x[0], x[1]))
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200)
+        res.end()
+    }
+}
