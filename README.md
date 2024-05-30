@@ -14,9 +14,9 @@ This library provides a simple http route handler, along with client code, enabl
   - Fast / Robust / Extensively fuzz-tested
 - Developed in [braid.org](https://braid.org)
 
-> [**📺 Demo Video**](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)
-
 This library makes it safe, easy & efficient to add collaborative text editing to every user-editable string in your web app.  Make your app multiplayer!
+
+### [**Demo: a Video 📺**](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)
 
 ### Demo: a Wiki!
 
