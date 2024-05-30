@@ -16,7 +16,7 @@ This library provides a simple http route handler, along with client code, enabl
 
 This library makes it safe, easy & efficient to add collaborative text editing to every user-editable string in your web app.  Make your app multiplayer!
 
-### [**Demo: a Video 📺**](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)
+Check out the [**demo video**](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755) 📺 from the Braid 86 release!
 
 ### Demo: a Wiki!
 
