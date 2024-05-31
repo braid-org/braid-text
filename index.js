@@ -1273,29 +1273,23 @@ function codePoints_to_index(str, codePoints) {
 }
 
 function encode_filename(filename) {
-  // Replace all '!' with '%21'
-  let encoded = filename.replace(/!/g, '%21');
-  
-  // Encode the filename using encodeURIComponent()
-  encoded = encodeURIComponent(encoded);
-  
-  // Replace all '%2F' (for '/') with '!'
-  encoded = encoded.replace(/%2F/g, '!');
-  
-  return encoded;
+    // Swap all "!" and "/" characters
+    let swapped = filename.replace(/[!/]/g, (match) => (match === "!" ? "/" : "!"))
+
+    // Encode the filename using encodeURIComponent()
+    let encoded = encodeURIComponent(swapped)
+
+    return encoded
 }
 
 function decode_filename(encodedFilename) {
-  // Replace all '!' with '%2F'
-  let decoded = encodedFilename.replace(/!/g, '%2F');
-  
-  // Decode the filename using decodeURIComponent()
-  decoded = decodeURIComponent(decoded);
-  
-  // Replace all '%21' with '!'
-  decoded = decoded.replace(/%21/g, '!');
-  
-  return decoded;
+    // Decode the filename using decodeURIComponent()
+    let decoded = decodeURIComponent(encodedFilename)
+
+    // Swap all "/" and "!" characters
+    decoded = decoded.replace(/[!/]/g, (match) => (match === "/" ? "!" : "/"))
+
+    return decoded
 }
 
 module.exports = braid_text
