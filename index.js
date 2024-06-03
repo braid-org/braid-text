@@ -118,20 +118,28 @@ braid_text.serve = async (req, res, options = {}) => {
                 done()
             })
         )
-        let patches = await req.patches()
+        let patches = null
+        let ee = null
+        try {
+            patches = await req.patches()
+        } catch (e) { ee = e }
         await my_prev_put_p
 
-        let body = null
-        if (patches[0]?.unit === 'everything') {
-            body = patches[0].content
-            patches = null
-        }
-
         try {
+            if (ee) throw ee
+
+            let body = null
+            if (patches[0]?.unit === 'everything') {
+                body = patches[0].content
+                patches = null
+            }
+
             await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type: req.headers["merge-type"] })
+
+            options.put_cb(options.key, resource.doc.get())
         } catch (e) {
             console.log(`EEE= ${e}:${e.stack}`)
-            // we couldn't apply the version, presumably because we're missing its parents.
+            // we couldn't apply the version, possibly because we're missing its parents,
             // we want to send a 4XX error, so the client will resend this request later,
             // hopefully after we've received the necessary parents.
 
@@ -155,10 +163,8 @@ braid_text.serve = async (req, res, options = {}) => {
             // - 428 Precondition Required
             //     - pros: the name sounds right
             //     - cons: typically implies that the request was missing an http conditional field like If-Match. that is to say, it implies that the request is missing a precondition, not that the server is missing a precondition
-            return done_my_turn(425, "The server is missing the parents of this version.")
+            return done_my_turn(425, "The server failed to apply this version.")
         }
-
-        options.put_cb(options.key, resource.doc.get())
 
         return done_my_turn(200)
     }
@@ -544,11 +550,7 @@ async function file_sync(key, process_delta, get_init) {
     let threshold = 0
 
     // Ensure the existence of db_folder
-    try {
-        await fs.promises.access(braid_text.db_folder);
-    } catch (err) {
-        await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
-    }
+    await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
 
     // Read existing files and sort by numbers.
     const files = (await get_files_for_key(key))
