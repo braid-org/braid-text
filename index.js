@@ -10,6 +10,8 @@ let braid_text = {
 let waiting_puts = 0
 let prev_put_p = null
 
+let max_encoded_key_size = 170
+
 braid_text.serve = async (req, res, options = {}) => {
     options = {
         key: req.url.split('?')[0], // Default key
@@ -499,8 +501,9 @@ braid_text.list = async () => {
     try {
         var pages = new Set()
         for (let x of await require('fs').promises.readdir(braid_text.db_folder)) {
-            let m = x.match(/^(.*)\.\d+$/)
-            if (m) pages.add(decode_filename(m[1]))
+            let k = x.replace(/\.\w+$/, '')
+            if (k.length <= max_encoded_key_size) pages.add(decode_filename(k))
+            else if (x.endsWith('.name')) pages.add(await require('fs').promises.readFile(`${braid_text.db_folder}/${x}`, { encoding: 'utf8' }))
         }
         return [...pages.keys()]
     } catch (e) { return [] }
@@ -537,7 +540,7 @@ async function get_resource(key) {
 
 async function get_files_for_key(key) {
     try {
-        let re = new RegExp("^" + encode_filename(key).replace(/[^a-zA-Z0-9]/g, "\\$&") + "\\.\\d+$")
+        let re = new RegExp("^" + encode_filename(key).replace(/[^a-zA-Z0-9]/g, "\\$&") + "\\.\\w+$")
         return (await fs.promises.readdir(braid_text.db_folder))
             .filter((a) => re.test(a))
             .map((a) => `${braid_text.db_folder}/${a}`)
@@ -550,10 +553,29 @@ async function file_sync(key, process_delta, get_init) {
     let threshold = 0
 
     // Ensure the existence of db_folder
-    await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
+    if (!file_sync.init_p) file_sync.init_p = new Promise(async done => {
+        await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
+
+        // 0.0.13 -> 0.0.14
+        // look for files with key-encodings over max_encoded_key_size,
+        // and convert them using the new method
+        for (let x of await fs.promises.readdir(braid_text.db_folder)) {
+            let k = x.replace(/(_[0-9a-f]{64})?\.\w+$/, '')
+            if (k.length > max_encoded_key_size) {
+                k = decode_filename(k)
+
+                await fs.promises.rename(`${braid_text.db_folder}/${x}`, `${braid_text.db_folder}/${encode_filename(k)}${x.match(/\.\w+$/)[0]}`)
+                await fs.promises.writeFile(`${braid_text.db_folder}/${encode_filename(k)}.name`, k)
+            }
+        }
+
+        done()
+    })
+    await file_sync.init_p
 
     // Read existing files and sort by numbers.
     const files = (await get_files_for_key(key))
+        .filter(x => x.match(/\.\d+$/))
         .sort((a, b) => parseInt(a.match(/\d+$/)[0]) - parseInt(b.match(/\d+$/)[0]))
 
     // Try to process files starting from the highest number.
@@ -609,12 +631,15 @@ async function file_sync(key, process_delta, get_init) {
                 try {
                     console.log(`starting new db..`)
 
+                    let encoded = encode_filename(key)
+                    if (encoded.length > max_encoded_key_size) await fs.promises.writeFile(`${braid_text.db_folder}/${encoded}.name`, key)
+
                     currentNumber++
                     const init = get_init()
                     const buffer = Buffer.allocUnsafe(4)
                     buffer.writeUInt32LE(init.length, 0)
 
-                    const newFilename = `${braid_text.db_folder}/${encode_filename(key)}.${currentNumber}`
+                    const newFilename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
                     await fs.promises.writeFile(newFilename, buffer)
                     await fs.promises.appendFile(newFilename, init)
 
@@ -1280,6 +1305,11 @@ function encode_filename(filename) {
 
     // Encode the filename using encodeURIComponent()
     let encoded = encodeURIComponent(swapped)
+
+    // Do something special with a hash if the encoding is too long
+    if (encoded.length > max_encoded_key_size) {
+        encoded = `${swapped.slice(0, max_encoded_key_size)}_${require('crypto').createHash('sha256').update(filename).digest('hex')}`
+    }
 
     return encoded
 }
