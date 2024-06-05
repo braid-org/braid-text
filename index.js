@@ -10,7 +10,7 @@ let braid_text = {
 let waiting_puts = 0
 let prev_put_p = null
 
-let max_encoded_key_size = 170
+let max_encoded_key_size = 240
 
 braid_text.serve = async (req, res, options = {}) => {
     options = {
@@ -19,11 +19,31 @@ braid_text.serve = async (req, res, options = {}) => {
         ...options                  // Override with all options passed in
     }
 
-    let resource = await get_resource(options.key)
+    // free CORS
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "*")
+    res.setHeader("Access-Control-Allow-Headers", "*")
+    res.setHeader("Access-Control-Expose-Headers", "*")
 
-    braidify(req, res)
+    function my_end(statusCode, x) {
+        res.statusCode = statusCode
+        res.end(x ?? '')
+    }
+
+    let resource = null
+    try {
+        resource = await get_resource(options.key)
+
+        braidify(req, res)
+    } catch (e) {
+        return my_end(400, "The server failed to process this request. The error generated was: " + e)
+    }
 
     let peer = req.headers["peer"]
+
+    let merge_type = req.headers["merge-type"]
+    if (!merge_type) merge_type = 'simpleton'
+    if (merge_type !== 'simpleton' && merge_type !== 'dt') return my_end(400, `Unknown merge type: ${merge_type}`)
 
     // set default content type of text/plain
     if (!res.getHeader('content-type')) res.setHeader('Content-Type', 'text/plain')
@@ -43,17 +63,6 @@ braid_text.serve = async (req, res, options = {}) => {
         res.setHeader('Content-Type', updatedContentType);
     }
 
-    // free CORS
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "*")
-    res.setHeader("Access-Control-Allow-Headers", "*")
-    res.setHeader("Access-Control-Expose-Headers", "*")
-
-    function my_end(statusCode, x) {
-        res.statusCode = statusCode
-        res.end(x ?? '')
-    }
-
     if (req.method == "OPTIONS") return my_end(200)
 
     if (req.method == "DELETE") {
@@ -65,7 +74,12 @@ braid_text.serve = async (req, res, options = {}) => {
         if (!req.subscribe) {
             res.setHeader("Accept-Subscribe", "true")
 
-            let x = await braid_text.get(resource, { version: req.version, parents: req.parents })
+            let x = null
+            try {
+                x = await braid_text.get(resource, { version: req.version, parents: req.parents })
+            } catch (e) {
+                return my_end(400, "The server failed to get something. The error generated was: " + e)
+            }
 
             res.setHeader("Version", x.version.map((x) => JSON.stringify(x)).join(", "))
 
@@ -77,26 +91,30 @@ braid_text.serve = async (req, res, options = {}) => {
             return my_end(200, buffer)
         } else {
             res.setHeader("Editable", "true")
-            res.setHeader("Merge-Type", req.headers["merge-type"] === "dt" ? "dt" : "simpleton")
+            res.setHeader("Merge-Type", merge_type)
             if (req.method == "HEAD") return my_end(200)
 
             let options = {
                 peer,
                 version: req.version,
                 parents: req.parents,
-                merge_type: req.headers["merge-type"],
+                merge_type,
                 subscribe: x => res.sendVersion(x),
                 write: (x) => res.write(x)
             }
 
             res.startSubscription({
                 onClose: () => {
-                    if (req.headers["merge-type"] === "dt") resource.clients.delete(options)
+                    if (merge_type === "dt") resource.clients.delete(options)
                     else resource.simpleton_clients.delete(options)
                 }
             })
 
-            return braid_text.get(resource, options)
+            try {
+                return await braid_text.get(resource, options)
+            } catch (e) {
+                return my_end(400, "The server failed to get something. The error generated was: " + e)
+            }
         }
     }
 
@@ -136,7 +154,7 @@ braid_text.serve = async (req, res, options = {}) => {
                 patches = null
             }
 
-            await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type: req.headers["merge-type"] })
+            await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
 
             options.put_cb(options.key, resource.doc.get())
         } catch (e) {
@@ -165,7 +183,7 @@ braid_text.serve = async (req, res, options = {}) => {
             // - 428 Precondition Required
             //     - pros: the name sounds right
             //     - cons: typically implies that the request was missing an http conditional field like If-Match. that is to say, it implies that the request is missing a precondition, not that the server is missing a precondition
-            return done_my_turn(425, "The server failed to apply this version.")
+            return done_my_turn(425, "The server failed to apply this version. The error generated was: " + e)
         }
 
         return done_my_turn(200)
@@ -182,6 +200,9 @@ braid_text.get = async (key, options) => {
         if (!(await get_files_for_key(key)).length) return
         return (await get_resource(key)).doc.get()
     }
+
+    if (options.version) validate_version_array(options.version)
+    if (options.parents) validate_version_array(options.parents)
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
@@ -249,12 +270,12 @@ braid_text.get = async (key, options) => {
         } else doc = resource.doc
 
         return {
-            version: doc.getRemoteVersion().map((x) => encode_version(...x)),
+            version: doc.getRemoteVersion().map((x) => x.join("-")),
             body: doc.get()
         }
     } else {
         if (options.merge_type != "dt") {
-            let version = resource.doc.getRemoteVersion().map((x) => encode_version(...x))
+            let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
             let x = { version }
 
             if (!options.parents && !options.version) {
@@ -286,7 +307,7 @@ braid_text.get = async (key, options) => {
 
             if (!options.parents && !options.version) {
                 options.subscribe({
-                    version: ["root"],
+                    version: [],
                     parents: [],
                     body: "",
                 })
@@ -330,7 +351,13 @@ braid_text.get = async (key, options) => {
 }
 
 braid_text.put = async (key, options) => {
-    let { version, patches, body } = options
+    let { version, patches, body, peer } = options
+
+    if (version) validate_version_array(version)
+    if (options.parents) validate_version_array(options.parents)
+    if (body != null && patches) throw new Error(`cannot have a body and patches`)
+    if (body != null && (typeof body !== 'string')) throw new Error(`body must be a string`)
+    if (patches) validate_patches(patches)
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
@@ -346,21 +373,34 @@ braid_text.put = async (key, options) => {
     patches = patches.map((p) => ({
         ...p,
         range: p.range.match(/\d+/g).map((x) => parseInt(x)),
-        ...(p.content ? { content: [...p.content] } : {}),
-    }))
+        content: [...p.content],
+    })).sort((a, b) => a.range[0] - b.range[0])
+
+    // validate patch positions
+    let max_pos = resource.doc.get().length
+    let must_be_at_least = 0
+    for (let p of patches) {
+        if (p.range[0] < must_be_at_least || p.range[0] > max_pos) throw new Error(`invalid patch range position: ${p.range[0]}`)
+        if (p.range[1] < p.range[0] || p.range[1] > max_pos) throw new Error(`invalid patch range position: ${p.range[1]}`)
+        must_be_at_least = p.range[1]
+    }
 
     let change_count = patches.reduce((a, b) => a + b.content.length + (b.range[1] - b.range[0]), 0)
 
-    let og_v = version?.[0] || `${Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
+    let og_v = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
 
     // reduce the version sequence by the number of char-edits
     let v = decode_version(og_v)
-    v = encode_version(v[0], v[1] + 1 - change_count)
 
-    let parents = resource.doc.getRemoteVersion().map((x) => encode_version(...x))
+    // validate version: make sure we haven't seen it already
+    if (v[1] <= (resource.actor_seqs[v[0]] ?? -1)) throw new Error(`invalid version: already processed`)
+    resource.actor_seqs[v[0]] = v[1]
+
+    v = `${v[0]}-${v[1] + 1 - change_count}`
+
+    let parents = resource.doc.getRemoteVersion().map((x) => x.join("-"))
     let og_parents = options.parents || parents
     let ps = og_parents
-    if (!ps.length) ps = ["root"]
 
     let v_before = resource.doc.getLocalVersion()
 
@@ -374,7 +414,7 @@ braid_text.put = async (key, options) => {
             offset--
             ps = [v]
             v = decode_version(v)
-            v = encode_version(v[0], v[1] + 1)
+            v = `${v[0]}-${v[1] + 1}`
         }
         // insert
         for (let i = 0; i < p.content?.length ?? 0; i++) {
@@ -383,7 +423,7 @@ braid_text.put = async (key, options) => {
             offset++
             ps = [v]
             v = decode_version(v)
-            v = encode_version(v[0], v[1] + 1)
+            v = `${v[0]}-${v[1] + 1}`
         }
     }
 
@@ -401,17 +441,17 @@ braid_text.put = async (key, options) => {
         patches = get_xf_patches(resource.doc, v_before)
         console.log(JSON.stringify({ patches }))
 
-        let version = resource.doc.getRemoteVersion().map((x) => encode_version(...x))
+        let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
 
         for (let client of resource.simpleton_clients) {
-            if (client.peer == options.peer) {
+            if (client.peer == peer) {
                 client.my_last_seen_version = [og_v]
             }
 
             function set_timeout(time_override) {
                 if (client.my_timeout) clearTimeout(client.my_timeout)
                 client.my_timeout = setTimeout(() => {
-                    let version = resource.doc.getRemoteVersion().map((x) => encode_version(...x))
+                    let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
                     let x = { version }
                     x.parents = client.my_last_seen_version
 
@@ -428,7 +468,7 @@ braid_text.put = async (key, options) => {
             }
 
             if (client.my_timeout) {
-                if (client.peer == options.peer) {
+                if (client.peer == peer) {
                     if (!v_eq(client.my_last_sent_version, og_parents)) {
                         // note: we don't add to client.my_unused_version_count,
                         // because we're already in a timeout;
@@ -444,7 +484,7 @@ braid_text.put = async (key, options) => {
             }
 
             let x = { version }
-            if (client.peer == options.peer) {
+            if (client.peer == peer) {
                 if (!v_eq(client.my_last_sent_version, og_parents)) {
                     client.my_unused_version_count = (client.my_unused_version_count ?? 0) + 1
                     set_timeout()
@@ -491,7 +531,7 @@ braid_text.put = async (key, options) => {
         patches: og_patches,
     }
     for (let client of resource.clients) {
-        if (client.peer != options.peer) client.subscribe(x)
+        if (client.peer != peer) client.subscribe(x)
     }
 
     await resource.db_delta(resource.doc.getPatchSince(v_before))
@@ -499,13 +539,12 @@ braid_text.put = async (key, options) => {
 
 braid_text.list = async () => {
     try {
-        var pages = new Set()
-        for (let x of await require('fs').promises.readdir(braid_text.db_folder)) {
-            let k = x.replace(/\.\w+$/, '')
-            if (k.length <= max_encoded_key_size) pages.add(decode_filename(k))
-            else if (x.endsWith('.name')) pages.add(await require('fs').promises.readFile(`${braid_text.db_folder}/${x}`, { encoding: 'utf8' }))
-        }
-        return [...pages.keys()]
+        if (braid_text.db_folder) {
+            await db_folder_init()
+            var pages = new Set()
+            for (let x of await require('fs').promises.readdir(braid_text.db_folder)) pages.add(decode_filename(x.replace(/\.\w+$/, '')))
+            return [...pages.keys()]
+        } else return Object.keys(get_resource.cache)
     } catch (e) { return [] }
 }
 
@@ -530,6 +569,13 @@ async function get_resource(key) {
     resource.doc = defrag_dt(resource.doc)
     resource.need_defrag = false
 
+    resource.actor_seqs = {}
+    let max_version = resource.doc.getLocalVersion()[0] ?? -1
+    for (let i = 0; i <= max_version; i++) {
+        let v = resource.doc.localToRemoteVersion([i])[0]
+        resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
+    }
+
     resource.delete_me = () => {
         delete_me()
         delete cache[key]
@@ -538,7 +584,54 @@ async function get_resource(key) {
     return (cache[key] = resource)
 }
 
+async function db_folder_init() {
+    console.log('__!')
+    if (!db_folder_init.p) db_folder_init.p = new Promise(async done => {
+        await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
+
+        // 0.0.13 -> 0.0.14
+        // look for files with key-encodings over max_encoded_key_size,
+        // and convert them using the new method
+        // for (let x of await fs.promises.readdir(braid_text.db_folder)) {
+        //     let k = x.replace(/(_[0-9a-f]{64})?\.\w+$/, '')
+        //     if (k.length > max_encoded_key_size) {
+        //         k = decode_filename(k)
+
+        //         await fs.promises.rename(`${braid_text.db_folder}/${x}`, `${braid_text.db_folder}/${encode_filename(k)}${x.match(/\.\w+$/)[0]}`)
+        //         await fs.promises.writeFile(`${braid_text.db_folder}/${encode_filename(k)}.name`, k)
+        //     }
+        // }
+
+        // 0.0.14 -> 0.0.15
+        // basically convert the 0.0.14 files back
+        let convert_us = {}
+        for (let x of await fs.promises.readdir(braid_text.db_folder)) {
+            if (x.endsWith('.name')) {
+                let encoded = convert_us[x.slice(0, -'.name'.length)] = encode_filename(await fs.promises.readFile(`${braid_text.db_folder}/${x}`, { encoding: 'utf8' }))
+                if (encoded.length > max_encoded_key_size) {
+                    console.log(`trying to convert file to new format, but the key is too big: ${braid_text.db_folder}/${x}`)
+                    process.exit()
+                }
+                console.log(`deleting: ${braid_text.db_folder}/${x}`)
+                await fs.promises.unlink(`${braid_text.db_folder}/${x}`)
+            }
+        }
+        if (Object.keys(convert_us).length) {
+            for (let x of await fs.promises.readdir(braid_text.db_folder)) {
+                let [_, k, num] = x.match(/^(.*)\.(\d+)$/s)
+                if (!convert_us[k]) continue
+                console.log(`renaming: ${braid_text.db_folder}/${x} -> ${braid_text.db_folder}/${convert_us[k]}.${num}`)
+                if (convert_us[k]) await fs.promises.rename(`${braid_text.db_folder}/${x}`, `${braid_text.db_folder}/${convert_us[k]}.${num}`)
+            }
+        }
+
+        done()
+    })
+    await db_folder_init.p
+}
+
 async function get_files_for_key(key) {
+    await db_folder_init()
     try {
         let re = new RegExp("^" + encode_filename(key).replace(/[^a-zA-Z0-9]/g, "\\$&") + "\\.\\w+$")
         return (await fs.promises.readdir(braid_text.db_folder))
@@ -548,30 +641,13 @@ async function get_files_for_key(key) {
 }
 
 async function file_sync(key, process_delta, get_init) {
+    let encoded = encode_filename(key)
+
+    if (encoded.length > max_encoded_key_size) throw new Error(`invalid key: too long (max ${max_encoded_key_size})`)
+
     let currentNumber = 0
     let currentSize = 0
     let threshold = 0
-
-    // Ensure the existence of db_folder
-    if (!file_sync.init_p) file_sync.init_p = new Promise(async done => {
-        await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
-
-        // 0.0.13 -> 0.0.14
-        // look for files with key-encodings over max_encoded_key_size,
-        // and convert them using the new method
-        for (let x of await fs.promises.readdir(braid_text.db_folder)) {
-            let k = x.replace(/(_[0-9a-f]{64})?\.\w+$/, '')
-            if (k.length > max_encoded_key_size) {
-                k = decode_filename(k)
-
-                await fs.promises.rename(`${braid_text.db_folder}/${x}`, `${braid_text.db_folder}/${encode_filename(k)}${x.match(/\.\w+$/)[0]}`)
-                await fs.promises.writeFile(`${braid_text.db_folder}/${encode_filename(k)}.name`, k)
-            }
-        }
-
-        done()
-    })
-    await file_sync.init_p
 
     // Read existing files and sort by numbers.
     const files = (await get_files_for_key(key))
@@ -617,7 +693,7 @@ async function file_sync(key, process_delta, get_init) {
     return {
         change: async (bytes) => {
             currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
-            const filename = `${braid_text.db_folder}/${encode_filename(key)}.${currentNumber}`
+            const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
             if (currentSize < threshold) {
                 console.log(`appending to db..`)
 
@@ -630,9 +706,6 @@ async function file_sync(key, process_delta, get_init) {
             } else {
                 try {
                     console.log(`starting new db..`)
-
-                    let encoded = encode_filename(key)
-                    if (encoded.length > max_encoded_key_size) await fs.promises.writeFile(`${braid_text.db_folder}/${encoded}.name`, key)
 
                     currentNumber++
                     const init = get_init()
@@ -792,7 +865,7 @@ function parseDT(byte_array) {
                     let num = x >> 2
 
                     if (x == 1) {
-                        parents.push(["root"])
+                        // no parents (e.g. parent is "root")
                     } else if (!is_foreign) {
                         parents.push(versions[count - num])
                     } else {
@@ -861,7 +934,7 @@ function OpLog_create_bytes(version, parents, pos, ins) {
 
     let agents = new Set()
     agents.add(version[0])
-    for (let p of parents) if (p.length > 1) agents.add(p[0])
+    for (let p of parents) agents.add(p[0])
     agents = [...agents]
 
     //   console.log(JSON.stringify({ agents, parents }, null, 4));
@@ -882,7 +955,7 @@ function OpLog_create_bytes(version, parents, pos, ins) {
 
     let branch = []
 
-    if (parents[0].length > 1) {
+    if (parents.length) {
         let frontier = []
 
         for (let [i, [agent, seq]] of parents.entries()) {
@@ -957,7 +1030,7 @@ function OpLog_create_bytes(version, parents, pos, ins) {
 
     write_varint(parents_bytes, 1)
 
-    if (parents[0].length > 1) {
+    if (parents.length) {
         for (let [i, [agent, seq]] of parents.entries()) {
             let has_more = i < parents.length - 1
             let agent_i = agent_to_i[agent]
@@ -983,24 +1056,15 @@ function OpLog_remote_to_local(doc, frontier) {
     let map = Object.fromEntries(frontier.map((x) => [x, true]))
 
     let local_version = []
-    let [agents, versions, parentss] = parseDT([...doc.toBytes()])
-    for (let i = 0; i < versions.length; i++) {
+
+    let max_version = doc.getLocalVersion()[0] ?? -1
+    for (let i = 0; i <= max_version; i++) {
         if (map[doc.localToRemoteVersion([i])[0].join("-")]) {
             local_version.push(i)
         }
     }
 
     return frontier.length == local_version.length && new Uint32Array(local_version)
-}
-
-function encode_version(agent, seq) {
-    return agent + "-" + seq
-}
-
-function decode_version(v) {
-    let a = v.split("-")
-    if (a.length > 1) a[1] = parseInt(a[1])
-    return a
 }
 
 function v_eq(v1, v2) {
@@ -1306,11 +1370,6 @@ function encode_filename(filename) {
     // Encode the filename using encodeURIComponent()
     let encoded = encodeURIComponent(swapped)
 
-    // Do something special with a hash if the encoding is too long
-    if (encoded.length > max_encoded_key_size) {
-        encoded = `${swapped.slice(0, max_encoded_key_size)}_${require('crypto').createHash('sha256').update(filename).digest('hex')}`
-    }
-
     return encoded
 }
 
@@ -1322,6 +1381,48 @@ function decode_filename(encodedFilename) {
     decoded = decoded.replace(/[!/]/g, (match) => (match === "/" ? "!" : "/"))
 
     return decoded
+}
+
+function validate_version_array(x) {
+    if (!Array.isArray(x)) throw new Error(`invalid version array: not an array`)
+    for (xx of x) validate_actor_seq(xx)
+}
+
+function validate_actor_seq(x) {
+    if (typeof x !== 'string') throw new Error(`invalid actor-seq: not a string`)
+    let [actor, seq] = decode_version(x)
+    validate_actor(actor)
+}
+
+function validate_actor(x) {
+    if (typeof x !== 'string') throw new Error(`invalid actor: not a string`)
+    if (Buffer.byteLength(x, 'utf8') >= 50) throw new Error(`actor value too long (max 49): ${x}`) // restriction coming from dt
+}
+
+function is_valid_actor(x) {
+    try {
+        validate_actor(x)
+        return true
+    } catch (e) {}
+}
+
+function decode_version(v) {
+    let m = v.match(/^(.*)-(\d+)$/s)
+    if (!m) throw new Error(`invalid actor-seq version: ${v}`)
+    return [m[1], parseInt(m[2])]
+}
+
+function validate_patches(patches) {
+    if (!Array.isArray(patches)) throw new Error(`invalid patches: not an array`)
+    for (let p of patches) validate_patch(p)
+}
+
+function validate_patch(x) {
+    if (typeof x != 'object') throw new Error(`invalid patch: not an object`)
+    if (x.unit && x.unit !== 'text') throw new Error(`invalid patch unit '${x.unit}': only 'text' supported`)
+    if (typeof x.range !== 'string') throw new Error(`invalid patch range: must be a string`)
+    if (!x.range.match(/^\s*\[\s*\d+\s*:\s*\d+\s*\]\s*$/)) throw new Error(`invalid patch range: ${x.range}`)
+    if (typeof x.content !== 'string') throw new Error(`invalid patch content: must be a string`)
 }
 
 module.exports = braid_text
