@@ -24,6 +24,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
     var char_counter = -1
     var outstanding_changes = 0
     var max_outstanding_changes = 10
+    var ac = new AbortController()
 
     braid_fetch_wrapper(url, {
         headers: { "Merge-Type": "simpleton",
@@ -31,7 +32,8 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
         subscribe: true,
         retry: true,
         parents: () => current_version.length ? current_version : null,
-        peer
+        peer,
+        signal: ac.signal
     }).then(res =>
         res.subscribe(update => {
             // Only accept the update if its parents == our current version
@@ -69,6 +71,9 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
     )
     
     return {
+      stop: async () => {
+        ac.abort()
+      },
       changed: async () => {
         if (outstanding_changes >= max_outstanding_changes) return
         while (true) {
@@ -141,6 +146,7 @@ async function braid_fetch_wrapper(url, params) {
         var subscribe_handler = null
         connect()
         async function connect() {
+            if (params.signal?.aborted) return
             try {
                 var c = await braid_fetch(url, { ...params, parents: params.parents?.() })
                 c.subscribe((...args) => subscribe_handler?.(...args), on_error)
