@@ -514,8 +514,9 @@ braid_text.put = async (key, options) => {
         }
     } else {
         if (resource.simpleton_clients.size) {
+            let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
             patches = get_xf_patches(resource.doc, v_before)
-            let x = { version: [og_v], parents, patches }
+            let x = { version, parents, patches }
             console.log(`sending: ${JSON.stringify(x)}`)
             for (let client of resource.simpleton_clients) {
                 if (client.my_timeout) continue
