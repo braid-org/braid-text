@@ -207,67 +207,8 @@ braid_text.get = async (key, options) => {
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
     if (!options.subscribe) {
-        let doc = null
-        if (options.version || options.parents) {
-            let frontier = {}
-            options.version?.forEach((x) => (frontier[x] = true))
-            options.parents?.forEach((x) => (frontier[x] = true))
-
-            let local_version = []
-            let [agents, versions, parentss] = parseDT([...resource.doc.toBytes()])
-            for (let i = 0; i < versions.length; i++) {
-                if (frontier[versions[i].join("-")]) {
-                    local_version.push(i)
-                }
-            }
-            local_version = new Uint32Array(local_version)
-
-            let after_versions = {}
-            let [_, after_versions_array, __] = parseDT([...resource.doc.getPatchSince(local_version)])
-            for (let v of after_versions_array) after_versions[v.join("-")] = true
-
-            let new_doc = new Doc()
-            let op_runs = resource.doc.getOpsSince([])
-            let i = 0
-            op_runs.forEach((op_run) => {
-                let parents = parentss[i].map((x) => x.join("-"))
-                let start = op_run.start
-                let end = start + 1
-                let content = op_run.content?.[0]
-
-                let len = op_run.end - op_run.start
-                let base_i = i
-                for (let j = 1; j <= len; j++) {
-                    let I = base_i + j
-                    if (
-                        j == len ||
-                        parentss[I].length != 1 ||
-                        parentss[I][0][0] != versions[I - 1][0] ||
-                        parentss[I][0][1] != versions[I - 1][1] ||
-                        versions[I][0] != versions[I - 1][0] ||
-                        versions[I][1] != versions[I - 1][1] + 1
-                    ) {
-                        for (; i < I; i++) {
-                            let version = versions[i].join("-")
-                            if (!after_versions[version]) {
-                                new_doc.mergeBytes(
-                                    OpLog_create_bytes(
-                                        version,
-                                        parentss[i].map((x) => x.join("-")),
-                                        content ? start + (i - base_i) : start,
-                                        content?.[0]
-                                    )
-                                )
-                            }
-                            if (op_run.content) content = content.slice(1)
-                        }
-                        content = ""
-                    }
-                    if (op_run.content) content += op_run.content[j]
-                }
-            })
-            doc = new_doc
-        } else doc = resource.doc
+        let doc = resource.doc
+        if (options.version || options.parents) doc = dt_get(doc, options.version || options.parents)
 
         return {
             version: doc.getRemoteVersion().map((x) => x.join("-")),
@@ -361,10 +302,17 @@ braid_text.put = async (key, options) => {
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
+    let parents = resource.doc.getRemoteVersion().map((x) => x.join("-"))
+    let og_parents = options.parents || parents
+
+    let max_pos = count_code_points(v_eq(parents, og_parents) ?
+        resource.doc.get() :
+        dt_get(resource.doc, og_parents).get())
+
     if (body != null) {
         patches = [{
             unit: 'text',
-            range: `[0:${count_code_points(resource.doc.get())}]`,
+            range: `[0:${max_pos}]`,
             content: body
         }]
     }
@@ -377,7 +325,6 @@ braid_text.put = async (key, options) => {
     })).sort((a, b) => a.range[0] - b.range[0])
 
     // validate patch positions
-    let max_pos = resource.doc.get().length
     let must_be_at_least = 0
     for (let p of patches) {
         if (p.range[0] < must_be_at_least || p.range[0] > max_pos) throw new Error(`invalid patch range position: ${p.range[0]}`)
@@ -398,8 +345,6 @@ braid_text.put = async (key, options) => {
 
     v = `${v[0]}-${v[1] + 1 - change_count}`
 
-    let parents = resource.doc.getRemoteVersion().map((x) => x.join("-"))
-    let og_parents = options.parents || parents
     let ps = og_parents
 
     let v_before = resource.doc.getLocalVersion()
@@ -754,6 +699,66 @@ async function file_sync(key, process_delta, get_init) {
 //////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
+
+function dt_get(doc, version) {
+    let frontier = {}
+    version.forEach((x) => (frontier[x] = true))
+
+    let local_version = []
+    let [agents, versions, parentss] = parseDT([...doc.toBytes()])
+    for (let i = 0; i < versions.length; i++) {
+        if (frontier[versions[i].join("-")]) {
+            local_version.push(i)
+        }
+    }
+    local_version = new Uint32Array(local_version)
+
+    let after_versions = {}
+    let [_, after_versions_array, __] = parseDT([...doc.getPatchSince(local_version)])
+    for (let v of after_versions_array) after_versions[v.join("-")] = true
+
+    let new_doc = new Doc()
+    let op_runs = doc.getOpsSince([])
+    let i = 0
+    op_runs.forEach((op_run) => {
+        let parents = parentss[i].map((x) => x.join("-"))
+        let start = op_run.start
+        let end = start + 1
+        let content = op_run.content?.[0]
+
+        let len = op_run.end - op_run.start
+        let base_i = i
+        for (let j = 1; j <= len; j++) {
+            let I = base_i + j
+            if (
+                j == len ||
+                parentss[I].length != 1 ||
+                parentss[I][0][0] != versions[I - 1][0] ||
+                parentss[I][0][1] != versions[I - 1][1] ||
+                versions[I][0] != versions[I - 1][0] ||
+                versions[I][1] != versions[I - 1][1] + 1
+            ) {
+                for (; i < I; i++) {
+                    let version = versions[i].join("-")
+                    if (!after_versions[version]) {
+                        new_doc.mergeBytes(
+                            OpLog_create_bytes(
+                                version,
+                                parentss[i].map((x) => x.join("-")),
+                                content ? start + (i - base_i) : start,
+                                content?.[0]
+                            )
+                        )
+                    }
+                    if (op_run.content) content = content.slice(1)
+                }
+                content = ""
+            }
+            if (op_run.content) content += op_run.content[j]
+        }
+    })
+    return new_doc
+}
 
 function defrag_dt(doc) {
     let fresh_doc = new Doc("server")
