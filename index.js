@@ -194,10 +194,8 @@ braid_text.serve = async (req, res, options = {}) => {
 
 braid_text.get = async (key, options) => {
     if (!options) {
-        let x = get_resource.cache?.[key]?.doc.get()
-        if (x !== undefined) return x
-        // if it doesn't exist on disk, don't create it in this case
-        if (!(await get_files_for_key(key)).length) return
+        // if it doesn't exist already, don't create it in this case
+        if (!get_resource.cache?.[key]) return
         return (await get_resource(key)).doc.get()
     }
 
@@ -496,38 +494,39 @@ braid_text.list = async () => {
 
 async function get_resource(key) {
     let cache = get_resource.cache || (get_resource.cache = {})
-    if (cache[key]) return cache[key]
+    if (!cache[key]) cache[key] = new Promise(async done => {
+        let resource = {}
+        resource.clients = new Set()
+        resource.simpleton_clients = new Set()
 
-    let resource = {}
-    resource.clients = new Set()
-    resource.simpleton_clients = new Set()
+        resource.doc = new Doc("server")
 
-    resource.doc = new Doc("server")
+        let { change, delete_me } = braid_text.db_folder
+            ? await file_sync(key,
+                (bytes) => resource.doc.mergeBytes(bytes),
+                () => resource.doc.toBytes())
+            : { change: () => { }, delete_me: () => { } }
 
-    let { change, delete_me } = braid_text.db_folder
-        ? await file_sync(key,
-            (bytes) => resource.doc.mergeBytes(bytes),
-            () => resource.doc.toBytes())
-        : { change: () => { }, delete_me: () => { } }
+        resource.db_delta = change
 
-    resource.db_delta = change
+        resource.doc = defrag_dt(resource.doc)
+        resource.need_defrag = false
 
-    resource.doc = defrag_dt(resource.doc)
-    resource.need_defrag = false
+        resource.actor_seqs = {}
+        let max_version = resource.doc.getLocalVersion()[0] ?? -1
+        for (let i = 0; i <= max_version; i++) {
+            let v = resource.doc.localToRemoteVersion([i])[0]
+            resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
+        }
 
-    resource.actor_seqs = {}
-    let max_version = resource.doc.getLocalVersion()[0] ?? -1
-    for (let i = 0; i <= max_version; i++) {
-        let v = resource.doc.localToRemoteVersion([i])[0]
-        resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
-    }
+        resource.delete_me = () => {
+            delete_me()
+            delete cache[key]
+        }
 
-    resource.delete_me = () => {
-        delete_me()
-        delete cache[key]
-    }
-
-    return (cache[key] = resource)
+        done(resource)
+    })
+    return await cache[key]
 }
 
 async function db_folder_init() {
