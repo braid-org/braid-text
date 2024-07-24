@@ -4,7 +4,8 @@ let braidify = require("braid-http").http_server
 let fs = require("fs")
 
 let braid_text = {
-    db_folder: './braid-text-db'
+    db_folder: './braid-text-db',
+    cache: {}
 }
 
 let waiting_puts = 0
@@ -156,7 +157,7 @@ braid_text.serve = async (req, res, options = {}) => {
 
             await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
 
-            options.put_cb(options.key, resource.doc.get())
+            options.put_cb(options.key, resource.val)
         } catch (e) {
             console.log(`EEE= ${e}:${e.stack}`)
             // we couldn't apply the version, possibly because we're missing its parents,
@@ -195,8 +196,8 @@ braid_text.serve = async (req, res, options = {}) => {
 braid_text.get = async (key, options) => {
     if (!options) {
         // if it doesn't exist already, don't create it in this case
-        if (!get_resource.cache?.[key]) return
-        return (await get_resource(key)).doc.get()
+        if (!braid_text.cache[key]) return
+        return (await get_resource(key)).val
     }
 
     if (options.version) validate_version_array(options.version)
@@ -528,6 +529,8 @@ braid_text.put = async (key, options) => {
     }
 
     await resource.db_delta(resource.doc.getPatchSince(v_before))
+
+    resource.val = resource.doc.get()
 }
 
 braid_text.list = async () => {
@@ -537,12 +540,12 @@ braid_text.list = async () => {
             var pages = new Set()
             for (let x of await require('fs').promises.readdir(braid_text.db_folder)) pages.add(decode_filename(x.replace(/\.\w+$/, '')))
             return [...pages.keys()]
-        } else return Object.keys(get_resource.cache)
+        } else return Object.keys(braid_text.cache)
     } catch (e) { return [] }
 }
 
 async function get_resource(key) {
-    let cache = get_resource.cache || (get_resource.cache = {})
+    let cache = braid_text.cache
     if (!cache[key]) cache[key] = new Promise(async done => {
         let resource = {}
         resource.clients = new Set()
@@ -572,6 +575,8 @@ async function get_resource(key) {
             delete_me()
             delete cache[key]
         }
+
+        resource.val = resource.doc.get()
 
         done(resource)
     })
