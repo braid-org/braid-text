@@ -254,14 +254,7 @@ braid_text.get = async (key, options) => {
                 updates = OpLog_get_patches(resource.doc.toBytes(), resource.doc.getOpsSince([]))
             } else {
                 // Then start the subscription from the parents in options
-                let parents = Object.fromEntries((options.parents ? options.parents : options.version).map((x) => [x, true]))
-
-                let local_version = []
-                let [agents, versions, parentss] = parseDT([...resource.doc.toBytes()])
-                for (let i = 0; i < versions.length; i++) {
-                    if (parents[versions[i].join("-")]) local_version.push(i)
-                }
-                local_version = new Uint32Array(local_version)
+                let local_version = OpLog_remote_to_local(resource.doc, options.parents || options.version)
 
                 updates = OpLog_get_patches(resource.doc.getPatchSince(local_version), resource.doc.getOpsSince(local_version))
             }
@@ -293,7 +286,13 @@ braid_text.put = async (key, options) => {
     let { version, patches, body, peer } = options
 
     if (version) validate_version_array(version)
-    if (options.parents) validate_version_array(options.parents)
+
+    // translate a single parent of "root" to the empty array (same meaning)
+    let options_parents = options.parents
+    if (options_parents?.length === 1 && options_parents[0] === 'root')
+        options_parents = []
+
+    if (options_parents) validate_version_array(options_parents)
     if (body != null && patches) throw new Error(`cannot have a body and patches`)
     if (body != null && (typeof body !== 'string')) throw new Error(`body must be a string`)
     if (patches) validate_patches(patches)
@@ -301,7 +300,7 @@ braid_text.put = async (key, options) => {
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
     let parents = resource.doc.getRemoteVersion().map((x) => x.join("-"))
-    let og_parents = options.parents || parents
+    let og_parents = options_parents || parents
 
     let max_pos = count_code_points(v_eq(parents, og_parents) ?
         resource.doc.get() :
@@ -338,7 +337,63 @@ braid_text.put = async (key, options) => {
     let v = decode_version(og_v)
 
     // validate version: make sure we haven't seen it already
-    if (v[1] <= (resource.actor_seqs[v[0]] ?? -1)) throw new Error(`invalid version: already processed`)
+    if (v[1] <= (resource.actor_seqs[v[0]] ?? -1)) {
+
+        // if we have seen it already, make sure it's the same as before
+        let local_version = OpLog_remote_to_local(resource.doc, og_parents)
+        let updates = OpLog_get_patches(resource.doc.getPatchSince(local_version), resource.doc.getOpsSince(local_version))
+
+        let seen = {}
+        for (let u of updates) {
+            if (u.start != u.end) {
+                // delete
+                let v = decode_version(u.version)
+                for (let i = 0; i < u.end - u.start; i++) {
+                    let ps = (i < u.end - u.start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
+                    seen[JSON.stringify([v[0], v[1] - i, ps, u.start + i])] = true
+                }
+            } else {
+                // insert
+                let v = decode_version(u.version)
+                let content = [...u.content]
+                for (let i = 0; i < content.length; i++) {
+                    let ps = (i > 0) ? [`${v[0]}-${v[1] - content.length + i}`] : u.parents
+                    seen[JSON.stringify([v[0], v[1] + 1 - content.length + i, ps, u.start + i, content[i]])] = true
+                }
+            }
+        }
+
+        v = `${v[0]}-${v[1] + 1 - change_count}`
+        let ps = og_parents
+        let offset = 0
+        for (let p of patches) {
+            // delete
+            for (let i = p.range[0]; i < p.range[1]; i++) {
+                let vv = decode_version(v)
+
+                if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] - 1 + offset])]) throw new Error('invalid update: different from previous update with same version')
+
+                offset--
+                ps = [v]
+                v = vv
+                v = `${v[0]}-${v[1] + 1}`
+            }
+            // insert
+            for (let i = 0; i < p.content?.length ?? 0; i++) {
+                let c = p.content[i]
+
+                if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] + offset, c])]) throw new Error('invalid update: different from previous update with same version')
+
+                offset++
+                ps = [v]
+                v = decode_version(v)
+                v = `${v[0]}-${v[1] + 1}`
+            }
+        }
+
+        // we already have this version, so nothing left to do
+        return
+    }
     resource.actor_seqs[v[0]] = v[1]
 
     v = `${v[0]}-${v[1] + 1 - change_count}`
@@ -373,12 +428,6 @@ braid_text.put = async (key, options) => {
     for (let b of bytes) resource.doc.mergeBytes(b)
 
     resource.need_defrag = true
-
-    let v_after = resource.doc.getLocalVersion()
-    if (JSON.stringify(v_before) === JSON.stringify(v_after)) {
-        console.log(`we got a version we already had: ${v_before}`)
-        return
-    }
 
     if (options.merge_type != "dt") {
         patches = get_xf_patches(resource.doc, v_before)
