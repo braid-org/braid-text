@@ -340,22 +340,27 @@ braid_text.put = async (key, options) => {
     // validate version: make sure we haven't seen it already
     if (v[1] <= (resource.actor_seqs[v[0]] ?? -1)) {
 
+        if (!options.validate_already_seen_versions) return
+
         // if we have seen it already, make sure it's the same as before
         let local_version = OpLog_remote_to_local(resource.doc, og_parents)
         let updates = OpLog_get_patches(resource.doc.getPatchSince(local_version), resource.doc.getOpsSince(local_version))
 
         let seen = {}
         for (let u of updates) {
-            if (u.start != u.end) {
+            u.version = decode_version(u.version)
+            u.version[1] += u.end - u.start - 1
+
+            if (!u.content) {
                 // delete
-                let v = decode_version(u.version)
+                let v = u.version
                 for (let i = 0; i < u.end - u.start; i++) {
                     let ps = (i < u.end - u.start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
                     seen[JSON.stringify([v[0], v[1] - i, ps, u.start + i])] = true
                 }
             } else {
                 // insert
-                let v = decode_version(u.version)
+                let v = u.version
                 let content = [...u.content]
                 for (let i = 0; i < content.length; i++) {
                     let ps = (i > 0) ? [`${v[0]}-${v[1] - content.length + i}`] : u.parents
@@ -381,13 +386,14 @@ braid_text.put = async (key, options) => {
             }
             // insert
             for (let i = 0; i < p.content?.length ?? 0; i++) {
+                let vv = decode_version(v)
                 let c = p.content[i]
 
                 if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] + offset, c])]) throw new Error('invalid update: different from previous update with same version')
 
                 offset++
                 ps = [v]
-                v = decode_version(v)
+                v = vv
                 v = `${v[0]}-${v[1] + 1}`
             }
         }
