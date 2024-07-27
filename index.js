@@ -1122,7 +1122,7 @@ function OpLog_remote_to_local(doc, frontier) {
 
     let local_version = []
 
-    let max_version = doc.getLocalVersion()[0] ?? -1
+    let max_version = Math.max(-1, ...doc.getLocalVersion())
     for (let i = 0; i <= max_version; i++) {
         if (map[doc.localToRemoteVersion([i])[0].join("-")]) {
             local_version.push(i)
