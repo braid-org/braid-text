@@ -1490,4 +1490,7 @@ function validate_patch(x) {
     if (typeof x.content !== 'string') throw new Error(`invalid patch content: must be a string`)
 }
 
+braid_text.encode_filename = encode_filename
+braid_text.decode_filename = decode_filename
+
 module.exports = braid_text
