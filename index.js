@@ -210,12 +210,12 @@ braid_text.get = async (key, options) => {
         if (options.version || options.parents) doc = dt_get(doc, options.version || options.parents)
 
         return {
-            version: doc.getRemoteVersion().map((x) => x.join("-")),
+            version: doc.getRemoteVersion().map((x) => x.join("-")).sort(),
             body: doc.get()
         }
     } else {
         if (options.merge_type != "dt") {
-            let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
+            let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
             let x = { version }
 
             if (!options.parents && !options.version) {
@@ -300,7 +300,7 @@ braid_text.put = async (key, options) => {
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
-    let parents = resource.doc.getRemoteVersion().map((x) => x.join("-"))
+    let parents = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
     let og_parents = options_parents || parents
 
     let max_pos = count_code_points(v_eq(parents, og_parents) ?
@@ -440,7 +440,7 @@ braid_text.put = async (key, options) => {
         patches = get_xf_patches(resource.doc, v_before)
         console.log(JSON.stringify({ patches }))
 
-        let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
+        let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
 
         for (let client of resource.simpleton_clients) {
             if (client.peer == peer) {
@@ -450,7 +450,7 @@ braid_text.put = async (key, options) => {
             function set_timeout(time_override) {
                 if (client.my_timeout) clearTimeout(client.my_timeout)
                 client.my_timeout = setTimeout(() => {
-                    let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
+                    let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
                     let x = { version }
                     x.parents = client.my_last_seen_version
 
@@ -513,7 +513,7 @@ braid_text.put = async (key, options) => {
         }
     } else {
         if (resource.simpleton_clients.size) {
-            let version = resource.doc.getRemoteVersion().map((x) => x.join("-"))
+            let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
             patches = get_xf_patches(resource.doc, v_before)
             let x = { version, parents, patches }
             console.log(`sending: ${JSON.stringify(x)}`)
@@ -836,7 +836,7 @@ function OpLog_get_patches(bytes, op_runs) {
     let patches = []
     op_runs.forEach((op_run) => {
         let version = versions[i].join("-")
-        let parents = parentss[i].map((x) => x.join("-"))
+        let parents = parentss[i].map((x) => x.join("-")).sort()
         let start = op_run.start
         let end = start + 1
         if (op_run.content) op_run.content = [...op_run.content]
@@ -863,7 +863,7 @@ function OpLog_get_patches(bytes, op_runs) {
                 })
                 if (j == len) break
                 version = versions[I].join("-")
-                parents = parentss[I].map((x) => x.join("-"))
+                parents = parentss[I].map((x) => x.join("-")).sort()
                 start = op_run.start + j
                 content = ""
             }
@@ -1450,6 +1450,7 @@ function decode_filename(encodedFilename) {
 
 function validate_version_array(x) {
     if (!Array.isArray(x)) throw new Error(`invalid version array: not an array`)
+    x.sort()
     for (xx of x) validate_actor_seq(xx)
 }
 
