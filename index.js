@@ -695,62 +695,67 @@ async function file_sync(key, process_delta, get_init) {
         }
     }
 
+    let chain = Promise.resolve()
     return {
         change: async (bytes) => {
-            currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
-            const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
-            if (currentSize < threshold) {
-                console.log(`appending to db..`)
+            await (chain = chain.then(async () => {
+                currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
+                const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
+                if (currentSize < threshold) {
+                    console.log(`appending to db..`)
 
-                let buffer = Buffer.allocUnsafe(4)
-                buffer.writeUInt32LE(bytes.length, 0)
-                await fs.promises.appendFile(filename, buffer)
-                await fs.promises.appendFile(filename, bytes)
+                    let buffer = Buffer.allocUnsafe(4)
+                    buffer.writeUInt32LE(bytes.length, 0)
+                    await fs.promises.appendFile(filename, buffer)
+                    await fs.promises.appendFile(filename, bytes)
 
-                console.log("wrote to : " + filename)
-            } else {
-                try {
-                    console.log(`starting new db..`)
-
-                    currentNumber++
-                    const init = get_init()
-                    const buffer = Buffer.allocUnsafe(4)
-                    buffer.writeUInt32LE(init.length, 0)
-
-                    const newFilename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
-                    await fs.promises.writeFile(newFilename, buffer)
-                    await fs.promises.appendFile(newFilename, init)
-
-                    console.log("wrote to : " + newFilename)
-
-                    currentSize = 4 + init.length
-                    threshold = currentSize * 10
+                    console.log("wrote to : " + filename)
+                } else {
                     try {
-                        await fs.promises.unlink(filename)
-                    } catch (e) { }
-                } catch (e) {
-                    console.log(`e = ${e.stack}`)
+                        console.log(`starting new db..`)
+
+                        currentNumber++
+                        const init = get_init()
+                        const buffer = Buffer.allocUnsafe(4)
+                        buffer.writeUInt32LE(init.length, 0)
+
+                        const newFilename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
+                        await fs.promises.writeFile(newFilename, buffer)
+                        await fs.promises.appendFile(newFilename, init)
+
+                        console.log("wrote to : " + newFilename)
+
+                        currentSize = 4 + init.length
+                        threshold = currentSize * 10
+                        try {
+                            await fs.promises.unlink(filename)
+                        } catch (e) { }
+                    } catch (e) {
+                        console.log(`e = ${e.stack}`)
+                    }
                 }
-            }
+            }))
         },
         delete_me: async () => {
-            await Promise.all(
-                (
-                    await get_files_for_key(key)
-                ).map((file) => {
-                    return new Promise((resolve, reject) => {
-                        fs.unlink(file, (err) => {
-                            if (err) {
-                                console.error(`Error deleting file: ${file}`)
-                                reject(err)
-                            } else {
-                                console.log(`Deleted file: ${file}`)
-                                resolve()
-                            }
+            await (chain = chain.then(async () => {
+                await Promise.all(
+                    (
+                        await get_files_for_key(key)
+                    ).map((file) => {
+                        return new Promise((resolve, reject) => {
+                            fs.unlink(file, (err) => {
+                                if (err) {
+                                    console.error(`Error deleting file: ${file}`)
+                                    reject(err)
+                                } else {
+                                    console.log(`Deleted file: ${file}`)
+                                    resolve()
+                                }
+                            })
                         })
                     })
-                })
-            )
+                )
+            }))
         },
     }
 }
@@ -1469,7 +1474,7 @@ function is_valid_actor(x) {
     try {
         validate_actor(x)
         return true
-    } catch (e) {}
+    } catch (e) { }
 }
 
 function decode_version(v) {
