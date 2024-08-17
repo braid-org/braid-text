@@ -91,7 +91,7 @@ braid_text.serve = async (req, res, options = {}) => {
 
             return my_end(200, buffer)
         } else {
-            res.setHeader("Editable", "true")
+            if (!res.hasHeader("editable")) res.setHeader("Editable", "true")
             res.setHeader("Merge-Type", merge_type)
             if (req.method == "HEAD") return my_end(200)
 
