@@ -64,7 +64,7 @@ var server = require("http").createServer(async (req, res) => {
     // }
 
     // Create some initial text for new documents
-    if (await braid_text.get(req.url) === undefined) {
+    if (!(await braid_text.get(req.url, {})).version.length) {
         await braid_text.put(req.url, {body: 'This is a fresh blank document, ready for you to edit.' })
     }
 

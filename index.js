@@ -252,12 +252,10 @@ braid_text.get = async (key, options) => {
                     body: "",
                 })
 
-                updates = OpLog_get_patches(resource.doc.toBytes(), resource.doc.getOpsSince([]))
+                updates = dt_get_patches(resource.doc)
             } else {
                 // Then start the subscription from the parents in options
-                let local_version = OpLog_remote_to_local(resource.doc, options.parents || options.version)
-
-                updates = OpLog_get_patches(resource.doc.getPatchSince(local_version), resource.doc.getOpsSince(local_version))
+                updates = dt_get_patches(resource.doc, options.parents || options.version)
             }
 
             for (let u of updates) {
@@ -343,8 +341,7 @@ braid_text.put = async (key, options) => {
         if (!options.validate_already_seen_versions) return
 
         // if we have seen it already, make sure it's the same as before
-        let local_version = OpLog_remote_to_local(resource.doc, og_parents)
-        let updates = OpLog_get_patches(resource.doc.getPatchSince(local_version), resource.doc.getOpsSince(local_version))
+        let updates = dt_get_patches(resource.doc, og_parents)
 
         let seen = {}
         for (let u of updates) {
@@ -415,7 +412,7 @@ braid_text.put = async (key, options) => {
     for (let p of patches) {
         // delete
         for (let i = p.range[0]; i < p.range[1]; i++) {
-            bytes.push(OpLog_create_bytes(v, ps, p.range[1] - 1 + offset, null))
+            bytes.push(dt_create_bytes(v, ps, p.range[1] - 1 + offset, null))
             offset--
             ps = [v]
             v = decode_version(v)
@@ -424,7 +421,7 @@ braid_text.put = async (key, options) => {
         // insert
         for (let i = 0; i < p.content?.length ?? 0; i++) {
             let c = p.content[i]
-            bytes.push(OpLog_create_bytes(v, ps, p.range[1] + offset, c))
+            bytes.push(dt_create_bytes(v, ps, p.range[1] + offset, c))
             offset++
             ps = [v]
             v = decode_version(v)
@@ -764,31 +761,30 @@ async function file_sync(key, process_delta, get_init) {
 //////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
 
-function dt_get(doc, version) {
+function dt_get(doc, version, agent = null) {
+    let bytes = doc.toBytes()
+    dt_get.last_doc = doc = Doc.fromBytes(bytes, agent)
+
+    let [_agents, versions, parentss] = dt_parse([...bytes])
+
     let frontier = {}
-    version.forEach((x) => (frontier[x] = true))
+    version.forEach((x) => frontier[x] = true)
 
     let local_version = []
-    let [agents, versions, parentss] = parseDT([...doc.toBytes()])
-    for (let i = 0; i < versions.length; i++) {
-        if (frontier[versions[i].join("-")]) {
-            local_version.push(i)
-        }
-    }
-    local_version = new Uint32Array(local_version)
+    for (let i = 0; i < versions.length; i++)
+        if (frontier[versions[i].join("-")]) local_version.push(i)
+    dt_get.last_local_version = local_version = new Uint32Array(local_version)
 
     let after_versions = {}
-    let [_, after_versions_array, __] = parseDT([...doc.getPatchSince(local_version)])
+    let [_, after_versions_array, __] = dt_parse([...doc.getPatchSince(local_version)])
     for (let v of after_versions_array) after_versions[v.join("-")] = true
 
-    let new_doc = new Doc()
+    let new_doc = new Doc(agent)
     let op_runs = doc.getOpsSince([])
+
     let i = 0
     op_runs.forEach((op_run) => {
-        let parents = parentss[i].map((x) => x.join("-"))
-        let start = op_run.start
-        let end = start + 1
-        let content = op_run.content?.[0]
+        if (op_run.content) op_run.content = [...op_run.content]
 
         let len = op_run.end - op_run.start
         let base_i = i
@@ -804,38 +800,48 @@ function dt_get(doc, version) {
             ) {
                 for (; i < I; i++) {
                     let version = versions[i].join("-")
-                    if (!after_versions[version]) {
-                        new_doc.mergeBytes(
-                            OpLog_create_bytes(
-                                version,
-                                parentss[i].map((x) => x.join("-")),
-                                content ? start + (i - base_i) : start,
-                                content?.[0]
-                            )
+                    if (!after_versions[version]) new_doc.mergeBytes(
+                        dt_create_bytes(
+                            version,
+                            parentss[i].map((x) => x.join("-")),
+                            op_run.fwd ?
+                                (op_run.content ?
+                                    op_run.start + (i - base_i) :
+                                    op_run.start) :
+                                op_run.end - 1 - (i - base_i),
+                            op_run.content?.[i - base_i]
                         )
-                    }
-                    if (op_run.content) content = content.slice(1)
+                    )
                 }
-                content = ""
             }
-            if (op_run.content) content += op_run.content[j]
         }
     })
     return new_doc
 }
 
-function defrag_dt(doc) {
-    let fresh_doc = new Doc("server")
-    fresh_doc.mergeBytes(doc.toBytes())
-    return fresh_doc
-}
+function dt_get_patches(doc, version = null) {
+    let bytes = doc.toBytes()
+    doc = Doc.fromBytes(bytes)
 
-function OpLog_get_patches(bytes, op_runs) {
-    //   console.log(`op_runs = `, op_runs);
+    let [_agents, versions, parentss] = dt_parse([...bytes])
 
-    let [agents, versions, parentss] = parseDT([...bytes])
+    let op_runs = []
+    if (version) {
+        let frontier = {}
+        version.forEach((x) => frontier[x] = true)
+        let local_version = []
+        for (let i = 0; i < versions.length; i++)
+            if (frontier[versions[i].join("-")]) local_version.push(i)
+        let after_bytes = doc.getPatchSince(new Uint32Array(local_version))
 
-    //   console.log(JSON.stringify({agents, versions, parentss}, null, 4))
+        ;[_agents, versions, parentss] = dt_parse([...after_bytes])
+
+        let before_doc = dt_get(doc, version)
+        let before_doc_frontier = before_doc.getLocalVersion()
+
+        before_doc.mergeBytes(after_bytes)
+        op_runs = before_doc.getOpsSince(before_doc_frontier)
+    } else op_runs = doc.getOpsSince([])
 
     let i = 0
     let patches = []
@@ -845,11 +851,11 @@ function OpLog_get_patches(bytes, op_runs) {
         let start = op_run.start
         let end = start + 1
         if (op_run.content) op_run.content = [...op_run.content]
-        let content = op_run.content?.[0]
         let len = op_run.end - op_run.start
         for (let j = 1; j <= len; j++) {
             let I = i + j
             if (
+                (!op_run.content && op_run.fwd) ||
                 j == len ||
                 parentss[I].length != 1 ||
                 parentss[I][0][0] != versions[I - 1][0] ||
@@ -857,30 +863,38 @@ function OpLog_get_patches(bytes, op_runs) {
                 versions[I][0] != versions[I - 1][0] ||
                 versions[I][1] != versions[I - 1][1] + 1
             ) {
+                let s = op_run.fwd ?
+                    (op_run.content ?
+                        start :
+                        op_run.start) :
+                    (op_run.start + (op_run.end - end))
+                let e = op_run.fwd ?
+                    (op_run.content ?
+                        end :
+                        op_run.start + (end - start)) :
+                    (op_run.end - (start - op_run.start))
                 patches.push({
                     version,
                     parents,
                     unit: "text",
-                    range: content ? `[${start}:${start}]` : `[${start}:${end}]`,
-                    content: content ?? "",
-                    start,
-                    end,
+                    range: op_run.content ? `[${s}:${s}]` : `[${s}:${e}]`,
+                    content: op_run.content?.slice(start - op_run.start, end - op_run.start).join("") ?? "",
+                    start: s,
+                    end: e,
                 })
                 if (j == len) break
                 version = versions[I].join("-")
                 parents = parentss[I].map((x) => x.join("-")).sort()
                 start = op_run.start + j
-                content = ""
             }
             end++
-            if (op_run.content) content += op_run.content[j]
         }
         i += len
     })
     return patches
 }
 
-function parseDT(byte_array) {
+function dt_parse(byte_array) {
     if (new TextDecoder().decode(new Uint8Array(byte_array.splice(0, 8))) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
 
     if (byte_array.shift() != 0) throw new Error("dt parse error, expected version 0")
@@ -975,8 +989,7 @@ function parseDT(byte_array) {
     return [agents, versions, parentss]
 }
 
-function OpLog_create_bytes(version, parents, pos, ins) {
-    // console.log(`args = ${JSON.stringify({ version, parents, pos, ins }, null, 4)}`)
+function dt_create_bytes(version, parents, pos, ins) {
 
     function write_varint(bytes, value) {
         while (value >= 0x80) {
@@ -1120,6 +1133,10 @@ function OpLog_create_bytes(version, parents, pos, ins) {
 
     //   console.log(bytes);
     return bytes
+}
+
+function defrag_dt(doc) {
+    return Doc.fromBytes(doc.toBytes(), 'server')
 }
 
 function OpLog_remote_to_local(doc, frontier) {
@@ -1498,5 +1515,10 @@ function validate_patch(x) {
 
 braid_text.encode_filename = encode_filename
 braid_text.decode_filename = decode_filename
+
+braid_text.dt_get = dt_get
+braid_text.dt_get_patches = dt_get_patches
+braid_text.dt_parse = dt_parse
+braid_text.dt_create_bytes = dt_create_bytes
 
 module.exports = braid_text
