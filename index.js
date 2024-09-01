@@ -4,6 +4,7 @@ let braidify = require("braid-http").http_server
 let fs = require("fs")
 
 let braid_text = {
+    verbose: false,
     db_folder: './braid-text-db',
     length_cache_size: 10,
     cache: {}
@@ -127,7 +128,7 @@ braid_text.serve = async (req, res, options = {}) => {
         }
 
         waiting_puts++
-        console.log(`waiting_puts(after++) = ${waiting_puts}`)
+        if (braid_text.verbose) console.log(`waiting_puts(after++) = ${waiting_puts}`)
 
         let my_prev_put_p = prev_put_p
         let done_my_turn = null
@@ -135,7 +136,7 @@ braid_text.serve = async (req, res, options = {}) => {
             (done) =>
             (done_my_turn = (statusCode, x) => {
                 waiting_puts--
-                console.log(`waiting_puts(after--) = ${waiting_puts}`)
+                if (braid_text.verbose) console.log(`waiting_puts(after--) = ${waiting_puts}`)
                 my_end(statusCode, x)
                 done()
             })
@@ -241,7 +242,7 @@ braid_text.get = async (key, options) => {
             let updates = null
 
             if (resource.need_defrag) {
-                console.log(`doing defrag..`)
+                if (braid_text.verbose) console.log(`doing defrag..`)
                 resource.need_defrag = false
                 resource.doc = defrag_dt(resource.doc)
             }
@@ -440,7 +441,7 @@ braid_text.put = async (key, options) => {
 
     if (options.merge_type != "dt") {
         patches = get_xf_patches(resource.doc, v_before)
-        console.log(JSON.stringify({ patches }))
+        if (braid_text.verbose) console.log(JSON.stringify({ patches }))
 
         let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
 
@@ -456,11 +457,11 @@ braid_text.put = async (key, options) => {
                     let x = { version }
                     x.parents = client.my_last_seen_version
 
-                    console.log("rebasing after timeout.. ")
-                    console.log("    client.my_unused_version_count = " + client.my_unused_version_count)
+                    if (braid_text.verbose) console.log("rebasing after timeout.. ")
+                    if (braid_text.verbose) console.log("    client.my_unused_version_count = " + client.my_unused_version_count)
                     x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, client.my_last_seen_version))
 
-                    console.log(`sending from rebase: ${JSON.stringify(x)}`)
+                    if (braid_text.verbose) console.log(`sending from rebase: ${JSON.stringify(x)}`)
                     client.subscribe(x)
                     client.my_last_sent_version = x.version
 
@@ -496,12 +497,12 @@ braid_text.put = async (key, options) => {
 
                 x.parents = options.version
                 if (!v_eq(version, options.version)) {
-                    console.log("rebasing..")
+                    if (braid_text.verbose) console.log("rebasing..")
                     x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, [og_v]))
                 } else {
                     // this client already has this version,
                     // so let's pretend to send it back, but not
-                    console.log(`not reflecting back to simpleton`)
+                    if (braid_text.verbose) console.log(`not reflecting back to simpleton`)
                     client.my_last_sent_version = x.version
                     continue
                 }
@@ -509,7 +510,7 @@ braid_text.put = async (key, options) => {
                 x.parents = parents
                 x.patches = patches
             }
-            console.log(`sending: ${JSON.stringify(x)}`)
+            if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
             client.subscribe(x)
             client.my_last_sent_version = x.version
         }
@@ -518,7 +519,7 @@ braid_text.put = async (key, options) => {
             let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
             patches = get_xf_patches(resource.doc, v_before)
             let x = { version, parents, patches }
-            console.log(`sending: ${JSON.stringify(x)}`)
+            if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
             for (let client of resource.simpleton_clients) {
                 if (client.my_timeout) continue
                 client.subscribe(x)
@@ -594,7 +595,7 @@ async function get_resource(key) {
 }
 
 async function db_folder_init() {
-    console.log('__!')
+    if (braid_text.verbose) console.log('__!')
     if (!db_folder_init.p) db_folder_init.p = new Promise(async done => {
         await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
 
@@ -621,7 +622,7 @@ async function db_folder_init() {
                     console.log(`trying to convert file to new format, but the key is too big: ${braid_text.db_folder}/${x}`)
                     process.exit()
                 }
-                console.log(`deleting: ${braid_text.db_folder}/${x}`)
+                if (braid_text.verbose) console.log(`deleting: ${braid_text.db_folder}/${x}`)
                 await fs.promises.unlink(`${braid_text.db_folder}/${x}`)
             }
         }
@@ -629,7 +630,7 @@ async function db_folder_init() {
             for (let x of await fs.promises.readdir(braid_text.db_folder)) {
                 let [_, k, num] = x.match(/^(.*)\.(\d+)$/s)
                 if (!convert_us[k]) continue
-                console.log(`renaming: ${braid_text.db_folder}/${x} -> ${braid_text.db_folder}/${convert_us[k]}.${num}`)
+                if (braid_text.verbose) console.log(`renaming: ${braid_text.db_folder}/${x} -> ${braid_text.db_folder}/${convert_us[k]}.${num}`)
                 if (convert_us[k]) await fs.promises.rename(`${braid_text.db_folder}/${x}`, `${braid_text.db_folder}/${convert_us[k]}.${num}`)
             }
         }
@@ -672,7 +673,7 @@ async function file_sync(key, process_delta, get_init) {
         }
         try {
             const filename = files[i]
-            console.log(`trying to process file: ${filename}`)
+            if (braid_text.verbose) console.log(`trying to process file: ${filename}`)
             const data = await fs.promises.readFile(filename)
 
             let cursor = 0
@@ -706,17 +707,17 @@ async function file_sync(key, process_delta, get_init) {
                 currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
                 const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
                 if (currentSize < threshold) {
-                    console.log(`appending to db..`)
+                    if (braid_text.verbose) console.log(`appending to db..`)
 
                     let buffer = Buffer.allocUnsafe(4)
                     buffer.writeUInt32LE(bytes.length, 0)
                     await fs.promises.appendFile(filename, buffer)
                     await fs.promises.appendFile(filename, bytes)
 
-                    console.log("wrote to : " + filename)
+                    if (braid_text.verbose) console.log("wrote to : " + filename)
                 } else {
                     try {
-                        console.log(`starting new db..`)
+                        if (braid_text.verbose) console.log(`starting new db..`)
 
                         currentNumber++
                         const init = get_init()
@@ -727,7 +728,7 @@ async function file_sync(key, process_delta, get_init) {
                         await fs.promises.writeFile(newFilename, buffer)
                         await fs.promises.appendFile(newFilename, init)
 
-                        console.log("wrote to : " + newFilename)
+                        if (braid_text.verbose) console.log("wrote to : " + newFilename)
 
                         currentSize = 4 + init.length
                         threshold = currentSize * 10
@@ -735,7 +736,7 @@ async function file_sync(key, process_delta, get_init) {
                             await fs.promises.unlink(filename)
                         } catch (e) { }
                     } catch (e) {
-                        console.log(`e = ${e.stack}`)
+                        if (braid_text.verbose) console.log(`e = ${e.stack}`)
                     }
                 }
             }))
@@ -752,7 +753,7 @@ async function file_sync(key, process_delta, get_init) {
                                     console.error(`Error deleting file: ${file}`)
                                     reject(err)
                                 } else {
-                                    console.log(`Deleted file: ${file}`)
+                                    if (braid_text.verbose) console.log(`Deleted file: ${file}`)
                                     resolve()
                                 }
                             })
