@@ -9,10 +9,10 @@ async function main() {
 
     let og_log = console.log
     console.log = () => {}
-    for (let t = 0; t < 50000; t++) {
+    for (let t = 0; t < 10000; t++) {
         let seed = base + t
-    // for (let t = 0; t < 1; t++) {
-    //     let seed = 7271846
+    // for (let t = 0; t < 10; t++) {
+    //     let seed = 1188661 + t
 
         og_log(`t = ${t}, seed = ${seed}, best_n = ${best_n} @ ${best_seed}`)
         Math.randomSeed(seed)
@@ -24,9 +24,19 @@ async function main() {
             // 1. create a bunch of edits to a dt
             let doc = new Doc('server')
 
+            let middle_doc = null
+
+            if (!middle_doc && (Math.random() < 1/n || n == 0)) {
+                middle_doc = Doc.fromBytes(doc.toBytes())
+            }
             for (let i = 0; i < n; i++) {
                 make_random_edit(doc)
+
+                if (!middle_doc && (Math.random() < 1/n || i == n - 1)) {
+                    middle_doc = Doc.fromBytes(doc.toBytes())
+                }
             }
+            if (!middle_doc) throw 'bad'
 
             // 2. let x = the resulting string
             let x = doc.get()
@@ -49,37 +59,43 @@ async function main() {
             }
 
             // 5. test dt_get
-            let z = dt_get(doc, doc.getRemoteVersion().map(x => x.join('-'))).get()
-            console.log('z = ' + z)
-            console.log(x == z)
-            if (x != z && n < best_n) {
+            let middle_v = middle_doc.getRemoteVersion().map(x => x.join('-'))
+            let new_middle_doc = dt_get(doc, middle_v)
+            console.log('new_middle_doc = ' + new_middle_doc.get())
+            if (middle_doc.get() != new_middle_doc.get() && n < best_n) {
                 best_n = n
                 best_seed = seed
             }
 
             // 6. test dt_get_patches(doc, version)
             if (true) {
-                let [_agents, versions, _parentss] = dt_parse([...doc.toBytes()])
-                let v = []
-                for (let i = 0; i < versions.length; i++)
-                    if (Math.random() > 0.5) v.push(versions[i].join('-'))
-
-                console.log(`v:${v}`)
-
-                let temp_doc = dt_get(doc, v)
-                console.log(`temp_doc1:${temp_doc.get()}`)
-
-                let updates = dt_get_patches(doc, v)
+                let updates = dt_get_patches(doc, middle_v)
                 console.log(`updates:`, updates)
 
-                apply_updates(temp_doc, updates)
-                console.log(`temp_doc2:${temp_doc.get()}`)
-                if (temp_doc.get() != doc.get() && n < best_n) {
+                apply_updates(middle_doc, updates)
+                console.log(`middle_doc2:${middle_doc.get()}`)
+                if (middle_doc.get() != doc.get() && n < best_n) {
                     best_n = n
                     best_seed = seed
                 }
             }
+
+            // 7. try applying a patch that's out of range..
+            // if (true) {
+            //     let agent = Math.random().toString(36).slice(2)
+            //     let parents = doc.getRemoteVersion().map(x => x.join('-'))
+            //     let len = doc.len()
+            //     let args = [`${agent}-0`, parents, len + 1, 'c']
+            //     console.log('ARGS:', args)
+            //     try {
+            //         doc.mergeBytes(dt_create_bytes(...args))
+            //     } catch (e) {
+            //         console.log(`EEEE = ${e}`)
+            //     }
+            //     console.log('did that..')
+            // }
         } catch (e) {
+            if (console.log == og_log) throw e
             if (n < best_n) {
                 best_n = n
                 best_seed = seed

@@ -5,6 +5,7 @@ let fs = require("fs")
 
 let braid_text = {
     db_folder: './braid-text-db',
+    length_cache_size: 10,
     cache: {}
 }
 
@@ -301,10 +302,10 @@ braid_text.put = async (key, options) => {
     let parents = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
     let og_parents = options_parents || parents
 
-    let max_pos = count_code_points(v_eq(parents, og_parents) ?
-        resource.doc.get() :
-        dt_get(resource.doc, og_parents).get())
-
+    let max_pos = resource.length_cache.get('' + og_parents) ??
+        (v_eq(parents, og_parents) ? resource.doc.len() :
+            dt_get(resource.doc, og_parents).len())
+    
     if (body != null) {
         patches = [{
             unit: 'text',
@@ -399,6 +400,10 @@ braid_text.put = async (key, options) => {
         return
     }
     resource.actor_seqs[v[0]] = v[1]
+
+    resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
+        a + (b.content.length ? b.content.length : -(b.range[1] - b.range[0])),
+        max_pos))
 
     v = `${v[0]}-${v[1] + 1 - change_count}`
 
@@ -580,6 +585,8 @@ async function get_resource(key) {
         }
 
         resource.val = resource.doc.get()
+
+        resource.length_cache = createSimpleCache(braid_text.length_cache_size)
 
         done(resource)
     })
@@ -1511,6 +1518,40 @@ function validate_patch(x) {
     if (typeof x.range !== 'string') throw new Error(`invalid patch range: must be a string`)
     if (!x.range.match(/^\s*\[\s*\d+\s*:\s*\d+\s*\]\s*$/)) throw new Error(`invalid patch range: ${x.range}`)
     if (typeof x.content !== 'string') throw new Error(`invalid patch content: must be a string`)
+}
+
+function createSimpleCache(size) {
+    const maxSize = size
+    const cache = new Map()
+
+    return {
+        put(key, value) {
+            if (cache.has(key)) {
+                // If the key already exists, update its value and move it to the end
+                cache.delete(key)
+                cache.set(key, value)
+            } else {
+                // If the cache is full, remove the oldest entry
+                if (cache.size >= maxSize) {
+                    const oldestKey = cache.keys().next().value
+                    cache.delete(oldestKey)
+                }
+                // Add the new key-value pair
+                cache.set(key, value)
+            }
+        },
+
+        get(key) {
+            if (!cache.has(key)) {
+                return null
+            }
+            // Move the accessed item to the end (most recently used)
+            const value = cache.get(key)
+            cache.delete(key)
+            cache.set(key, value)
+            return value
+        },
+    }
 }
 
 braid_text.encode_filename = encode_filename
