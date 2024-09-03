@@ -87,6 +87,7 @@ braid_text.serve = async (req, res, options = {}) => {
             res.setHeader("Version", x.version.map((x) => JSON.stringify(x)).join(", "))
 
             const buffer = Buffer.from(x.body, "utf8")
+            res.setHeader("Repr-Digest", `sha-256=:${require('crypto').createHash('sha256').update(buffer).digest('base64')}:`)
             res.setHeader("Content-Length", buffer.length)
 
             if (req.method === "HEAD") return my_end(200)
