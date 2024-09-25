@@ -5,8 +5,8 @@
   ></textarea>
 </body>
 <script src="https://braid.org/code/myers-diff1.js"></script>
-<script src="https://unpkg.com/braid-http@~0.3/braid-http-client.js"></script>
-<script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
+<script src="https://unpkg.com/braid-http@~1.0/braid-http-client.js"></script>
+<script src="/simpleton-client.js"></script>
 <script>
   let simpleton = simpleton_client(location.pathname, {
     apply_remote_update: ({ state, patches }) => {
@@ -19,6 +19,11 @@
       if (patches.length === 0) return null;
       return { patches, new_state: texty.value };
     },
+    on_error: (e) => {
+      texty.disabled = true
+      texty.style.background = '#fee'
+      texty.style.border = '4px solid red'
+    }
   });
 
   texty.value = "";

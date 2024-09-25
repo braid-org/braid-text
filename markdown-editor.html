@@ -12,11 +12,11 @@ dom.BODY = -> DIV(WIKI())
     window.statebus_fetch = window.fetch
     window.fetch = window.og_fetch
 </script>
-<script src="https://unpkg.com/braid-http@~0.3/braid-http-client.js"></script>
+<script src="https://unpkg.com/braid-http@~1.0/braid-http-client.js"></script>
 <script>
     window.fetch = window.statebus_fetch
 </script>
-<script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
+<script src="/simpleton-client.js"></script>
 
 <script>
 
@@ -47,6 +47,11 @@ var simpleton = simpleton_client(location.pathname, {
       patches: patches,
       new_state: t().value
     };
+  },
+  on_error: (e) => {
+    t().disabled = true
+    t().style.background = '#fee'
+    t().style.border = '4px solid red'
   }
 });
 

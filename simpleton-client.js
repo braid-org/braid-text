@@ -1,4 +1,4 @@
-// requires braid-http@0.3.14
+// requires braid-http@~1.0/braid-http-client.js
 // 
 // url: resource endpoint
 //
@@ -17,7 +17,7 @@
 //     this is for outgoing changes;
 //     diff_function = () => ({patches, new_version}).
 //
-function simpleton_client(url, { apply_remote_update, generate_local_diff_update, content_type }) {
+function simpleton_client(url, { apply_remote_update, generate_local_diff_update, content_type, on_error }) {
     var peer = Math.random().toString(36).substr(2)
     var current_version = []
     var prev_state = ""
@@ -26,7 +26,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
     var max_outstanding_changes = 10
     var ac = new AbortController()
 
-    braid_fetch_wrapper(url, {
+    braid_fetch(url, {
         headers: { "Merge-Type": "simpleton",
             ...(content_type ? {Accept: content_type} : {}) },
         subscribe: true,
@@ -67,8 +67,8 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
 
                 prev_state = apply_remote_update(update)
             }
-        })
-    )
+        }, on_error)
+    ).catch(on_error)
     
     return {
       stop: async () => {
@@ -111,14 +111,19 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
             prev_state = new_state
 
             outstanding_changes++
-            await braid_fetch_wrapper(url, {
-                headers: { "Merge-Type": "simpleton",
-                    ...(content_type ? {"Content-Type": content_type} : {}) },
-                method: "PUT",
-                retry: true,
-                version, parents, patches,
-                peer
-            })
+            try {
+                await braid_fetch(url, {
+                    headers: { "Merge-Type": "simpleton",
+                        ...(content_type ? {"Content-Type": content_type} : {}) },
+                    method: "PUT",
+                    retry: true,
+                    version, parents, patches,
+                    peer
+                })
+            } catch (e) {
+                on_error(e)
+                throw e
+            }
             outstanding_changes--
         }
       }
@@ -137,43 +142,4 @@ function count_code_points(str) {
         code_points++
     }
     return code_points
-}
-
-async function braid_fetch_wrapper(url, params) {
-    if (!params.retry) throw "wtf"
-    var waitTime = 10
-    if (params.subscribe) {
-        var subscribe_handler = null
-        connect()
-        async function connect() {
-            if (params.signal?.aborted) return
-            try {
-                var c = await braid_fetch(url, { ...params, parents: params.parents?.() })
-                c.subscribe((...args) => subscribe_handler?.(...args), on_error)
-                waitTime = 10
-            } catch (e) {
-                on_error(e)
-            }
-        }
-        function on_error(e) {
-          console.log('eee = ' + e.stack)
-            setTimeout(connect, waitTime)
-            waitTime = Math.min(waitTime * 2, 3000)
-        }
-        return {subscribe: handler => { subscribe_handler = handler }}
-    } else {
-        return new Promise((done) => {
-            send()
-            async function send() {
-                try {
-                    var res = await braid_fetch(url, params)
-                    if (res.status !== 200) throw "status not 200: " + res.status
-                    done(res)
-                } catch (e) {
-                    setTimeout(send, waitTime)
-                    waitTime = Math.min(waitTime * 2, 3000)
-                }
-            }
-        })
-    }
 }

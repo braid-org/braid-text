@@ -28,6 +28,12 @@ var server = require("http").createServer(async (req, res) => {
         return
     }
 
+    if (req.url == '/simpleton-client.js') {
+        res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-cache" })
+        require("fs").createReadStream("./simpleton-client.js").pipe(res)
+        return
+    }
+
     // TODO: uncomment out the code below to add /pages endpoint,
     // which displays all the currently used keys
     // 
