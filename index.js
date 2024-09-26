@@ -159,6 +159,8 @@ braid_text.serve = async (req, res, options = {}) => {
             }
 
             await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
+            
+            res.setHeader("Version", resource.doc.getRemoteVersion().map((x) => x.join("-")).sort())
 
             options.put_cb(options.key, resource.val)
         } catch (e) {
