@@ -3,6 +3,8 @@ let { Doc } = require("diamond-types-node")
 let braidify = require("braid-http").http_server
 let fs = require("fs")
 
+let MISSING_PARENT_VERSION = 'missing parent version'
+
 let braid_text = {
     verbose: false,
     db_folder: './braid-text-db',
@@ -164,32 +166,36 @@ braid_text.serve = async (req, res, options = {}) => {
 
             options.put_cb(options.key, resource.val)
         } catch (e) {
-            console.log(`EEE= ${e}:${e.stack}`)
-            // we couldn't apply the version, possibly because we're missing its parents,
-            // we want to send a 4XX error, so the client will resend this request later,
-            // hopefully after we've received the necessary parents.
+            console.log(`${req.method} ERROR: ${e.stack}`)
+            if (e.message?.startsWith(MISSING_PARENT_VERSION)) {
+                // we couldn't apply the version, because we're missing its parents,
+                // we want to send a 4XX error, so the client will resend this request later,
+                // hopefully after we've received the necessary parents.
 
-            // here are some 4XX error code options..
-            //
-            // - 425 Too Early
-            //     - pros: our message is too early
-            //     - cons: associated with some "Early-Data" http thing, which we're not using
-            // - 400 Bad Request
-            //     - pros: pretty generic
-            //     - cons: implies client shouldn't resend as-is
-            // - 409 Conflict
-            //     - pros: doesn't imply modifications needed
-            //     - cons: the message is not conflicting with anything
-            // - 412 Precondition Failed
-            //     - pros: kindof true.. the precondition of having another version has failed..
-            //     - cons: not strictly true, as this code is associated with http's If-Unmodified-Since stuff
-            // - 422 Unprocessable Content
-            //     - pros: it's true
-            //     - cons: implies client shouldn't resend as-is (at least, it says that here: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/422)
-            // - 428 Precondition Required
-            //     - pros: the name sounds right
-            //     - cons: typically implies that the request was missing an http conditional field like If-Match. that is to say, it implies that the request is missing a precondition, not that the server is missing a precondition
-            return done_my_turn(425, "The server failed to apply this version. The error generated was: " + e)
+                // here are some 4XX error code options..
+                //
+                // - 425 Too Early
+                //     - pros: our message is too early
+                //     - cons: associated with some "Early-Data" http thing, which we're not using
+                // - 400 Bad Request
+                //     - pros: pretty generic
+                //     - cons: implies client shouldn't resend as-is
+                // - 409 Conflict
+                //     - pros: doesn't imply modifications needed
+                //     - cons: the message is not conflicting with anything
+                // - 412 Precondition Failed
+                //     - pros: kindof true.. the precondition of having another version has failed..
+                //     - cons: not strictly true, as this code is associated with http's If-Unmodified-Since stuff
+                // - 422 Unprocessable Content
+                //     - pros: it's true
+                //     - cons: implies client shouldn't resend as-is (at least, it says that here: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/422)
+                // - 428 Precondition Required
+                //     - pros: the name sounds right
+                //     - cons: typically implies that the request was missing an http conditional field like If-Match. that is to say, it implies that the request is missing a precondition, not that the server is missing a precondition
+                return done_my_turn(425, e.message)
+            } else {
+                return done_my_turn(400, "The server failed to apply this version. The error generated was: " + e)
+            }
         }
 
         return done_my_turn(200)
@@ -302,6 +308,14 @@ braid_text.put = async (key, options) => {
     if (patches) validate_patches(patches)
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
+
+    if (options_parents) {
+        // make sure we have all these parents
+        for (let p of options_parents) {
+            let P = decode_version(p)
+            if (P[1] > (resource.actor_seqs[P[0]] ?? -1)) throw new Error(`${MISSING_PARENT_VERSION}: ${p}`)
+        }
+    }
 
     let parents = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
     let og_parents = options_parents || parents
@@ -577,7 +591,7 @@ async function get_resource(key) {
         resource.need_defrag = false
 
         resource.actor_seqs = {}
-        let max_version = resource.doc.getLocalVersion()[0] ?? -1
+        let max_version = Math.max(...resource.doc.getLocalVersion()) ?? -1
         for (let i = 0; i <= max_version; i++) {
             let v = resource.doc.localToRemoteVersion([i])[0]
             resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
