@@ -220,10 +220,14 @@ braid_text.get = async (key, options) => {
         let doc = resource.doc
         if (options.version || options.parents) doc = dt_get(doc, options.version || options.parents)
 
-        return {
+        let ret = {
             version: doc.getRemoteVersion().map((x) => x.join("-")).sort(),
             body: doc.get()
         }
+
+        if (options.version || options.parents) doc.free()
+
+        return ret
     } else {
         if (options.merge_type != "dt") {
             let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
@@ -269,17 +273,12 @@ braid_text.get = async (key, options) => {
                 updates = dt_get_patches(resource.doc, options.parents || options.version)
             }
 
-            for (let u of updates) {
-                u.version = decode_version(u.version)
-                u.version[1] += u.end - u.start - 1
-                u.version = u.version.join("-")
-
+            for (let u of updates)
                 options.subscribe({
                     version: [u.version],
                     parents: u.parents,
                     patches: [{ unit: u.unit, range: u.range, content: u.content }],
                 })
-            }
 
             // Output at least *some* data, or else chrome gets confused and
             // thinks the connection failed.  This isn't strictly necessary,
@@ -290,6 +289,16 @@ braid_text.get = async (key, options) => {
             resource.clients.add(options)
         }
     }
+}
+
+braid_text.forget = async (key, options) => {
+    if (!options) throw new Error('options is required')
+
+    let resource = (typeof key == 'string') ? await get_resource(key) : key
+
+    if (options.merge_type != "dt")
+        resource.simpleton_clients.delete(options)
+    else resource.clients.delete(options)
 }
 
 braid_text.put = async (key, options) => {
@@ -320,9 +329,15 @@ braid_text.put = async (key, options) => {
     let parents = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
     let og_parents = options_parents || parents
 
+    function get_len() {
+        let d = dt_get(resource.doc, og_parents)
+        let len = d.len()
+        d.free()
+        return len
+    }
+
     let max_pos = resource.length_cache.get('' + og_parents) ??
-        (v_eq(parents, og_parents) ? resource.doc.len() :
-            dt_get(resource.doc, og_parents).len())
+        (v_eq(parents, og_parents) ? resource.doc.len() : get_len())
     
     if (body != null) {
         patches = [{
@@ -336,7 +351,7 @@ braid_text.put = async (key, options) => {
     patches = patches.map((p) => ({
         ...p,
         range: p.range.match(/\d+/g).map((x) => parseInt(x)),
-        content: [...p.content],
+        content_codepoints: [...p.content],
     })).sort((a, b) => a.range[0] - b.range[0])
 
     // validate patch positions
@@ -347,7 +362,7 @@ braid_text.put = async (key, options) => {
         must_be_at_least = p.range[1]
     }
 
-    let change_count = patches.reduce((a, b) => a + b.content.length + (b.range[1] - b.range[0]), 0)
+    let change_count = patches.reduce((a, b) => a + b.content_codepoints.length + (b.range[1] - b.range[0]), 0)
 
     let og_v = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
 
@@ -365,7 +380,6 @@ braid_text.put = async (key, options) => {
         let seen = {}
         for (let u of updates) {
             u.version = decode_version(u.version)
-            u.version[1] += u.end - u.start - 1
 
             if (!u.content) {
                 // delete
@@ -401,9 +415,9 @@ braid_text.put = async (key, options) => {
                 v = `${v[0]}-${v[1] + 1}`
             }
             // insert
-            for (let i = 0; i < p.content?.length ?? 0; i++) {
+            for (let i = 0; i < p.content_codepoints?.length ?? 0; i++) {
                 let vv = decode_version(v)
-                let c = p.content[i]
+                let c = p.content_codepoints[i]
 
                 if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] + offset, c])]) throw new Error('invalid update: different from previous update with same version')
 
@@ -420,7 +434,7 @@ braid_text.put = async (key, options) => {
     resource.actor_seqs[v[0]] = v[1]
 
     resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
-        a + (b.content.length ? b.content.length : -(b.range[1] - b.range[0])),
+        a + (b.content_codepoints.length ? b.content_codepoints.length : -(b.range[1] - b.range[0])),
         max_pos))
 
     v = `${v[0]}-${v[1] + 1 - change_count}`
@@ -434,21 +448,21 @@ braid_text.put = async (key, options) => {
     let offset = 0
     for (let p of patches) {
         // delete
-        for (let i = p.range[0]; i < p.range[1]; i++) {
-            bytes.push(dt_create_bytes(v, ps, p.range[1] - 1 + offset, null))
-            offset--
-            ps = [v]
+        let del = p.range[1] - p.range[0]
+        if (del) {
+            bytes.push(dt_create_bytes(v, ps, p.range[0] + offset, del, null))
+            offset -= del
             v = decode_version(v)
-            v = `${v[0]}-${v[1] + 1}`
+            ps = [`${v[0]}-${v[1] + (del - 1)}`]
+            v = `${v[0]}-${v[1] + del}`
         }
         // insert
-        for (let i = 0; i < p.content?.length ?? 0; i++) {
-            let c = p.content[i]
-            bytes.push(dt_create_bytes(v, ps, p.range[1] + offset, c))
-            offset++
-            ps = [v]
+        if (p.content?.length) {
+            bytes.push(dt_create_bytes(v, ps, p.range[1] + offset, 0, p.content))
+            offset += p.content_codepoints.length
             v = decode_version(v)
-            v = `${v[0]}-${v[1] + 1}`
+            ps = [`${v[0]}-${v[1] + (p.content_codepoints.length - 1)}`]
+            v = `${v[0]}-${v[1] + p.content_codepoints.length}`
         }
     }
 
@@ -787,6 +801,8 @@ async function file_sync(key, process_delta, get_init) {
 //////////////////////////////////////////////////////////////////
 
 function dt_get(doc, version, agent = null) {
+    if (dt_get.last_doc) dt_get.last_doc.free()
+
     let bytes = doc.toBytes()
     dt_get.last_doc = doc = Doc.fromBytes(bytes, agent)
 
@@ -834,6 +850,7 @@ function dt_get(doc, version, agent = null) {
                                     op_run.start + (i - base_i) :
                                     op_run.start) :
                                 op_run.end - 1 - (i - base_i),
+                            op_run.content?.[i - base_i] != null ? 0 : 1,
                             op_run.content?.[i - base_i]
                         )
                     )
@@ -866,12 +883,16 @@ function dt_get_patches(doc, version = null) {
 
         before_doc.mergeBytes(after_bytes)
         op_runs = before_doc.getOpsSince(before_doc_frontier)
+
+        before_doc.free()
     } else op_runs = doc.getOpsSince([])
+
+    doc.free()
 
     let i = 0
     let patches = []
     op_runs.forEach((op_run) => {
-        let version = versions[i].join("-")
+        let version = versions[i]
         let parents = parentss[i].map((x) => x.join("-")).sort()
         let start = op_run.start
         let end = start + 1
@@ -899,7 +920,7 @@ function dt_get_patches(doc, version = null) {
                         op_run.start + (end - start)) :
                     (op_run.end - (start - op_run.start))
                 patches.push({
-                    version,
+                    version: `${version[0]}-${version[1] + e - s - 1}`,
                     parents,
                     unit: "text",
                     range: op_run.content ? `[${s}:${s}]` : `[${s}:${e}]`,
@@ -908,7 +929,7 @@ function dt_get_patches(doc, version = null) {
                     end: e,
                 })
                 if (j == len) break
-                version = versions[I].join("-")
+                version = versions[I]
                 parents = parentss[I].map((x) => x.join("-")).sort()
                 start = op_run.start + j
             }
@@ -1014,7 +1035,8 @@ function dt_parse(byte_array) {
     return [agents, versions, parentss]
 }
 
-function dt_create_bytes(version, parents, pos, ins) {
+function dt_create_bytes(version, parents, pos, del, ins) {
+    if (del) pos += del - 1
 
     function write_varint(bytes, value) {
         while (value >= 0x80) {
@@ -1085,6 +1107,8 @@ function dt_create_bytes(version, parents, pos, ins) {
 
     let patches = []
 
+    let unicode_chars = ins ? [...ins] : []
+
     if (ins) {
         let inserted_content_bytes = []
 
@@ -1095,18 +1119,21 @@ function dt_create_bytes(version, parents, pos, ins) {
         let encoder = new TextEncoder()
         let utf8Bytes = encoder.encode(ins)
 
-        inserted_content_bytes.push(1 + utf8Bytes.length) // length of content chunk
+        write_varint(inserted_content_bytes, 1 + utf8Bytes.length)
+        // inserted_content_bytes.push(1 + utf8Bytes.length) // length of content chunk
         inserted_content_bytes.push(4) // "plain text" enum
 
         for (let b of utf8Bytes) inserted_content_bytes.push(b) // actual text
 
         inserted_content_bytes.push(25) // "known" enum
-        inserted_content_bytes.push(1) // length of "known" chunk
-        inserted_content_bytes.push(3) // content of length 1, and we "know" it
+        let known_chunk = []
+        write_varint(known_chunk, unicode_chars.length * 2 + 1)
+        write_varint(inserted_content_bytes, known_chunk.length)
+        inserted_content_bytes.push(...known_chunk)
 
         patches.push(24)
         write_varint(patches, inserted_content_bytes.length)
-        patches.push(...inserted_content_bytes)
+        for (let b of inserted_content_bytes) patches.push(b)
     }
 
     // write in the version
@@ -1117,26 +1144,43 @@ function dt_create_bytes(version, parents, pos, ins) {
     let jump = seq
 
     write_varint(version_bytes, ((agent_i + 1) << 1) | (jump != 0 ? 1 : 0))
-    write_varint(version_bytes, 1)
+    write_varint(version_bytes, ins ? unicode_chars.length : del)
     if (jump) write_varint(version_bytes, jump << 1)
 
     patches.push(21)
     write_varint(patches, version_bytes.length)
-    patches.push(...version_bytes)
+    for (let b of version_bytes) patches.push(b)
 
     // write in "op" bytes (some encoding of position)
     let op_bytes = []
 
-    write_varint(op_bytes, (pos << 4) | (pos ? 2 : 0) | (ins ? 0 : 4))
+    if (del) {
+        if (pos == 0) {
+            write_varint(op_bytes, 4)
+        } else if (del == 1) {
+            write_varint(op_bytes, pos * 16 + 6)
+        } else {
+            write_varint(op_bytes, del * 16 + 7)
+            write_varint(op_bytes, pos * 2 + 2)
+        }
+    } else if (unicode_chars.length == 1) {
+        if (pos == 0) write_varint(op_bytes, 0)
+        else write_varint(op_bytes, pos * 16 + 2)
+    } else if (pos == 0) {
+        write_varint(op_bytes, unicode_chars.length * 8 + 1)
+    } else {
+        write_varint(op_bytes, unicode_chars.length * 8 + 3)
+        write_varint(op_bytes, pos * 2)
+    }
 
     patches.push(22)
     write_varint(patches, op_bytes.length)
-    patches.push(...op_bytes)
+    for (let b of op_bytes) patches.push(b)
 
     // write in parents
     let parents_bytes = []
 
-    write_varint(parents_bytes, 1)
+    write_varint(parents_bytes, ins ? unicode_chars.length : del)
 
     if (parents.length) {
         for (let [i, [agent, seq]] of parents.entries()) {
@@ -1154,14 +1198,16 @@ function dt_create_bytes(version, parents, pos, ins) {
     // write in patches
     bytes.push(20)
     write_varint(bytes, patches.length)
-    bytes.push(...patches)
+    for (let b of patches) bytes.push(b)
 
     //   console.log(bytes);
     return bytes
 }
 
 function defrag_dt(doc) {
-    return Doc.fromBytes(doc.toBytes(), 'server')
+    let bytes = doc.toBytes()
+    doc.free()
+    return Doc.fromBytes(bytes, 'server')
 }
 
 function OpLog_remote_to_local(doc, frontier) {

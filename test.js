@@ -1,9 +1,19 @@
 
 let { Doc } = require("diamond-types-node")
-let {dt_get, dt_get_patches, dt_parse, dt_create_bytes} = require('./index.js')
+let braid_text = require('./index.js')
+let {dt_get, dt_get_patches, dt_parse, dt_create_bytes} = braid_text
+
+process.on("unhandledRejection", (x) =>
+    console.log(`unhandledRejection: ${x.stack}`)
+)
+process.on("uncaughtException", (x) =>
+    console.log(`uncaughtException: ${x.stack}`)
+)
+
+braid_text.db_folder = null
 
 async function main() {
-    let best_seed = 0
+    let best_seed = NaN
     let best_n = Infinity
     let base = Math.floor(Math.random() * 10000000)
 
@@ -11,89 +21,89 @@ async function main() {
     console.log = () => {}
     for (let t = 0; t < 10000; t++) {
         let seed = base + t
-    // for (let t = 0; t < 10; t++) {
-    //     let seed = 1188661 + t
+    // for (let t = 0; t < 1; t++) {
+    //     let seed = 7572861
 
         og_log(`t = ${t}, seed = ${seed}, best_n = ${best_n} @ ${best_seed}`)
         Math.randomSeed(seed)
 
-        let n = Math.floor(Math.random() * 15)
+        let n = Math.floor(Math.random() * 15) + 5
         console.log(`n = ${n}`)
 
         try {
-            // 1. create a bunch of edits to a dt
+            // create a bunch of edits called doc,
+            // and remember a point along the way of adding all these edits,
+            // called middle_doc
             let doc = new Doc('server')
-
             let middle_doc = null
 
-            if (!middle_doc && (Math.random() < 1/n || n == 0)) {
+            if (!middle_doc && (Math.random() < 1/n || n == 0))
                 middle_doc = Doc.fromBytes(doc.toBytes())
-            }
             for (let i = 0; i < n; i++) {
+                console.log(`edit ${i}`)
+
                 make_random_edit(doc)
-
-                if (!middle_doc && (Math.random() < 1/n || i == n - 1)) {
+                if (!middle_doc && (Math.random() < 1/n || i == n - 1))
                     middle_doc = Doc.fromBytes(doc.toBytes())
+            }
+            if (!middle_doc) throw new Error('bad')
+
+            // put them into braid-text
+            let dt_to_braid = async (doc, key) => {
+                await braid_text.get(key, {})
+                for (let x of dt_get_patches(doc)) {
+                    console.log(`x = `, x)
+                    let y = {
+                        merge_type: 'dt',
+                        version: [x.version],
+                        parents: x.parents,
+                        patches: [{
+                            unit: x.unit,
+                            range: x.range,
+                            content: x.content
+                        }]
+                    }
+                    await braid_text.put(key, y)
+                    y.validate_already_seen_versions = true
+                    await braid_text.put(key, y)
                 }
             }
-            if (!middle_doc) throw 'bad'
+            await dt_to_braid(doc, 'doc')
+            await dt_to_braid(middle_doc, 'middle_doc')
+            console.log(`doc dt = ${doc.get()}`)
+            console.log(`middle_doc dt = ${middle_doc.get()}`)
+            console.log(`doc = ${await braid_text.get('doc')}`)
+            console.log(`middle_doc = ${await braid_text.get('middle_doc')}`)
 
-            // 2. let x = the resulting string
-            let x = doc.get()
-            console.log('x = ' + x)
+            // ensure they look right
+            if (doc.get() != await braid_text.get('doc')) throw new Error('bad')
+            if (middle_doc.get() != await braid_text.get('middle_doc')) throw new Error('bad')
 
-            // // 3. use the code for sending these edits over the wire to create a new dt
-            let updates = dt_get_patches(doc)
-            console.log(updates)
-
-            let new_doc = new Doc('server')
-            apply_updates(new_doc, updates)
-            let y = new_doc.get()
-            console.log('y = ' + y)
-
-            // 4. is the resulting string == x?
-            console.log(x == y)
-            if (x != y && n < best_n) {
-                best_n = n
-                best_seed = seed
-            }
-
-            // 5. test dt_get
+            // test getting old version
             let middle_v = middle_doc.getRemoteVersion().map(x => x.join('-'))
-            let new_middle_doc = dt_get(doc, middle_v)
-            console.log('new_middle_doc = ' + new_middle_doc.get())
-            if (middle_doc.get() != new_middle_doc.get() && n < best_n) {
-                best_n = n
-                best_seed = seed
-            }
+            console.log(`middle_doc = ${await braid_text.get('middle_doc')}`)
+            console.log(`middle_v = `, middle_v)
+            
+            let doc_v = doc.getRemoteVersion().map(x => x.join('-'))
+            console.log(`doc_v = `, doc_v)
 
-            // 6. test dt_get_patches(doc, version)
-            if (true) {
-                let updates = dt_get_patches(doc, middle_v)
-                console.log(`updates:`, updates)
+            console.log(`doc = `, await braid_text.get('doc', {version: middle_v}))
+            if (await braid_text.get('middle_doc') != (await braid_text.get('doc', {version: middle_v})).body) throw new Error('bad')
 
-                apply_updates(middle_doc, updates)
-                console.log(`middle_doc2:${middle_doc.get()}`)
-                if (middle_doc.get() != doc.get() && n < best_n) {
-                    best_n = n
-                    best_seed = seed
-                }
-            }
+            // try getting updates from middle_doc to doc
+            let o = {merge_type: 'dt', parents: middle_v, subscribe: update => {
+                braid_text.put('middle_doc', update)
+            }}
+            await braid_text.get('doc', o)
+            await braid_text.forget('doc', o)
 
-            // 7. try applying a patch that's out of range..
-            // if (true) {
-            //     let agent = Math.random().toString(36).slice(2)
-            //     let parents = doc.getRemoteVersion().map(x => x.join('-'))
-            //     let len = doc.len()
-            //     let args = [`${agent}-0`, parents, len + 1, 'c']
-            //     console.log('ARGS:', args)
-            //     try {
-            //         doc.mergeBytes(dt_create_bytes(...args))
-            //     } catch (e) {
-            //         console.log(`EEEE = ${e}`)
-            //     }
-            //     console.log('did that..')
-            // }
+            if (await braid_text.get('middle_doc') != await braid_text.get('doc')) throw new Error('bad')
+
+            doc.free()
+            middle_doc.free()
+            for (let p of Object.values(braid_text.cache))
+                (await p).doc.free()
+            braid_text.cache = {}
         } catch (e) {
             if (console.log == og_log) throw e
             if (n < best_n) {
@@ -132,72 +142,28 @@ function make_random_edit(doc) {
     let len = parent_doc.len()
     console.log(`len = ${len}`)
 
+    parent_doc.free()
+
     if (len && Math.random() > 0.5) {
         // delete
         let start = Math.floor(Math.random() * len)
         let del_len = Math.floor(Math.random() * (len - start - 1)) + 1
 
-        for (let i = 0; i < del_len; i++) {
-            let v = `${agent}-${base_seq++}`
-            let args = [v, parents, start + del_len - 1 - i, null]
-            console.log(args)
-            doc.mergeBytes(dt_create_bytes(...args))
-            parents = [v]
-        }
+        let args = [`${agent}-${base_seq}`, parents, start, del_len, null]
+        console.log(args)
+        doc.mergeBytes(dt_create_bytes(...args))
     } else {
         // insert
         let start = Math.floor(Math.random() * (len + 1))
-        let ins_len = Math.floor(Math.random() * 10) + 1
-
-        for (let i = 0; i < ins_len; i++) {
-            let v = `${agent}-${base_seq++}`
-            let args = [v, parents, start++, getRandomCharacter()]
-            console.log(args)
-            doc.mergeBytes(dt_create_bytes(...args))
-            parents = [v]
-        }
+        let ins = Array(Math.floor(Math.random() * 10) + 1).fill(0).map(() => getRandomCharacter()).join('')
+       
+        let args = [`${agent}-${base_seq}`, parents, start, 0, ins]
+        console.log(args)
+        doc.mergeBytes(dt_create_bytes(...args))
     }
 
     // work here
     console.log(`doc => ${doc.get()}`)
-}
-
-function apply_updates(doc, updates) {
-    for (let u of updates) {
-        u.range = u.range.match(/\d+/g).map((x) => parseInt(x))
-        u.content = [...u.content]
-
-        let v = u.version
-        let ps = u.parents
-
-        console.log('UPDATE:', u)
-
-        // delete
-        for (let i = u.range[1] - 1; i >= u.range[0]; i--) {
-
-            // work here
-            let args = [v, ps, i, null]
-            console.log(`args`, args)
-
-            doc.mergeBytes(dt_create_bytes(...args))
-            ps = [v]
-            v = decode_version(v)
-            v = `${v[0]}-${v[1] + 1}`
-        }
-        // insert
-        for (let i = 0; i < u.content?.length ?? 0; i++) {
-            let c = u.content[i]
-
-            // work here
-            let args = [v, ps, u.range[0] + i, c]
-            console.log(`args`, args)
-
-            doc.mergeBytes(dt_create_bytes(...args))
-            ps = [v]
-            v = decode_version(v)
-            v = `${v[0]}-${v[1] + 1}`
-        }
-    }
 }
 
 //////////////////////////////////////////////////////////////////
