@@ -1,0 +1,118 @@
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 10px;
+    }
+    .test {
+        margin-bottom: 3px;
+        padding: 3px;
+    }
+    .running {
+        background-color: #fffde7;
+    }
+    .passed {
+        background-color: #e8f5e9;
+    }
+    .failed {
+        background-color: #ffebee;
+    }
+</style>
+<script src="https://unpkg.com/braid-http@~1.1/braid-http-client.js"></script>
+<div id="testContainer"></div>
+<script type=module>
+
+let delay = 0
+
+function createTestDiv(testName) {
+    const div = document.createElement("div")
+    div.className = "test running"
+    div.innerHTML = `<span style="font-weight:bold">${testName}: </span><span class="result">Running...</span>`
+    testContainer.appendChild(div)
+    return div
+}
+
+function updateTestResult(div, passed, message, got, expected) {
+    div.className = `test ${passed ? "passed" : "failed"}`
+    
+    if (passed) {
+        div.querySelector(".result").textContent = message
+        div.querySelector(".result").style.fontSize = message.length > 400 ? 'xx-small' : message.length > 100 ? 'small' : ''
+    } else {
+        div.querySelector(".result").innerHTML = `${message}<br><strong>Got:</strong> ${got}<br><strong>Expected:</strong> ${expected}`
+    }
+}
+
+async function runTest(testName, testFunction, expectedResult) {
+    delay += 70
+
+    await new Promise(done => setTimeout(done, delay))
+    const div = createTestDiv(testName)
+    try {
+        let x = await testFunction()
+        if (x == expectedResult) {
+            updateTestResult(div, true, x)
+        } else {
+            updateTestResult(div, false, "Mismatch:", x, expectedResult)
+        }
+    } catch (error) {
+        updateTestResult(div, false, "Error:", error.message || error, expectedResult)
+    }
+}
+
+runTest(
+    "test sending a json patch to some json-text",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({a: 5, b: 6})
+        })
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Range': 'json a' },
+            body: '67'
+        })
+
+        let r = await fetch(`/${key}`)
+
+        return await r.text()
+    },
+    JSON.stringify({a: 67, b: 6}, null, 4)
+)
+
+runTest(
+    "test sending multiple json patches to some json-text",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({a: 5, b: 6, c: 7})
+        })
+
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Range': 'json a' },
+            patches: [{
+                unit: 'json',
+                range: 'a',
+                content: '55',
+            }, {
+                unit: 'json',
+                range: 'b',
+                content: '66',
+            }]
+        })
+
+        let r = await fetch(`/${key}`)
+
+        return await r.text()
+    },
+    JSON.stringify({a: 55, b: 66, c: 7}, null, 4)
+)
+
+</script>

@@ -34,6 +34,12 @@ var server = require("http").createServer(async (req, res) => {
         return
     }
 
+    if (req.url == '/test.html') {
+        res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
+        require("fs").createReadStream("./test.html").pipe(res)
+        return
+    }
+
     // TODO: uncomment out the code below to add /pages endpoint,
     // which displays all the currently used keys
     // 

@@ -176,3 +176,28 @@ simpleton = simpleton_client(url, options)
   - `content_type`: <small style="color:lightgrey">[optional]</small> If set, this value will be sent in the `Accept` and `Content-Type` headers to the server.
 
 - `simpleton.changed()`: Call this function to report local updates whenever they occur, e.g., in the `oninput` event handler of a textarea being synchronized.
+
+## Testing
+
+### to run unit tests:
+first run the demo server as usual:
+
+    npm install
+    node server-demo.js
+
+then open http://localhost:8888/test.html, and the boxes should turn green as the tests pass.
+
+### to run fuzz tests:
+
+    npm install
+    node test.js
+
+if the last output line looks like this, good:
+
+    t = 9999, seed = 1397019, best_n = Infinity @ NaN
+
+but it's bad if it looks like this:
+
+    t = 9999, seed = 1397019, best_n = 5 @ 1396791
+
+the number at the end is the random seed that generated the simplest error example
