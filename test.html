@@ -19,7 +19,7 @@
         background-color: #ffebee;
     }
 </style>
-<script src="https://unpkg.com/braid-http@~1.1/braid-http-client.js"></script>
+<script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
 <div id="testContainer"></div>
 <script type=module>
 
@@ -60,6 +60,27 @@ async function runTest(testName, testFunction, expectedResult) {
         updateTestResult(div, false, "Error:", error.message || error, expectedResult)
     }
 }
+
+runTest(
+    "test getting a binary update from a subscription",
+    async () => {
+        return await new Promise(async (done, fail) => {
+            let key = 'test-' + Math.random().toString(36).slice(2)
+
+            await fetch(`/${key}`, {
+                method: 'PUT',
+                body: JSON.stringify({a: 5, b: 6}, null, 4)
+            })
+
+            let r = await braid_fetch(`/${key}`, {
+                subscribe: true
+            })
+
+            r.subscribe(update => done(update.body_text), fail)
+        })
+    },
+    JSON.stringify({a: 5, b: 6}, null, 4)
+)
 
 runTest(
     "test sending a json patch to some json-text",

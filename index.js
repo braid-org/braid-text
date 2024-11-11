@@ -148,6 +148,7 @@ braid_text.serve = async (req, res, options = {}) => {
         let ee = null
         try {
             patches = await req.patches()
+            for (let p of patches) p.content = p.content_text
         } catch (e) { ee = e }
         await my_prev_put_p
 

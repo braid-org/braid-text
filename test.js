@@ -27,7 +27,7 @@ async function main() {
         og_log(`t = ${t}, seed = ${seed}, best_n = ${best_n} @ ${best_seed}`)
         Math.randomSeed(seed)
 
-        let n = Math.floor(Math.random() * 15) + 5
+        let n = Math.floor(Math.random() * 15)
         console.log(`n = ${n}`)
 
         try {

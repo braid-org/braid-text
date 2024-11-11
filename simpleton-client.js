@@ -1,4 +1,4 @@
-// requires braid-http@~1.0/braid-http-client.js
+// requires braid-http@~1.3/braid-http-client.js
 // 
 // url: resource endpoint
 //
@@ -41,10 +41,13 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
             if (current_version.length === update.parents.length
                 && current_version.every((v, i) => v === update.parents[i])) {
                 current_version = update.version.sort()
-                update.state = update.body
+                update.state = update.body_text
 
                 if (update.patches) {
-                    for (let p of update.patches) p.range = p.range.match(/\d+/g).map((x) => 1 * x)
+                    for (let p of update.patches) {
+                        p.range = p.range.match(/\d+/g).map((x) => 1 * x)
+                        p.content = p.content_text
+                    }
                     update.patches.sort((a, b) => a.range[0] - b.range[0])
 
                     // convert from code-points to js-indicies
