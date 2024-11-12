@@ -136,4 +136,27 @@ runTest(
     JSON.stringify({a: 55, b: 66, c: 7}, null, 4)
 )
 
+runTest(
+    "test deleting something using a json patch",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({a: 5, b: 6}, null, 4)
+        })
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Range': 'json a' },
+            body: ''
+        })
+
+        let r = await fetch(`/${key}`)
+
+        return await r.text()
+    },
+    JSON.stringify({b: 6}, null, 4)
+)
+
 </script>

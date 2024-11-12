@@ -311,7 +311,7 @@ braid_text.put = async (key, options) => {
         
         let x = JSON.parse(resource.doc.get())
         for (let p of patches)
-            apply_patch(x, p.range, JSON.parse(p.content))
+            apply_patch(x, p.range, p.content === '' ? undefined : JSON.parse(p.content))
 
         return await braid_text.put(key, {
             body: JSON.stringify(x, null, 4)
