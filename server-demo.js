@@ -34,7 +34,17 @@ var server = require("http").createServer(async (req, res) => {
         return
     }
 
-    if (req.url == '/test.html') {
+    if (req.url.startsWith('/test.html')) {
+        let parts = req.url.split(/[\?&=]/g)
+
+        if (parts[1] == 'check') {
+            res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-cache" })
+            return res.end(JSON.stringify({
+                checking: parts[2],
+                result: (await braid_text.get(parts[2])) != null
+            }))
+        }
+
         res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
         require("fs").createReadStream("./test.html").pipe(res)
         return

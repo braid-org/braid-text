@@ -9,7 +9,8 @@ let braid_text = {
     verbose: false,
     db_folder: './braid-text-db',
     length_cache_size: 10,
-    cache: {}
+    cache: {},
+    delete_cache: {}
 }
 
 let waiting_puts = 0
@@ -71,7 +72,7 @@ braid_text.serve = async (req, res, options = {}) => {
     if (req.method == "OPTIONS") return my_end(200)
 
     if (req.method == "DELETE") {
-        await resource.delete_me()
+        await braid_text.delete(resource)
         return my_end(200)
     }
 
@@ -203,6 +204,11 @@ braid_text.serve = async (req, res, options = {}) => {
     }
 
     throw new Error("unknown")
+}
+
+braid_text.delete = async (key) => {
+    let resource = (typeof key == 'string') ? await get_resource(key) : key
+    await resource.delete_me()
 }
 
 braid_text.get = async (key, options) => {
@@ -599,9 +605,11 @@ braid_text.list = async () => {
 }
 
 async function get_resource(key) {
+    if (braid_text.delete_cache[key]) await braid_text.delete_cache[key]
+
     let cache = braid_text.cache
     if (!cache[key]) cache[key] = new Promise(async done => {
-        let resource = {}
+        let resource = {key}
         resource.clients = new Set()
         resource.simpleton_clients = new Set()
 
@@ -625,9 +633,9 @@ async function get_resource(key) {
             resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
         }
 
-        resource.delete_me = () => {
-            delete_me()
+        resource.delete_me = async () => {
             delete cache[key]
+            await (braid_text.delete_cache[key] = delete_me())
         }
 
         resource.val = resource.doc.get()
@@ -745,9 +753,11 @@ async function file_sync(key, process_delta, get_init) {
         }
     }
 
+    let deleted = false
     let chain = Promise.resolve()
     return {
         change: async (bytes) => {
+            if (deleted) return
             await (chain = chain.then(async () => {
                 currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
                 const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
@@ -787,6 +797,7 @@ async function file_sync(key, process_delta, get_init) {
             }))
         },
         delete_me: async () => {
+            deleted = true
             await (chain = chain.then(async () => {
                 await Promise.all(
                     (
