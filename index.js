@@ -487,6 +487,7 @@ braid_text.put = async (key, options) => {
     }
 
     for (let b of bytes) resource.doc.mergeBytes(b)
+    resource.val = resource.doc.get()
 
     resource.need_defrag = true
 
@@ -589,8 +590,6 @@ braid_text.put = async (key, options) => {
     }
 
     await resource.db_delta(resource.doc.getPatchSince(v_before))
-
-    resource.val = resource.doc.get()
 }
 
 braid_text.list = async () => {
