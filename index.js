@@ -865,17 +865,28 @@ function dt_get(doc, version, agent = null) {
             ) {
                 for (; i < I; i++) {
                     let version = versions[i].join("-")
-                    if (!after_versions[version]) new_doc.mergeBytes(
+                    if (after_versions[version]) continue
+                    let og_i = i
+                    let content = []
+                    if (op_run.content?.[i - base_i]) content.push(op_run.content[i - base_i])
+                    if (!!op_run.content === op_run.fwd)
+                        while (i + 1 < I && !after_versions[versions[i + 1].join("-")]) {
+                            i++
+                            if (op_run.content?.[i - base_i]) content.push(op_run.content[i - base_i])
+                        }
+                    content = content.length ? content.join("") : null
+
+                    new_doc.mergeBytes(
                         dt_create_bytes(
                             version,
-                            parentss[i].map((x) => x.join("-")),
+                            parentss[og_i].map((x) => x.join("-")),
                             op_run.fwd ?
                                 (op_run.content ?
-                                    op_run.start + (i - base_i) :
+                                    op_run.start + (og_i - base_i) :
                                     op_run.start) :
                                 op_run.end - 1 - (i - base_i),
-                            op_run.content?.[i - base_i] != null ? 0 : 1,
-                            op_run.content?.[i - base_i]
+                            op_run.content ? 0 : i - og_i + 1,
+                            content
                         )
                     )
                 }
@@ -1568,7 +1579,7 @@ function decode_filename(encodedFilename) {
 function validate_version_array(x) {
     if (!Array.isArray(x)) throw new Error(`invalid version array: not an array`)
     x.sort()
-    for (xx of x) validate_actor_seq(xx)
+    for (var xx of x) validate_actor_seq(xx)
 }
 
 function validate_actor_seq(x) {

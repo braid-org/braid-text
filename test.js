@@ -16,6 +16,7 @@ async function main() {
     let best_seed = NaN
     let best_n = Infinity
     let base = Math.floor(Math.random() * 10000000)
+    let st = Date.now()
 
     let og_log = console.log
     console.log = () => {}
@@ -113,6 +114,7 @@ async function main() {
         }
     }
     og_log(`best_seed = ${best_seed}, best_n = ${best_n}`)
+    og_log(`time = ${Date.now() - st}`)
 }
 
 function make_random_edit(doc) {
