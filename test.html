@@ -62,6 +62,50 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test subscribing starting at a version using simpleton",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi-0'],
+            subscribe: true
+        })
+        return await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                done(JSON.stringify(update.parents))
+            }, fail)
+        })
+    },
+    JSON.stringify([ "hi-0" ])
+)
+
+runTest(
+    "test dt_create_bytes with big agent name",
+    async () => {
+        let x = await (await fetch(`/test.html?dt_create_bytes_big_name`)).json()
+        return JSON.stringify(x)
+    },
+    JSON.stringify({ok: true})
+)
+
+runTest(
+    "test dt_create_bytes with many agent names",
+    async () => {
+        let x = await (await fetch(`/test.html?dt_create_bytes_many_names`)).json()
+        return JSON.stringify(x)
+    },
+    JSON.stringify({ok: true})
+)
+
+runTest(
     "test deleting a resource",
     async () => {
         let key = 'test-' + Math.random().toString(36).slice(2)

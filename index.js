@@ -626,7 +626,8 @@ async function get_resource(key) {
         resource.need_defrag = false
 
         resource.actor_seqs = {}
-        let max_version = Math.max(...resource.doc.getLocalVersion()) ?? -1
+
+        let max_version = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
         for (let i = 0; i <= max_version; i++) {
             let v = resource.doc.localToRemoteVersion([i])[0]
             resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
@@ -1084,7 +1085,7 @@ function dt_create_bytes(version, parents, pos, del, ins) {
     function write_string(byte_array, str) {
         let str_bytes = new TextEncoder().encode(str)
         write_varint(byte_array, str_bytes.length)
-        byte_array.push(...str_bytes)
+        for (let x of str_bytes) byte_array.push(x)
     }
 
     version = decode_version(version)
@@ -1112,11 +1113,11 @@ function dt_create_bytes(version, parents, pos, del, ins) {
 
     file_info.push(3)
     write_varint(file_info, agent_names.length)
-    file_info.push(...agent_names)
+    for (let x of agent_names) file_info.push(x)
 
     bytes.push(1)
     write_varint(bytes, file_info.length)
-    bytes.push(...file_info)
+    for (let x of file_info) bytes.push(x)
 
     let branch = []
 
@@ -1133,12 +1134,12 @@ function dt_create_bytes(version, parents, pos, del, ins) {
 
         branch.push(12)
         write_varint(branch, frontier.length)
-        branch.push(...frontier)
+        for (let x of frontier) branch.push(x)
     }
 
     bytes.push(10)
     write_varint(bytes, branch.length)
-    bytes.push(...branch)
+    for (let x of branch) bytes.push(x)
 
     let patches = []
 
@@ -1164,7 +1165,7 @@ function dt_create_bytes(version, parents, pos, del, ins) {
         let known_chunk = []
         write_varint(known_chunk, unicode_chars.length * 2 + 1)
         write_varint(inserted_content_bytes, known_chunk.length)
-        inserted_content_bytes.push(...known_chunk)
+        for (let x of known_chunk) inserted_content_bytes.push(x)
 
         patches.push(24)
         write_varint(patches, inserted_content_bytes.length)
@@ -1228,7 +1229,7 @@ function dt_create_bytes(version, parents, pos, del, ins) {
 
     patches.push(23)
     write_varint(patches, parents_bytes.length)
-    patches.push(...parents_bytes)
+    for (let x of parents_bytes) patches.push(x)
 
     // write in patches
     bytes.push(20)
@@ -1250,7 +1251,7 @@ function OpLog_remote_to_local(doc, frontier) {
 
     let local_version = []
 
-    let max_version = Math.max(-1, ...doc.getLocalVersion())
+    let max_version = doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
     for (let i = 0; i <= max_version; i++) {
         if (map[doc.localToRemoteVersion([i])[0].join("-")]) {
             local_version.push(i)
@@ -1730,6 +1731,8 @@ function apply_patch(obj, range, content) {
         path = path.substr(subpath.length)
     }
 }
+
+braid_text.get_resource = get_resource
 
 braid_text.encode_filename = encode_filename
 braid_text.decode_filename = decode_filename
