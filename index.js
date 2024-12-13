@@ -386,8 +386,11 @@ braid_text.put = async (key, options) => {
 
     let og_v = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
 
-    // reduce the version sequence by the number of char-edits
     let v = decode_version(og_v)
+
+    resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
+        a + (b.content_codepoints.length ? b.content_codepoints.length : -(b.range[1] - b.range[0])),
+        max_pos))
 
     // validate version: make sure we haven't seen it already
     if (v[1] <= (resource.actor_seqs[v[0]] ?? -1)) {
@@ -453,10 +456,7 @@ braid_text.put = async (key, options) => {
     }
     resource.actor_seqs[v[0]] = v[1]
 
-    resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
-        a + (b.content_codepoints.length ? b.content_codepoints.length : -(b.range[1] - b.range[0])),
-        max_pos))
-
+    // reduce the version sequence by the number of char-edits
     v = `${v[0]}-${v[1] + 1 - change_count}`
 
     let ps = og_parents
