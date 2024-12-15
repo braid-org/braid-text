@@ -77,22 +77,14 @@ var server = require("http").createServer(async (req, res) => {
     //     return
     // }
 
-    // TODO: uncomment and change admin_pass above,
-    // and uncomment out the code below to add basic access control
+    // TODO: uncomment out the code below to add basic access control,
+    // where a user logs in by openning the javascript console
+    // and entering: document.cookie = 'fake_password'
     // 
     // var admin_pass = "fake_password"
-    //
-    // if (req.url === '/login_' + admin_pass) {
-    //     res.writeHead(200, {
-    //         "Content-Type": "text/plain",
-    //         "Set-Cookie": `admin_pass=${admin_pass}; Path=/`,
-    //     });
-    //     res.end("Logged in successfully");
-    //     return;
-    // }
-    //
+    // 
     // if (req.method == "PUT" || req.method == "POST" || req.method == "PATCH") {
-    //     if (!req.headers.cookie?.includes(`admin_pass=${admin_pass}`)) {
+    //     if (!req.headers.cookie?.split(/;/).map(x => x.trim()).some(x => x === admin_pass)) {
     //         console.log("Blocked PUT:", { cookie: req.headers.cookie })
     //         res.statusCode = 401
     //         return res.end()

@@ -35,7 +35,7 @@ Now open these URLs in your browser:
 
 Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chrome), or [another Braid client](https://bloop.monster/simpleditor), to edit it directly!
 
-Check out the `server-demo.js` file to see examples for how to add access control, and a `/pages` endpoint to show all the edited pages.
+Check out the `server-demo.js` file to see examples for how to add simple access control, where a user need only enter a password into a cookie in the javascript console like: `document.cookie = 'password'`; and a `/pages` endpoint to show all the edited pages.
 
 ## General Use on Server
 
