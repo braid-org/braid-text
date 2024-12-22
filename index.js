@@ -1,5 +1,5 @@
 
-let { Doc } = require("diamond-types-node")
+let { Doc, OpLog, Branch } = require("diamond-types-node")
 let braidify = require("braid-http").http_server
 let fs = require("fs")
 
@@ -349,15 +349,8 @@ braid_text.put = async (key, options) => {
     let parents = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
     let og_parents = options_parents || parents
 
-    function get_len() {
-        let d = dt_get(resource.doc, og_parents)
-        let len = d.len()
-        d.free()
-        return len
-    }
-
     let max_pos = resource.length_cache.get('' + og_parents) ??
-        (v_eq(parents, og_parents) ? resource.doc.len() : get_len())
+        (v_eq(parents, og_parents) ? resource.doc.len() : dt_len(resource.doc, og_parents))
     
     if (body != null) {
         patches = [{
@@ -824,6 +817,27 @@ async function file_sync(key, process_delta, get_init) {
 //////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
+
+function dt_len(doc, version) {
+    let bytes = doc.toBytes()
+    let oplog = OpLog.fromBytes(bytes)
+    let [_agents, versions, _parentss] = dt_parse([...bytes])
+
+    let frontier = {}
+    version.forEach((x) => frontier[x] = true)
+
+    let local_version = []
+    for (let i = 0; i < versions.length; i++)
+        if (frontier[versions[i].join("-")]) local_version.push(i)
+
+    let b = new Branch()
+    b.merge(oplog, new Uint32Array(local_version))
+    let len = count_code_points(b.get())
+    b.free()
+    
+    oplog.free()
+    return len
+}
 
 function dt_get(doc, version, agent = null) {
     if (dt_get.last_doc) dt_get.last_doc.free()
