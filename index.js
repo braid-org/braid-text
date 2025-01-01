@@ -9,8 +9,7 @@ let braid_text = {
     verbose: false,
     db_folder: './braid-text-db',
     length_cache_size: 10,
-    cache: {},
-    delete_cache: {}
+    cache: {}
 }
 
 let waiting_puts = 0
@@ -596,8 +595,6 @@ braid_text.list = async () => {
 }
 
 async function get_resource(key) {
-    if (braid_text.delete_cache[key]) await braid_text.delete_cache[key]
-
     let cache = braid_text.cache
     if (!cache[key]) cache[key] = new Promise(async done => {
         let resource = {key}
@@ -606,11 +603,11 @@ async function get_resource(key) {
 
         resource.doc = new Doc("server")
 
-        let { change, delete_me } = braid_text.db_folder
+        let { change } = braid_text.db_folder
             ? await file_sync(key,
                 (bytes) => resource.doc.mergeBytes(bytes),
                 () => resource.doc.toBytes())
-            : { change: () => { }, delete_me: () => { } }
+            : { change: () => { } }
 
         resource.db_delta = change
 
@@ -623,11 +620,6 @@ async function get_resource(key) {
         for (let i = 0; i <= max_version; i++) {
             let v = resource.doc.localToRemoteVersion([i])[0]
             resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
-        }
-
-        resource.delete_me = async () => {
-            delete cache[key]
-            await (braid_text.delete_cache[key] = delete_me())
         }
 
         resource.val = resource.doc.get()
@@ -745,11 +737,9 @@ async function file_sync(key, process_delta, get_init) {
         }
     }
 
-    let deleted = false
     let chain = Promise.resolve()
     return {
         change: async (bytes) => {
-            if (deleted) return
             await (chain = chain.then(async () => {
                 currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
                 const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
@@ -787,29 +777,7 @@ async function file_sync(key, process_delta, get_init) {
                     }
                 }
             }))
-        },
-        delete_me: async () => {
-            deleted = true
-            await (chain = chain.then(async () => {
-                await Promise.all(
-                    (
-                        await get_files_for_key(key)
-                    ).map((file) => {
-                        return new Promise((resolve, reject) => {
-                            fs.unlink(file, (err) => {
-                                if (err) {
-                                    console.error(`Error deleting file: ${file}`)
-                                    reject(err)
-                                } else {
-                                    if (braid_text.verbose) console.log(`Deleted file: ${file}`)
-                                    resolve()
-                                }
-                            })
-                        })
-                    })
-                )
-            }))
-        },
+        }
     }
 }
 
