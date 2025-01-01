@@ -110,31 +110,18 @@ runTest(
     async () => {
         let key = 'test-' + Math.random().toString(36).slice(2)
 
-        let r0 = (await (await fetch(`/test.html?check=/${key}`)).json()).result
-
         await fetch(`/${key}`, {
             method: 'PUT',
-            body: JSON.stringify({a: 5, b: 6}, null, 4)
+            body: 'hi'
         })
 
-        let r1 = (await (await fetch(`/test.html?check=/${key}`)).json()).result
+        await fetch(`/${key}`, {method: 'DELETE'})
 
-        await fetch(`/${key}`, {
-            method: 'DELETE'
-        })
+        let r = await fetch(`/${key}`)
 
-        let r2 = (await (await fetch(`/test.html?check=/${key}`)).json()).result
-
-        await fetch(`/${key}`, {
-            method: 'PUT',
-            body: JSON.stringify({a: 5, b: 7}, null, 4)
-        })
-
-        let r3 = (await (await fetch(`/test.html?check=/${key}`)).json()).result
-
-        return JSON.stringify([r0, r1, r2, r3])
+        return await r.text()
     },
-    JSON.stringify([false, true, false, true])
+    ''
 )
 
 runTest(

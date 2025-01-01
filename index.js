@@ -207,8 +207,7 @@ braid_text.serve = async (req, res, options = {}) => {
 }
 
 braid_text.delete = async (key) => {
-    let resource = (typeof key == 'string') ? await get_resource(key) : key
-    await resource.delete_me()
+    await braid_text.put(key, {body: ''})
 }
 
 braid_text.get = async (key, options) => {
