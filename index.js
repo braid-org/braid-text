@@ -1717,6 +1717,7 @@ braid_text.get_resource = get_resource
 
 braid_text.encode_filename = encode_filename
 braid_text.decode_filename = decode_filename
+braid_text.get_files_for_key = get_files_for_key
 
 braid_text.dt_get = dt_get
 braid_text.dt_get_patches = dt_get_patches
