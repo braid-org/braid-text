@@ -380,7 +380,7 @@ braid_text.put = async (key, options) => {
     let v = decode_version(og_v)
 
     resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
-        a + (b.content_codepoints.length ? b.content_codepoints.length : -(b.range[1] - b.range[0])),
+        a + (b.content_codepoints?.length ?? 0) - (b.range[1] - b.range[0]),
         max_pos))
 
     // validate version: make sure we haven't seen it already

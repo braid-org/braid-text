@@ -222,4 +222,20 @@ runTest(
     JSON.stringify({b: 6}, null, 4)
 )
 
+runTest(
+    "test length updating",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, { method: 'PUT', body: '' })
+        await fetch(`/${key}`, { method: 'PUT', body: '0123456789' })
+        await fetch(`/${key}`, { method: 'PUT', body: '0123456789' })
+        await fetch(`/${key}`, { method: 'PUT', body: '0123456789' })
+
+        let r = await fetch(`/${key}`, { method: 'HEAD' })
+        return '' + parseInt(r.headers.get('version').split('-')[1])
+    },
+    '19'
+)
+
 </script>
