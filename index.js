@@ -790,12 +790,18 @@ function dt_len(doc, version) {
     let oplog = OpLog.fromBytes(bytes)
     let [_agents, versions, _parentss] = dt_parse([...bytes])
 
-    let frontier = {}
-    version.forEach((x) => frontier[x] = true)
+    let frontier = new Set(version)
 
     let local_version = []
-    for (let i = 0; i < versions.length; i++)
-        if (frontier[versions[i].join("-")]) local_version.push(i)
+    for (let i = 0; i < versions.length; i++) {
+        var v = versions[i].join("-")
+        if (frontier.has(v)) {
+            local_version.push(i)
+            frontier.delete(v)
+        }
+    }
+
+    if (frontier.size) throw new Error(`version not found: ${version}`)
 
     let b = new Branch()
     b.merge(oplog, new Uint32Array(local_version))
@@ -814,12 +820,19 @@ function dt_get(doc, version, agent = null) {
 
     let [_agents, versions, parentss] = dt_parse([...bytes])
 
-    let frontier = {}
-    version.forEach((x) => frontier[x] = true)
+    let frontier = new Set(version)
 
     let local_version = []
-    for (let i = 0; i < versions.length; i++)
-        if (frontier[versions[i].join("-")]) local_version.push(i)
+    for (let i = 0; i < versions.length; i++) {
+        var v = versions[i].join("-")
+        if (frontier.has(v)) {
+            local_version.push(i)
+            frontier.delete(v)
+        }
+    }
+
+    if (frontier.size) throw new Error(`version not found: ${version}`)
+
     dt_get.last_local_version = local_version = new Uint32Array(local_version)
 
     let after_versions = {}
