@@ -1,6 +1,6 @@
 
 let { Doc } = require("diamond-types-node")
-let braid_text = require('./index.js')
+let braid_text = require('../index.js')
 let {dt_get, dt_get_patches, dt_parse, dt_create_bytes} = braid_text
 
 process.on("unhandledRejection", (x) =>

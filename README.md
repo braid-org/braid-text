@@ -180,17 +180,17 @@ simpleton = simpleton_client(url, options)
 ## Testing
 
 ### to run unit tests:
-first run the demo server as usual:
+first run the test server:
 
     npm install
-    node server-demo.js
+    node test/server.js
 
-then open http://localhost:8888/test.html, and the boxes should turn green as the tests pass.
+then open http://localhost:8889/test.html, and the boxes should turn green as the tests pass.
 
 ### to run fuzz tests:
 
     npm install
-    node test.js
+    node test/test.js
 
 if the last output line looks like this, good:
 

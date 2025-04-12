@@ -24,11 +24,7 @@ braid_text.serve = async (req, res, options = {}) => {
         ...options                  // Override with all options passed in
     }
 
-    // free CORS
-    res.setHeader("Access-Control-Allow-Origin", "*")
-    res.setHeader("Access-Control-Allow-Methods", "*")
-    res.setHeader("Access-Control-Allow-Headers", "*")
-    res.setHeader("Access-Control-Expose-Headers", "*")
+    braid_text.free_cors(res)
 
     function my_end(statusCode, x) {
         res.statusCode = statusCode
@@ -40,8 +36,9 @@ braid_text.serve = async (req, res, options = {}) => {
         resource = await get_resource(options.key)
 
         braidify(req, res)
+        if (res.is_multiplexer) return
     } catch (e) {
-        return my_end(400, "The server failed to process this request. The error generated was: " + e)
+        return my_end(500, "The server failed to process this request. The error generated was: " + e)
     }
 
     let peer = req.headers["peer"]
@@ -592,6 +589,13 @@ braid_text.list = async () => {
             return [...pages.keys()]
         } else return Object.keys(braid_text.cache)
     } catch (e) { return [] }
+}
+
+braid_text.free_cors = res => {
+    res.setHeader("Access-Control-Allow-Origin", "*")
+    res.setHeader("Access-Control-Allow-Methods", "*")
+    res.setHeader("Access-Control-Allow-Headers", "*")
+    res.setHeader("Access-Control-Expose-Headers", "*")
 }
 
 async function get_resource(key) {
