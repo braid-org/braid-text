@@ -46,5 +46,5 @@ var server = require("http").createServer(async (req, res) => {
 })
 
 server.listen(port, () => {
-    console.log(`server started on port ${port}`)
+    console.log(`serving: http://localhost:${port}/test.html`)
 })

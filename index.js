@@ -80,7 +80,7 @@ braid_text.serve = async (req, res, options = {}) => {
             try {
                 x = await braid_text.get(resource, { version: req.version, parents: req.parents })
             } catch (e) {
-                return my_end(400, "The server failed to get something. The error generated was: " + e)
+                return my_end(500, "The server failed to get something. The error generated was: " + e)
             }
 
             res.setHeader("Version", x.version.map((x) => JSON.stringify(x)).join(", "))
@@ -116,7 +116,7 @@ braid_text.serve = async (req, res, options = {}) => {
             try {
                 return await braid_text.get(resource, options)
             } catch (e) {
-                return my_end(400, "The server failed to get something. The error generated was: " + e)
+                return my_end(500, "The server failed to get something. The error generated was: " + e)
             }
         }
     }
@@ -192,7 +192,7 @@ braid_text.serve = async (req, res, options = {}) => {
                 //     - cons: typically implies that the request was missing an http conditional field like If-Match. that is to say, it implies that the request is missing a precondition, not that the server is missing a precondition
                 return done_my_turn(425, e.message)
             } else {
-                return done_my_turn(400, "The server failed to apply this version. The error generated was: " + e)
+                return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
             }
         }
 
@@ -219,17 +219,14 @@ braid_text.get = async (key, options) => {
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
     if (!options.subscribe) {
-        let doc = resource.doc
-        if (options.version || options.parents) doc = dt_get(doc, options.version || options.parents)
-
-        let ret = {
-            version: doc.getRemoteVersion().map((x) => x.join("-")).sort(),
-            body: doc.get()
-        }
-
-        if (options.version || options.parents) doc.free()
-
-        return ret
+        return options.version || options.parents ?
+            {
+                version: options.version || options.parents,
+                body: dt_get_string(resource.doc, options.version || options.parents)
+            } : {
+                version: resource.doc.getRemoteVersion().map((x) => x.join("-")).sort(),
+                body: resource.doc.get()
+            }
     } else {
         if (options.merge_type != "dt") {
             let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
@@ -790,14 +787,18 @@ async function file_sync(key, process_delta, get_init) {
 //////////////////////////////////////////////////////////////////
 
 function dt_len(doc, version) {
-    let bytes = doc.toBytes()
-    let oplog = OpLog.fromBytes(bytes)
-    let [_agents, versions, _parentss] = dt_parse([...bytes])
+    return count_code_points(dt_get_string(doc, version))
+}
 
-    let frontier = new Set(version)
+function dt_get_string(doc, version) {
+    var bytes = doc.toBytes()
+    var oplog = OpLog.fromBytes(bytes)
+    var [_agents, versions, _parentss] = dt_parse([...bytes])
 
-    let local_version = []
-    for (let i = 0; i < versions.length; i++) {
+    var frontier = new Set(version)
+
+    var local_version = []
+    for (var i = 0; i < versions.length; i++) {
         var v = versions[i].join("-")
         if (frontier.has(v)) {
             local_version.push(i)
@@ -807,13 +808,13 @@ function dt_len(doc, version) {
 
     if (frontier.size) throw new Error(`version not found: ${version}`)
 
-    let b = new Branch()
+    var b = new Branch()
     b.merge(oplog, new Uint32Array(local_version))
-    let len = count_code_points(b.get())
+    var s = b.get()
     b.free()
     
     oplog.free()
-    return len
+    return s
 }
 
 function dt_get(doc, version, agent = null) {

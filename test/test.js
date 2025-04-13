@@ -23,7 +23,7 @@ async function main() {
     for (let t = 0; t < 10000; t++) {
         let seed = base + t
     // for (let t = 0; t < 1; t++) {
-    //     let seed = 7572861
+    //     let seed = 7630348
 
         og_log(`t = ${t}, seed = ${seed}, best_n = ${best_n} @ ${best_seed}`)
         Math.randomSeed(seed)
