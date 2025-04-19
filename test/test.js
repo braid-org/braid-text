@@ -12,18 +12,43 @@ process.on("uncaughtException", (x) =>
 
 braid_text.db_folder = null
 
+async function test_revert() {
+    braid_text.db_folder = './braid-text-db'
+    var key = Math.random().toString(36).slice(2)
+    await braid_text.put(key, {version: ['a-0'], body: 'A'})
+    await braid_text.put(key, {version: ['a-1'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'B'}]})
+    await braid_text.revert(key, 'a', 1)
+    delete braid_text.cache[key]
+    var {version, body} = await braid_text.get(key, {})
+    if (version[0] != 'a-0') throw new Error('revert error: wrong version')
+    if (body != 'A') throw new Error('revert error: wrong text')
+
+    await braid_text.put(key, {version: ['b-0'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'C'}]})
+    if ('AC' !== await braid_text.get(key)) throw new Error('revert error: wrong text')
+    await braid_text.revert(key, 'b', 0)
+    if ('A' !== await braid_text.get(key)) throw new Error('revert error: wrong text')
+    delete braid_text.cache[key]
+    var {version, body} = await braid_text.get(key, {})
+    if (version[0] != 'a-0') throw new Error('revert error: wrong version')
+    if (body != 'A') throw new Error('revert error: wrong text')
+
+    braid_text.db_folder = null
+}
+
 async function main() {
     let best_seed = NaN
     let best_n = Infinity
     let base = Math.floor(Math.random() * 10000000)
     let st = Date.now()
 
+    await test_revert()
+
     let og_log = console.log
     console.log = () => {}
     for (let t = 0; t < 10000; t++) {
         let seed = base + t
     // for (let t = 0; t < 1; t++) {
-    //     let seed = 7630348
+    //     let seed = 7375800
 
         og_log(`t = ${t}, seed = ${seed}, best_n = ${best_n} @ ${best_seed}`)
         Math.randomSeed(seed)
@@ -53,6 +78,11 @@ async function main() {
             let dt_to_braid = async (doc, key) => {
                 await braid_text.get(key, {})
                 for (let x of dt_get_patches(doc)) {
+                    var resource = await braid_text.get_resource(key)
+                    var [actor, seq] = braid_text.decode_version(x.version)
+                    var pre_seq = resource.actor_seqs[actor]
+                    var old_text = await braid_text.get(key)
+
                     console.log(`x = `, x)
                     let y = {
                         merge_type: 'dt',
@@ -66,6 +96,12 @@ async function main() {
                     }
                     await braid_text.put(key, y)
                     y.validate_already_seen_versions = true
+                    await braid_text.put(key, y)
+
+                    // test revert
+                    await braid_text.revert(key, actor, (pre_seq ?? -1) + 1)
+                    var new_text = await braid_text.get(key)
+                    if (old_text !== new_text) throw new Error('revert failed!')
                     await braid_text.put(key, y)
                 }
             }
@@ -194,12 +230,6 @@ function getRandomCharacter() {
 
     const randomIndex = Math.floor(Math.random() * characters.length);
     return characters[randomIndex];
-}
-
-function decode_version(v) {
-    let m = v.match(/^(.*)-(\d+)$/s)
-    if (!m) throw new Error(`invalid actor-seq version: ${v}`)
-    return [m[1], parseInt(m[2])]
 }
 
 /////////

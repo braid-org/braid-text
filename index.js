@@ -577,6 +577,34 @@ braid_text.put = async (key, options) => {
     await resource.db_delta(resource.doc.getPatchSince(v_before))
 }
 
+braid_text.revert = async (key, actor, seq) => {
+    var resource = (typeof key == 'string') ? await get_resource(key) : key
+
+    // get version without actor-seq,
+    // and update actor_seqs
+    var v = []
+    for (var [a, s] of Object.entries(resource.actor_seqs)) {
+        if (a !== actor) v.push(`${a}-${s}`)
+        else {
+            if (s < seq) return // nothing to do
+            else if (seq > 0) {
+                v.push(`${a}-${seq - 1}`)
+                resource.actor_seqs[actor] = seq - 1
+            } else delete resource.actor_seqs[actor]
+        }
+    }
+
+    // revert dt
+    var old_doc = resource.doc
+    resource.doc = dt_get(resource.doc, v)
+    old_doc.free()
+
+    resource.val = resource.doc.get()
+
+    // save it
+    await resource.db_delta()
+}
+
 braid_text.list = async () => {
     try {
         if (braid_text.db_folder) {
@@ -742,7 +770,8 @@ async function file_sync(key, process_delta, get_init) {
     return {
         change: async (bytes) => {
             await (chain = chain.then(async () => {
-                currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
+                if (!bytes) currentSize = threshold
+                else currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
                 const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
                 if (currentSize < threshold) {
                     if (braid_text.verbose) console.log(`appending to db..`)
@@ -1741,5 +1770,7 @@ braid_text.dt_get = dt_get
 braid_text.dt_get_patches = dt_get_patches
 braid_text.dt_parse = dt_parse
 braid_text.dt_create_bytes = dt_create_bytes
+
+braid_text.decode_version = decode_version
 
 module.exports = braid_text
