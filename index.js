@@ -483,13 +483,16 @@ braid_text.put = async (key, options) => {
         let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
 
         for (let client of resource.simpleton_clients) {
-            if (client.peer == peer) {
+            if (peer && client.peer === peer) {
                 client.my_last_seen_version = [og_v]
             }
 
             function set_timeout(time_override) {
                 if (client.my_timeout) clearTimeout(client.my_timeout)
                 client.my_timeout = setTimeout(() => {
+                    // if the doc has been freed, exit early
+                    if (resource.doc.__wbg_ptr === 0) return
+
                     let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
                     let x = { version }
                     x.parents = client.my_last_seen_version
@@ -507,7 +510,7 @@ braid_text.put = async (key, options) => {
             }
 
             if (client.my_timeout) {
-                if (client.peer == peer) {
+                if (peer && client.peer === peer) {
                     if (!v_eq(client.my_last_sent_version, og_parents)) {
                         // note: we don't add to client.my_unused_version_count,
                         // because we're already in a timeout;
@@ -523,7 +526,7 @@ braid_text.put = async (key, options) => {
             }
 
             let x = { version }
-            if (client.peer == peer) {
+            if (peer && client.peer === peer) {
                 if (!v_eq(client.my_last_sent_version, og_parents)) {
                     client.my_unused_version_count = (client.my_unused_version_count ?? 0) + 1
                     set_timeout()
@@ -571,7 +574,7 @@ braid_text.put = async (key, options) => {
         patches: og_patches,
     }
     for (let client of resource.clients) {
-        if (client.peer != peer) client.subscribe(x)
+        if (!peer || client.peer !== peer) client.subscribe(x)
     }
 
     await resource.db_delta(resource.doc.getPatchSince(v_before))

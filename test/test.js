@@ -127,6 +127,30 @@ async function main() {
             console.log(`doc = `, await braid_text.get('doc', {version: middle_v}))
             if (await braid_text.get('middle_doc') != (await braid_text.get('doc', {version: middle_v})).body) throw new Error('bad')
 
+            // test simplton
+            var first_time = true
+            await new Promise(async (done, fail) => {
+                await braid_text.get('middle_doc', {peer: 'sim', subscribe: async update => {
+                    if (first_time) {
+                        first_time = false
+                        if (update.body !== await braid_text.get('middle_doc')) fail(new Error('test 2'))
+
+                        var x = await braid_text.get('middle_doc', {})
+                        await braid_text.put('middle_doc', {peer: 'sim', version: ['sim-0'], parents: x.version, patches: [{content: 'A', range: '[0:0]'}]})
+                        await braid_text.put('middle_doc', {peer: 'other', merge_type: 'dt', version: ['other-0'], parents: [], patches: [{content: 'B', range: '[0:0]'}]})
+                        await braid_text.put('middle_doc', {peer: 'sim', version: ['sim-1'], parents: ['sim-0'], patches: [{content: 'b', range: '[0:0]'}]})
+                        await braid_text.put('middle_doc', {peer: 'sim', version: ['sim-2'], parents: ['sim-1'], patches: [{content: 'c', range: '[0:0]'}]})
+                        await braid_text.revert('middle_doc', ['sim-0'])
+                        await braid_text.revert('middle_doc', ['other-0'])
+
+                        done()
+                    }
+                }})
+            })
+
+            // test handler on dt
+            braid_text.get('middle_doc', {merge_type: 'dt', subscribe: async update => {}})
+
             // try getting updates from middle_doc to doc
             let o = {merge_type: 'dt', parents: middle_v, subscribe: update => {
                 braid_text.put('middle_doc', update)
