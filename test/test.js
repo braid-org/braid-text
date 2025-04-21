@@ -17,7 +17,7 @@ async function test_revert() {
     var key = Math.random().toString(36).slice(2)
     await braid_text.put(key, {version: ['a-0'], body: 'A'})
     await braid_text.put(key, {version: ['a-1'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'B'}]})
-    await braid_text.revert(key, 'a', 1)
+    await braid_text.revert(key, ['a-1'])
     delete braid_text.cache[key]
     var {version, body} = await braid_text.get(key, {})
     if (version[0] != 'a-0') throw new Error('revert error: wrong version')
@@ -25,7 +25,7 @@ async function test_revert() {
 
     await braid_text.put(key, {version: ['b-0'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'C'}]})
     if ('AC' !== await braid_text.get(key)) throw new Error('revert error: wrong text')
-    await braid_text.revert(key, 'b', 0)
+    await braid_text.revert(key, ['b-0'])
     if ('A' !== await braid_text.get(key)) throw new Error('revert error: wrong text')
     delete braid_text.cache[key]
     var {version, body} = await braid_text.get(key, {})
@@ -99,7 +99,7 @@ async function main() {
                     await braid_text.put(key, y)
 
                     // test revert
-                    await braid_text.revert(key, actor, (pre_seq ?? -1) + 1)
+                    await braid_text.revert(key, [`${actor}-${(pre_seq ?? -1) + 1}`])
                     var new_text = await braid_text.get(key)
                     if (old_text !== new_text) throw new Error('revert failed!')
                     await braid_text.put(key, y)
@@ -170,6 +170,9 @@ function make_random_edit(doc) {
         }
     }
     base_seq++
+
+    // try skipping some seqs.. to see if it breaks..
+    base_seq += Math.floor(Math.random() * 5)
 
     console.log({agents, versions, include_versions})
 

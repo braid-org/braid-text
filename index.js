@@ -577,8 +577,11 @@ braid_text.put = async (key, options) => {
     await resource.db_delta(resource.doc.getPatchSince(v_before))
 }
 
-braid_text.revert = async (key, actor, seq) => {
+// currently version must be an array with exactly one element, e.g. ["abc-1"]
+braid_text.revert = async (key, version) => {
     var resource = (typeof key == 'string') ? await get_resource(key) : key
+
+    var [actor, seq] = decode_version(version[0])
 
     // get version without actor-seq,
     // and update actor_seqs
