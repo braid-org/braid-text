@@ -4,10 +4,10 @@ let braid_text = require('../index.js')
 let {dt_get, dt_get_patches, dt_parse, dt_create_bytes} = braid_text
 
 process.on("unhandledRejection", (x) =>
-    console.log(`unhandledRejection: ${x.stack}`)
+    console.log(`unhandledRejection: ${x.stack ?? x}`)
 )
 process.on("uncaughtException", (x) =>
-    console.log(`uncaughtException: ${x.stack}`)
+    console.log(`uncaughtException: ${x.stack ?? x}`)
 )
 
 braid_text.db_folder = null
@@ -48,7 +48,7 @@ async function main() {
     for (let t = 0; t < 10000; t++) {
         let seed = base + t
     // for (let t = 0; t < 1; t++) {
-    //     let seed = 7375800
+        // let seed = 2746153
 
         og_log(`t = ${t}, seed = ${seed}, best_n = ${best_n} @ ${best_seed}`)
         Math.randomSeed(seed)
@@ -80,7 +80,6 @@ async function main() {
                 for (let x of dt_get_patches(doc)) {
                     var resource = await braid_text.get_resource(key)
                     var [actor, seq] = braid_text.decode_version(x.version)
-                    var pre_seq = resource.actor_seqs[actor]
                     var old_text = await braid_text.get(key)
 
                     console.log(`x = `, x)
@@ -99,7 +98,9 @@ async function main() {
                     await braid_text.put(key, y)
 
                     // test revert
-                    await braid_text.revert(key, [`${actor}-${(pre_seq ?? -1) + 1}`])
+                    var range = x.range.match(/\d+/g).map((x) => parseInt(x))
+                    var change_count = [...x.content].length + range[1] - range[0]
+                    await braid_text.revert(key, [`${actor}-${seq + 1 - change_count}`])
                     var new_text = await braid_text.get(key)
                     if (old_text !== new_text) throw new Error('revert failed!')
                     await braid_text.put(key, y)

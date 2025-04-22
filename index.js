@@ -580,30 +580,21 @@ braid_text.put = async (key, options) => {
     await resource.db_delta(resource.doc.getPatchSince(v_before))
 }
 
-// currently version must be an array with exactly one element, e.g. ["abc-1"]
 braid_text.revert = async (key, version) => {
     var resource = (typeof key == 'string') ? await get_resource(key) : key
 
-    var [actor, seq] = decode_version(version[0])
-
-    // get version without actor-seq,
-    // and update actor_seqs
-    var v = []
-    for (var [a, s] of Object.entries(resource.actor_seqs)) {
-        if (a !== actor) v.push(`${a}-${s}`)
-        else {
-            if (s < seq) return // nothing to do
-            else if (seq > 0) {
-                v.push(`${a}-${seq - 1}`)
-                resource.actor_seqs[actor] = seq - 1
-            } else delete resource.actor_seqs[actor]
-        }
-    }
-
     // revert dt
     var old_doc = resource.doc
-    resource.doc = dt_get(resource.doc, v)
+    resource.doc = dt_get(resource.doc, null, null, version)
     old_doc.free()
+
+    for (let v of version) {
+        var [actor, seq] = decode_version(v)
+        if ((resource.actor_seqs[actor] ?? -1) > seq - 1) {
+            if (seq > 0) resource.actor_seqs[actor] = seq - 1
+            else delete resource.actor_seqs[actor]
+        }
+    }
 
     resource.val = resource.doc.get()
 
@@ -852,32 +843,47 @@ function dt_get_string(doc, version) {
     return s
 }
 
-function dt_get(doc, version, agent = null) {
+function dt_get(doc, version, agent = null, anti_version = null) {
     if (dt_get.last_doc) dt_get.last_doc.free()
 
     let bytes = doc.toBytes()
     dt_get.last_doc = doc = Doc.fromBytes(bytes, agent)
 
     let [_agents, versions, parentss] = dt_parse([...bytes])
+    if (anti_version) {
+        var include_versions = new Set()
+        var bad_versions = new Set(anti_version)
 
-    let frontier = new Set(version)
-
-    let local_version = []
-    for (let i = 0; i < versions.length; i++) {
-        var v = versions[i].join("-")
-        if (frontier.has(v)) {
-            local_version.push(i)
-            frontier.delete(v)
+        for (let i = 0; i < versions.length; i++) {
+            var v = versions[i].join("-")
+            var ps = parentss[i].map(x => x.join('-'))
+            if (bad_versions.has(v) || ps.some(x => bad_versions.has(x)))
+                bad_versions.add(v)
+            else
+                include_versions.add(v)
         }
+    } else {
+        var include_versions = new Set(version)
+        var looking_for = new Set(version)
+        var local_version = []
+
+        for (let i = versions.length - 1; i >= 0; i--) {
+            var v = versions[i].join("-")
+            var ps = parentss[i].map(x => x.join('-'))
+            if (looking_for.has(v)) {
+                local_version.push(i)
+                looking_for.delete(v)
+            }
+            if (include_versions.has(v))
+                ps.forEach(x => include_versions.add(x))
+        }
+        local_version.reverse()
+
+        // NOTE: currently used by braid-chrome in dt.js at the bottom
+        dt_get.last_local_version = new Uint32Array(local_version)
+
+        if (looking_for.size) throw new Error(`version not found: ${version}`)
     }
-
-    if (frontier.size) throw new Error(`version not found: ${version}`)
-
-    dt_get.last_local_version = local_version = new Uint32Array(local_version)
-
-    let after_versions = {}
-    let [_, after_versions_array, __] = dt_parse([...doc.getPatchSince(local_version)])
-    for (let v of after_versions_array) after_versions[v.join("-")] = true
 
     let new_doc = new Doc(agent)
     let op_runs = doc.getOpsSince([])
@@ -900,12 +906,12 @@ function dt_get(doc, version, agent = null) {
             ) {
                 for (; i < I; i++) {
                     let version = versions[i].join("-")
-                    if (after_versions[version]) continue
+                    if (!include_versions.has(version)) continue
                     let og_i = i
                     let content = []
                     if (op_run.content?.[i - base_i]) content.push(op_run.content[i - base_i])
                     if (!!op_run.content === op_run.fwd)
-                        while (i + 1 < I && !after_versions[versions[i + 1].join("-")]) {
+                        while (i + 1 < I && include_versions.has(versions[i + 1].join("-"))) {
                             i++
                             if (op_run.content?.[i - base_i]) content.push(op_run.content[i - base_i])
                         }
