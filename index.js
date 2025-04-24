@@ -26,8 +26,8 @@ braid_text.serve = async (req, res, options = {}) => {
 
     braid_text.free_cors(res)
 
-    function my_end(statusCode, x) {
-        res.statusCode = statusCode
+    function my_end(statusCode, x, statusText, headers) {
+        res.writeHead(statusCode, statusText, headers)
         res.end(x ?? '')
     }
 
@@ -134,10 +134,10 @@ braid_text.serve = async (req, res, options = {}) => {
         let done_my_turn = null
         prev_put_p = new Promise(
             (done) =>
-            (done_my_turn = (statusCode, x) => {
+            (done_my_turn = (statusCode, x, statusText, headers) => {
                 waiting_puts--
                 if (braid_text.verbose) console.log(`waiting_puts(after--) = ${waiting_puts}`)
-                my_end(statusCode, x)
+                my_end(statusCode, x, statusText, headers)
                 done()
             })
         )
@@ -190,7 +190,7 @@ braid_text.serve = async (req, res, options = {}) => {
                 // - 428 Precondition Required
                 //     - pros: the name sounds right
                 //     - cons: typically implies that the request was missing an http conditional field like If-Match. that is to say, it implies that the request is missing a precondition, not that the server is missing a precondition
-                return done_my_turn(425, e.message)
+                return done_my_turn(400, e.message, 'Missing Parents', { 'Retry-After': '1' })
             } else {
                 return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
             }

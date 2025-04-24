@@ -238,4 +238,32 @@ runTest(
     '19'
 )
 
+runTest(
+    "test retry when parents not there..",
+    async () => {
+        return await new Promise(done => {
+            var count = 0
+            var key = 'test-' + Math.random().toString(36).slice(2)
+            var a = new AbortController()
+            braid_fetch(`/${key}`, {
+                signal: a.signal,
+                multiplex: false,
+                method: 'PUT',
+                version: ['hi-3'],
+                parents: ['hi-1'],
+                body: 'xx',
+                onFetch: () => {
+                    count++
+                    if (count === 2) {
+                        done('retried!')
+                        a.abort()
+                    }
+                },
+                retry: true
+            })
+        })
+    },
+    'retried!'
+)
+
 </script>
