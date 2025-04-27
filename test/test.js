@@ -12,25 +12,15 @@ process.on("uncaughtException", (x) =>
 
 braid_text.db_folder = null
 
-async function test_revert() {
+async function test_db() {
     braid_text.db_folder = './braid-text-db'
     var key = Math.random().toString(36).slice(2)
     await braid_text.put(key, {version: ['a-0'], body: 'A'})
-    await braid_text.put(key, {version: ['a-1'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'B'}]})
-    await braid_text.revert(key, ['a-1'])
+    await braid_text.put(key, {version: ['a-2'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'B'}]})
     delete braid_text.cache[key]
     var {version, body} = await braid_text.get(key, {})
-    if (version[0] != 'a-0') throw new Error('revert error: wrong version')
-    if (body != 'A') throw new Error('revert error: wrong text')
 
-    await braid_text.put(key, {version: ['b-0'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'C'}]})
-    if ('AC' !== await braid_text.get(key)) throw new Error('revert error: wrong text')
-    await braid_text.revert(key, ['b-0'])
-    if ('A' !== await braid_text.get(key)) throw new Error('revert error: wrong text')
-    delete braid_text.cache[key]
-    var {version, body} = await braid_text.get(key, {})
-    if (version[0] != 'a-0') throw new Error('revert error: wrong version')
-    if (body != 'A') throw new Error('revert error: wrong text')
+    if (body != 'AB') throw new Error('db error')
 
     braid_text.db_folder = null
 }
@@ -41,7 +31,7 @@ async function main() {
     let base = Math.floor(Math.random() * 10000000)
     let st = Date.now()
 
-    await test_revert()
+    await test_db()
 
     let og_log = console.log
     console.log = () => {}
@@ -96,14 +86,6 @@ async function main() {
                     await braid_text.put(key, y)
                     y.validate_already_seen_versions = true
                     await braid_text.put(key, y)
-
-                    // test revert
-                    var range = x.range.match(/\d+/g).map((x) => parseInt(x))
-                    var change_count = [...x.content].length + range[1] - range[0]
-                    await braid_text.revert(key, [`${actor}-${seq + 1 - change_count}`])
-                    var new_text = await braid_text.get(key)
-                    if (old_text !== new_text) throw new Error('revert failed!')
-                    await braid_text.put(key, y)
                 }
             }
             await dt_to_braid(doc, 'doc')
@@ -134,16 +116,7 @@ async function main() {
                 await braid_text.get('middle_doc', {peer: 'sim', subscribe: async update => {
                     if (first_time) {
                         first_time = false
-                        if (update.body !== await braid_text.get('middle_doc')) fail(new Error('test 2'))
-
-                        var x = await braid_text.get('middle_doc', {})
-                        await braid_text.put('middle_doc', {peer: 'sim', version: ['sim-0'], parents: x.version, patches: [{content: 'A', range: '[0:0]'}]})
-                        await braid_text.put('middle_doc', {peer: 'other', merge_type: 'dt', version: ['other-0'], parents: [], patches: [{content: 'B', range: '[0:0]'}]})
-                        await braid_text.put('middle_doc', {peer: 'sim', version: ['sim-1'], parents: ['sim-0'], patches: [{content: 'b', range: '[0:0]'}]})
-                        await braid_text.put('middle_doc', {peer: 'sim', version: ['sim-2'], parents: ['sim-1'], patches: [{content: 'c', range: '[0:0]'}]})
-                        await braid_text.revert('middle_doc', ['sim-0'])
-                        await braid_text.revert('middle_doc', ['other-0'])
-
+                        if (update.body !== await braid_text.get('middle_doc')) fail(new Error('simpleton fail'))
                         done()
                     }
                 }})

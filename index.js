@@ -334,7 +334,8 @@ braid_text.put = async (key, options) => {
         // make sure we have all these parents
         for (let p of options_parents) {
             let P = decode_version(p)
-            if (P[1] > (resource.actor_seqs[P[0]] ?? -1)) throw new Error(`${MISSING_PARENT_VERSION}: ${p}`)
+            if (!resource.actor_seqs[P[0]]?.has(P[1]))
+                throw new Error(`${MISSING_PARENT_VERSION}: ${p}`)
         }
     }
 
@@ -378,7 +379,7 @@ braid_text.put = async (key, options) => {
         max_pos))
 
     // validate version: make sure we haven't seen it already
-    if (v[1] <= (resource.actor_seqs[v[0]] ?? -1)) {
+    if (resource.actor_seqs[v[0]]?.has(v[1])) {
 
         if (!options.validate_already_seen_versions) return
 
@@ -439,7 +440,8 @@ braid_text.put = async (key, options) => {
         // we already have this version, so nothing left to do
         return
     }
-    resource.actor_seqs[v[0]] = v[1]
+    if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
+    resource.actor_seqs[v[0]].add_range(v[1] + 1 - change_count, v[1])
 
     // reduce the version sequence by the number of char-edits
     v = `${v[0]}-${v[1] + 1 - change_count}`
@@ -580,28 +582,6 @@ braid_text.put = async (key, options) => {
     await resource.db_delta(resource.doc.getPatchSince(v_before))
 }
 
-braid_text.revert = async (key, version) => {
-    var resource = (typeof key == 'string') ? await get_resource(key) : key
-
-    // revert dt
-    var old_doc = resource.doc
-    resource.doc = dt_get(resource.doc, null, null, version)
-    old_doc.free()
-
-    for (let v of version) {
-        var [actor, seq] = decode_version(v)
-        if ((resource.actor_seqs[actor] ?? -1) > seq - 1) {
-            if (seq > 0) resource.actor_seqs[actor] = seq - 1
-            else delete resource.actor_seqs[actor]
-        }
-    }
-
-    resource.val = resource.doc.get()
-
-    // save it
-    await resource.db_delta()
-}
-
 braid_text.list = async () => {
     try {
         if (braid_text.db_folder) {
@@ -645,7 +625,8 @@ async function get_resource(key) {
         let max_version = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
         for (let i = 0; i <= max_version; i++) {
             let v = resource.doc.localToRemoteVersion([i])[0]
-            resource.actor_seqs[v[0]] = Math.max(v[1], resource.actor_seqs[v[0]] ?? -1)
+            if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
+            resource.actor_seqs[v[0]].add_range(v[1], v[1])
         }
 
         resource.val = resource.doc.get()
@@ -1769,6 +1750,52 @@ function apply_patch(obj, range, content) {
         last_field = field || slice_end
         curr_obj = curr_obj[last_field]
         path = path.substr(subpath.length)
+    }
+}
+
+class RangeSet {
+    constructor() {
+        this.ranges = []
+    }
+
+    add_range(low_inclusive, high_inclusive) {
+        if (low_inclusive > high_inclusive) return
+
+        const startIndex = this._bs(mid => this.ranges[mid][1] >= low_inclusive - 1, this.ranges.length, true)
+        const endIndex = this._bs(mid => this.ranges[mid][0] <= high_inclusive + 1, -1, false)
+
+        if (startIndex > endIndex) {
+            this.ranges.splice(startIndex, 0, [low_inclusive, high_inclusive])
+        } else {
+            const mergedLow = Math.min(low_inclusive, this.ranges[startIndex][0])
+            const mergedHigh = Math.max(high_inclusive, this.ranges[endIndex][1])
+            const removeCount = endIndex - startIndex + 1
+            this.ranges.splice(startIndex, removeCount, [mergedLow, mergedHigh])
+        }
+    }
+
+    has(x) {
+        var index = this._bs(mid => this.ranges[mid][0] <= x, -1, false)
+        return index !== -1 && x <= this.ranges[index][1]
+    }
+
+    _bs(condition, defaultR, moveLeft) {
+        let low = 0
+        let high = this.ranges.length - 1
+        let result = defaultR
+        
+        while (low <= high) {
+            const mid = Math.floor((low + high) / 2)
+            if (condition(mid)) {
+                result = mid
+                if (moveLeft) high = mid - 1
+                else low = mid + 1
+            } else {
+                if (moveLeft) low = mid + 1
+                else high = mid - 1
+            }
+        }
+        return result
     }
 }
 
