@@ -800,20 +800,8 @@ function dt_len(doc, version) {
 function dt_get_string(doc, version) {
     var bytes = doc.toBytes()
     var oplog = OpLog.fromBytes(bytes)
-    var [_agents, versions, _parentss] = dt_parse([...bytes])
 
-    var frontier = new Set(version)
-
-    var local_version = []
-    for (var i = 0; i < versions.length; i++) {
-        var v = versions[i].join("-")
-        if (frontier.has(v)) {
-            local_version.push(i)
-            frontier.delete(v)
-        }
-    }
-
-    if (frontier.size) throw new Error(`version not found: ${version}`)
+    var local_version = dt_get_local_version(bytes, version)
 
     var b = new Branch()
     b.merge(oplog, new Uint32Array(local_version))
@@ -1008,25 +996,25 @@ function dt_parse(byte_array) {
 
     while (byte_array.length) {
         let id = byte_array.shift()
-        let len = read_varint(byte_array)
+        let len = dt_read_varint(byte_array)
         if (id == 1) {
         } else if (id == 3) {
             let goal = byte_array.length - len
             while (byte_array.length > goal) {
-                agents.push(read_string(byte_array))
+                agents.push(dt_read_string(byte_array))
             }
         } else if (id == 20) {
         } else if (id == 21) {
             let seqs = {}
             let goal = byte_array.length - len
             while (byte_array.length > goal) {
-                let part0 = read_varint(byte_array)
+                let part0 = dt_read_varint(byte_array)
                 let has_jump = part0 & 1
                 let agent_i = (part0 >> 1) - 1
-                let run_length = read_varint(byte_array)
+                let run_length = dt_read_varint(byte_array)
                 let jump = 0
                 if (has_jump) {
-                    let part2 = read_varint(byte_array)
+                    let part2 = dt_read_varint(byte_array)
                     jump = part2 >> 1
                     if (part2 & 1) jump *= -1
                 }
@@ -1041,12 +1029,12 @@ function dt_parse(byte_array) {
             let count = 0
             let goal = byte_array.length - len
             while (byte_array.length > goal) {
-                let run_len = read_varint(byte_array)
+                let run_len = dt_read_varint(byte_array)
 
                 let parents = []
                 let has_more = 1
                 while (has_more) {
-                    let x = read_varint(byte_array)
+                    let x = dt_read_varint(byte_array)
                     let is_foreign = 0x1 & x
                     has_more = 0x2 & x
                     let num = x >> 2
@@ -1056,7 +1044,7 @@ function dt_parse(byte_array) {
                     } else if (!is_foreign) {
                         parents.push(versions[count - num])
                     } else {
-                        parents.push([agents[num - 1], read_varint(byte_array)])
+                        parents.push([agents[num - 1], dt_read_varint(byte_array)])
                     }
                 }
                 parentss.push(parents)
@@ -1072,24 +1060,107 @@ function dt_parse(byte_array) {
         }
     }
 
-    function read_string(byte_array) {
-        return new TextDecoder().decode(new Uint8Array(byte_array.splice(0, read_varint(byte_array))))
+    return [agents, versions, parentss]
+}
+
+function dt_get_local_version(bytes, version) {
+    var looking_for = new Map()
+    for (var event of version) {
+        var [agent, seq] = decode_version(event)
+        if (!looking_for.has(agent)) looking_for.set(agent, [])
+        looking_for.get(agent).push(seq)
     }
+    for (var seqs of looking_for.values())
+        seqs.sort((a, b) => a - b)
 
-    function read_varint(byte_array) {
-        let result = 0
-        let shift = 0
-        while (true) {
-            if (byte_array.length === 0) throw new Error("byte array does not contain varint")
+    var byte_array = [...bytes]
+    var local_version = []
+    var local_version_base = 0
 
-            let byte_val = byte_array.shift()
-            result |= (byte_val & 0x7f) << shift
-            if ((byte_val & 0x80) == 0) return result
-            shift += 7
+    if (new TextDecoder().decode(new Uint8Array(byte_array.splice(0, 8))) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
+
+    if (byte_array.shift() != 0) throw new Error("dt parse error, expected version 0")
+
+    let agents = []
+
+    while (byte_array.length && looking_for.size) {
+        let id = byte_array.shift()
+        let len = dt_read_varint(byte_array)
+        if (id == 1) {
+        } else if (id == 3) {
+            let goal = byte_array.length - len
+            while (byte_array.length > goal) {
+                agents.push(dt_read_string(byte_array))
+            }
+        } else if (id == 20) {
+        } else if (id == 21) {
+            let seqs = {}
+            let goal = byte_array.length - len
+            while (byte_array.length > goal && looking_for.size) {
+                let part0 = dt_read_varint(byte_array)
+                let has_jump = part0 & 1
+                let agent_i = (part0 >> 1) - 1
+                let run_length = dt_read_varint(byte_array)
+                let jump = 0
+                if (has_jump) {
+                    let part2 = dt_read_varint(byte_array)
+                    jump = part2 >> 1
+                    if (part2 & 1) jump *= -1
+                }
+                let base = (seqs[agent_i] || 0) + jump
+
+                var agent = agents[agent_i]
+                looking_for_seqs = looking_for.get(agent)
+                if (looking_for_seqs) {
+                    for (var seq of splice_out_range(
+                        looking_for_seqs, base, base + run_length - 1))
+                        local_version.push(local_version_base + (seq - base))
+                    if (!looking_for_seqs.length) looking_for.delete(agent)
+                }
+                local_version_base += run_length
+
+                seqs[agent_i] = base + run_length
+            }
+        } else {
+            byte_array.splice(0, len)
         }
     }
 
-    return [agents, versions, parentss]
+    if (looking_for.size) throw new Error(`version not found: ${version}`)
+    return local_version
+
+    function splice_out_range(a, s, e) {
+        if (!a?.length) return [];
+        let l = 0, r = a.length;
+        while (l < r) {
+            const m = Math.floor((l + r) / 2);
+            if (a[m] < s) l = m + 1; else r = m;
+        }
+        const i = l;
+        l = i; r = a.length;
+        while (l < r) {
+            const m = Math.floor((l + r) / 2);
+            if (a[m] <= e) l = m + 1; else r = m;
+        }
+        return a.splice(i, l - i);
+    }
+}
+
+function dt_read_string(byte_array) {
+    return new TextDecoder().decode(new Uint8Array(byte_array.splice(0, dt_read_varint(byte_array))))
+}
+
+function dt_read_varint(byte_array) {
+    let result = 0
+    let shift = 0
+    while (true) {
+        if (byte_array.length === 0) throw new Error("byte array does not contain varint")
+
+        let byte_val = byte_array.shift()
+        result |= (byte_val & 0x7f) << shift
+        if ((byte_val & 0x80) == 0) return result
+        shift += 7
+    }
 }
 
 function dt_create_bytes(version, parents, pos, del, ins) {
@@ -1808,8 +1879,10 @@ braid_text.get_files_for_key = get_files_for_key
 braid_text.dt_get = dt_get
 braid_text.dt_get_patches = dt_get_patches
 braid_text.dt_parse = dt_parse
+braid_text.dt_get_local_version = dt_get_local_version
 braid_text.dt_create_bytes = dt_create_bytes
 
 braid_text.decode_version = decode_version
+braid_text.RangeSet = RangeSet
 
 module.exports = braid_text
