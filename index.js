@@ -76,6 +76,16 @@ braid_text.serve = async (req, res, options = {}) => {
         if (!req.subscribe) {
             res.setHeader("Accept-Subscribe", "true")
 
+            // special case for HEAD asking for version/parents,
+            // to be faster by not reconstructing body
+            if (req.method === "HEAD" && (req.version || req.parents)) {
+                if ((req.version || req.parents).every(event => {
+                    var [actor, seq] = decode_version(event)
+                    return resource.actor_seqs[actor]?.has(seq)
+                })) return my_end(200)
+                else return my_end(500, "Unknown Version")
+            }
+
             let x = null
             try {
                 x = await braid_text.get(resource, { version: req.version, parents: req.parents })

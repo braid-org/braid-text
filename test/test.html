@@ -266,4 +266,34 @@ runTest(
     'retried!'
 )
 
+runTest(
+    "test asking for a version that should and shouldn't be there",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-10'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            version: ['hi-5']
+        })
+        if (r.ok) throw 'found version we should not have found'
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            version: ['hi-10']
+        })
+        if (!r.ok) throw 'could not find version we should have found'
+
+        return 'worked out!'
+    },
+    'worked out!'
+)
+
 </script>
