@@ -488,6 +488,8 @@ braid_text.put = async (key, options) => {
 
     resource.need_defrag = true
 
+    await resource.db_delta(resource.doc.getPatchSince(v_before))
+
     if (options.merge_type != "dt") {
         patches = get_xf_patches(resource.doc, v_before)
         if (braid_text.verbose) console.log(JSON.stringify({ patches }))
@@ -588,8 +590,6 @@ braid_text.put = async (key, options) => {
     for (let client of resource.clients) {
         if (!peer || client.peer !== peer) client.subscribe(x)
     }
-
-    await resource.db_delta(resource.doc.getPatchSince(v_before))
 }
 
 braid_text.list = async () => {
