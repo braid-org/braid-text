@@ -88,6 +88,91 @@ runTest(
 )
 
 runTest(
+    "test subscribing starting at a version using dt",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi-0'],
+            subscribe: true,
+            headers: {
+                'Merge-Type': 'dt'
+            }
+        })
+        return r2.headers.get('merge-type') + ':' + await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                done(JSON.stringify(update.parents))
+            }, fail)
+        })
+    },
+    'dt:' + JSON.stringify([ "hi-0" ])
+)
+
+runTest(
+    "test subscribing starting at the latest version using dt",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi-1'],
+            subscribe: true,
+            headers: {
+                'Merge-Type': 'dt'
+            }
+        })
+        return await new Promise(async (done, fail) => {
+            r2.subscribe(update => done('got something'), fail)
+            setTimeout(() => done('got nothing'), 1500)
+        })
+    },
+    'got nothing'
+)
+
+runTest(
+    "test subscribing starting at beginning using dt",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            subscribe: true,
+            headers: {
+                'Merge-Type': 'dt'
+            }
+        })
+        return r2.headers.get('merge-type') + ':' + await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                if (update.version[0] === 'hi-1') done('got it!')
+            }, fail)
+        })
+    },
+    'dt:got it!'
+)
+
+runTest(
     "test dt_create_bytes with big agent name",
     async () => {
         let x = await (await fetch(`/test.html?dt_create_bytes_big_name`)).json()

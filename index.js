@@ -923,7 +923,10 @@ function dt_get_patches(doc, version = null) {
     let [_agents, versions, parentss] = dt_parse([...bytes])
 
     let op_runs = []
-    if (version) {
+    if (version && v_eq(version,
+        doc.getRemoteVersion().map((x) => x.join("-")).sort())) {
+        // they want everything past the end, which is nothing
+    } else if (version) {
         let frontier = {}
         version.forEach((x) => frontier[x] = true)
         let local_version = []
