@@ -808,6 +808,11 @@ function dt_len(doc, version) {
 }
 
 function dt_get_string(doc, version) {
+    // optimization: if version is the latest,
+    // then return the current text..
+    if (v_eq(version, doc.getRemoteVersion().map((x) => x.join("-")).sort()))
+        return doc.get()
+
     var bytes = doc.toBytes()
     var oplog = OpLog.fromBytes(bytes)
 
