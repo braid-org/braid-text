@@ -1,5 +1,5 @@
 
-let { Doc, OpLog, Branch } = require("diamond-types-node")
+let { Doc, OpLog, Branch } = require("./dt.js")
 let braidify = require("braid-http").http_server
 let fs = require("fs")
 

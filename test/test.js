@@ -1,5 +1,5 @@
 
-let { Doc } = require("diamond-types-node")
+let { Doc } = require("../dt.js")
 let braid_text = require('../index.js')
 let {dt_get, dt_get_patches, dt_parse, dt_create_bytes, dt_get_local_version, RangeSet} = braid_text
 
