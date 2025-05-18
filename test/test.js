@@ -1,5 +1,5 @@
 
-let { Doc } = require("../dt.js")
+let { Doc } = require("@braid.org/diamond-types-node")
 let braid_text = require('../index.js')
 let {dt_get, dt_get_patches, dt_parse, dt_create_bytes, dt_get_local_version, RangeSet} = braid_text
 
@@ -265,17 +265,26 @@ function make_random_edit(doc) {
 
     let include_versions = []
     let base_seq = -1
+    var used_seqs = new Set()
     for (let i = 0; i < versions.length; i++) {
         let [a, seq] = versions[i]
-        if (a == agent || Math.random() > 0.5) {
+        if (Math.random() > 0.5) {
             include_versions.push(a + '-' + seq)
-            if (a == agent && seq > base_seq) base_seq = seq
         }
+        if (a == agent && seq > base_seq) base_seq = seq
+        if (a == agent) used_seqs.add(seq)
     }
     base_seq++
 
-    // try skipping some seqs.. to see if it breaks..
-    base_seq += Math.floor(Math.random() * 5)
+    function choose_seq(len) {
+        L1: for (var t = 0; 1000000; t++) {
+            var choice = Math.floor(Math.random() * (base_seq * 1.2 + 10))
+            for (var i = choice; i < choice + len; i++)
+                if (used_seqs.has(i)) continue L1
+            return choice
+        }
+        throw new Error('failed to find seq')
+    }
 
     console.log({agents, versions, include_versions})
 
@@ -293,15 +302,16 @@ function make_random_edit(doc) {
         let start = Math.floor(Math.random() * len)
         let del_len = Math.floor(Math.random() * (len - start - 1)) + 1
 
-        let args = [`${agent}-${base_seq}`, parents, start, del_len, null]
+        let args = [`${agent}-${choose_seq(del_len)}`, parents, start, del_len, null]
         console.log(args)
         doc.mergeBytes(dt_create_bytes(...args))
     } else {
         // insert
         let start = Math.floor(Math.random() * (len + 1))
-        let ins = Array(Math.floor(Math.random() * 10) + 1).fill(0).map(() => getRandomCharacter()).join('')
-       
-        let args = [`${agent}-${base_seq}`, parents, start, 0, ins]
+        let n = Math.floor(Math.random() * 10) + 1
+        let ins = Array(n).fill(0).map(() => getRandomCharacter()).join('')
+
+        let args = [`${agent}-${choose_seq(n)}`, parents, start, 0, ins]
         console.log(args)
         doc.mergeBytes(dt_create_bytes(...args))
     }
