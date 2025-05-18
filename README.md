@@ -106,6 +106,10 @@ http_server.on("request", (req, res) => {
 
       // Apply the incoming state or patches to local text here.
 
+      // Example data:  {
+      //   state: "Hello World",                              // The new text
+      //   patches: [{ range: [5, 5], content: " World" }]    // Patches that create the new text
+
       // Then return the new state of textarea as a string:
       return new_state
     },
@@ -114,8 +118,8 @@ http_server.on("request", (req, res) => {
       // Compute diff between prev_state ^ and the current textarea string, such as:
       //
       //   var patches = [{
-      //     range: [5:5],
-      //     content: " World"
+      //     range: [5, 5],      // The range from position 5 to position 5
+      //     content: " World"   // is replaced with the string " World"
       //   }]
       //
       // ...to insert something after a prev_state of "Hello".
