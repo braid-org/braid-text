@@ -911,23 +911,18 @@ function dt_get_patches(doc, version = null) {
     if (version && v_eq(version,
         doc.getRemoteVersion().map((x) => x.join("-")).sort())) {
         // they want everything past the end, which is nothing
-    } else if (version) {
+    } else if (version?.length) {
         let frontier = {}
         version.forEach((x) => frontier[x] = true)
         let local_version = []
         for (let i = 0; i < versions.length; i++)
             if (frontier[versions[i].join("-")]) local_version.push(i)
-        let after_bytes = doc.getPatchSince(new Uint32Array(local_version))
 
+        local_version = new Uint32Array(local_version)
+
+        let after_bytes = doc.getPatchSince(local_version)
         ;[_agents, versions, parentss] = dt_parse([...after_bytes])
-
-        let before_doc = dt_get(doc, version)
-        let before_doc_frontier = before_doc.getLocalVersion()
-
-        before_doc.mergeBytes(after_bytes)
-        op_runs = before_doc.getOpsSince(before_doc_frontier)
-
-        before_doc.free()
+        op_runs = doc.getOpsSince(local_version)
     } else op_runs = doc.getOpsSince([])
 
     doc.free()
