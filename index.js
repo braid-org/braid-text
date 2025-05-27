@@ -176,31 +176,11 @@ braid_text.serve = async (req, res, options = {}) => {
         } catch (e) {
             console.log(`${req.method} ERROR: ${e.stack}`)
             if (e.message?.startsWith(MISSING_PARENT_VERSION)) {
-                // we couldn't apply the version, because we're missing its parents,
-                // we want to send a 4XX error, so the client will resend this request later,
+                // we couldn't apply the version, because we're missing its parents;
+                // we want to send some kind of error that gives the client faith,
+                // that resending this request later may work,
                 // hopefully after we've received the necessary parents.
-
-                // here are some 4XX error code options..
-                //
-                // - 425 Too Early
-                //     - pros: our message is too early
-                //     - cons: associated with some "Early-Data" http thing, which we're not using
-                // - 400 Bad Request
-                //     - pros: pretty generic
-                //     - cons: implies client shouldn't resend as-is
-                // - 409 Conflict
-                //     - pros: doesn't imply modifications needed
-                //     - cons: the message is not conflicting with anything
-                // - 412 Precondition Failed
-                //     - pros: kindof true.. the precondition of having another version has failed..
-                //     - cons: not strictly true, as this code is associated with http's If-Unmodified-Since stuff
-                // - 422 Unprocessable Content
-                //     - pros: it's true
-                //     - cons: implies client shouldn't resend as-is (at least, it says that here: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/422)
-                // - 428 Precondition Required
-                //     - pros: the name sounds right
-                //     - cons: typically implies that the request was missing an http conditional field like If-Match. that is to say, it implies that the request is missing a precondition, not that the server is missing a precondition
-                return done_my_turn(400, e.message, 'Missing Parents', { 'Retry-After': '1' })
+                return done_my_turn(309, e.message, 'Missing Parents', { 'Retry-After': '1' })
             } else {
                 return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
             }

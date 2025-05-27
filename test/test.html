@@ -62,6 +62,21 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test error code when missing parents",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: ['missing-0'],
+            body: 'xx'
+        })
+        return r.status + ' ' + r.ok
+    },
+    '309 false'
+)
+
+runTest(
     "test subscribing starting at a version using simpleton",
     async () => {
         let key = 'test-' + Math.random().toString(36).slice(2)
