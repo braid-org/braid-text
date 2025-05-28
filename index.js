@@ -180,7 +180,10 @@ braid_text.serve = async (req, res, options = {}) => {
                 // we want to send some kind of error that gives the client faith,
                 // that resending this request later may work,
                 // hopefully after we've received the necessary parents.
-                return done_my_turn(309, e.message, 'Missing Parents', { 'Retry-After': '1' })
+                return done_my_turn(309, e.message, 'Version Unknown', {
+                    Parents: req.headers.parents,
+                    'Retry-After': '1'
+                })
             } else {
                 return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
             }
@@ -1861,6 +1864,10 @@ class RangeSet {
         }
         return result
     }
+}
+
+function ascii_ify(s) {
+    return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 }
 
 braid_text.get_resource = get_resource

@@ -68,12 +68,12 @@ runTest(
         let r = await braid_fetch(`/${key}`, {
             method: 'PUT',
             version: ['hi-1'],
-            parents: ['missing-0'],
+            parents: ['missing-0', 'y😀-0'],
             body: 'xx'
         })
-        return r.status + ' ' + r.ok
+        return r.status + ' ' + r.ok + ' ' + r.statusText +  ' ' + r.headers.get('Parents')
     },
-    '309 false'
+    '309 false Version Unknown "missing-0", "y\\ud83d\\ude00-0"'
 )
 
 runTest(

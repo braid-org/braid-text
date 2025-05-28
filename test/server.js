@@ -36,7 +36,7 @@ var server = require("http").createServer(async (req, res) => {
             }
         }
 
-        res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" })
         require("fs").createReadStream(`${__dirname}/test.html`).pipe(res)
         return
     }
