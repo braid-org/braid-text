@@ -23,6 +23,13 @@
 <div id="testContainer"></div>
 <script type=module>
 
+import {
+    default as init,
+    Doc,
+    OpLog,
+} from "https://unpkg.com/diamond-types-web";
+var dt_p = init()
+
 let delay = 0
 
 function createTestDiv(testName) {
@@ -60,6 +67,42 @@ async function runTest(testName, testFunction, expectedResult) {
         updateTestResult(div, false, "Error:", error.message || error, expectedResult)
     }
 }
+
+runTest(
+    "test transfer-encoding dt",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'x')
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi-0'],
+            subscribe: true,
+            headers: {
+                'Merge-Type': 'dt',
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+        return await new Promise(async (done, fail) => {
+            r2.subscribe(async update => {
+                doc.mergeBytes(update.body)
+                done(update.extra_headers['current-version'] + ' ' +
+                    update.extra_headers['transfer-encoding'] + ' ' + 
+                    doc.get())
+            }, fail)
+        })
+    },
+    '"hi-1" dt xy'
+)
 
 runTest(
     "test error code when missing parents",

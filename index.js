@@ -112,6 +112,7 @@ braid_text.serve = async (req, res, options = {}) => {
                 version: req.version,
                 parents: req.parents,
                 merge_type,
+                transfer_encoding: req.headers['accept-transfer-encoding'],
                 subscribe: x => res.sendVersion(x),
                 write: (x) => res.write(x)
             }
@@ -244,39 +245,57 @@ braid_text.get = async (key, options) => {
             options.my_last_sent_version = x.version
             resource.simpleton_clients.add(options)
         } else {
-            let updates = null
-
             if (resource.need_defrag) {
                 if (braid_text.verbose) console.log(`doing defrag..`)
                 resource.need_defrag = false
                 resource.doc = defrag_dt(resource.doc)
             }
 
-            if (!options.parents && !options.version) {
-                options.subscribe({
-                    version: [],
-                    parents: [],
-                    body: "",
-                })
-
-                updates = dt_get_patches(resource.doc)
+            if (options.transfer_encoding === 'dt') {
+                var o = {
+                    'Transfer-Encoding': 'dt',
+                    'Current-Version': resource.doc.getRemoteVersion().
+                        map(x => x.join("-")).
+                        map(JSON.stringify).map(ascii_ify).join(", "),
+                }
+                var bytes = resource.doc.toBytes()
+                if (!options.parents && !options.version) o.body = bytes
+                else {
+                    var doc = Doc.fromBytes(bytes)
+                    o.body = doc.getPatchSince(
+                        dt_get_local_version(bytes,
+                            options.parents || options.version))
+                    doc.free()
+                }
+                options.subscribe(o)
             } else {
-                // Then start the subscription from the parents in options
-                updates = dt_get_patches(resource.doc, options.parents || options.version)
+                var updates = null
+                if (!options.parents && !options.version) {
+                    options.subscribe({
+                        version: [],
+                        parents: [],
+                        body: "",
+                    })
+
+                    updates = dt_get_patches(resource.doc)
+                } else {
+                    // Then start the subscription from the parents in options
+                    updates = dt_get_patches(resource.doc, options.parents || options.version)
+                }
+
+                for (let u of updates)
+                    options.subscribe({
+                        version: [u.version],
+                        parents: u.parents,
+                        patches: [{ unit: u.unit, range: u.range, content: u.content }],
+                    })
+
+                // Output at least *some* data, or else chrome gets confused and
+                // thinks the connection failed.  This isn't strictly necessary,
+                // but it makes fewer scary errors get printed out in the JS
+                // console.
+                if (updates.length === 0) options.write?.("\r\n")
             }
-
-            for (let u of updates)
-                options.subscribe({
-                    version: [u.version],
-                    parents: u.parents,
-                    patches: [{ unit: u.unit, range: u.range, content: u.content }],
-                })
-
-            // Output at least *some* data, or else chrome gets confused and
-            // thinks the connection failed.  This isn't strictly necessary,
-            // but it makes fewer scary errors get printed out in the JS
-            // console.
-            if (updates.length === 0) options.write?.("\r\n")
 
             resource.clients.add(options)
         }

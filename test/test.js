@@ -230,8 +230,37 @@ async function main() {
             // test handler on dt
             braid_text.get('middle_doc', {merge_type: 'dt', subscribe: async update => {}})
 
+            // test transfer_encoding "dt"
+            var transfer_doc = new Doc()
+            var o = {
+                merge_type: 'dt',
+                transfer_encoding: 'dt',
+                subscribe: update => {
+                    if (update['Transfer-Encoding'] === 'dt')
+                        transfer_doc.mergeBytes(update.body)
+                }
+            }
+            await braid_text.get('middle_doc', o)
+            await braid_text.forget('middle_doc', o)
+
+            if (transfer_doc.get() !== await braid_text.get('middle_doc')) throw new Error('bad')
+
+            var o = {
+                merge_type: 'dt',
+                transfer_encoding: 'dt',
+                parents: middle_v,
+                subscribe: update => {
+                    if (update['Transfer-Encoding'] === 'dt')
+                        transfer_doc.mergeBytes(update.body)
+                }
+            }
+            await braid_text.get('doc', o)
+            await braid_text.forget('doc', o)
+
+            if (transfer_doc.get() !== await braid_text.get('doc')) throw new Error('bad')
+
             // try getting updates from middle_doc to doc
-            let o = {merge_type: 'dt', parents: middle_v, subscribe: update => {
+            var o = {merge_type: 'dt', parents: middle_v, subscribe: update => {
                 braid_text.put('middle_doc', update)
             }}
             await braid_text.get('doc', o)
