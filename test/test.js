@@ -143,7 +143,7 @@ async function main() {
     for (let t = 0; t < 10000; t++) {
         let seed = base + t
     // for (let t = 0; t < 1; t++) {
-    //     let seed = 403279
+    //     let seed = 9803841
 
         og_log(`t = ${t}, seed = ${seed}, best_n = ${best_n} @ ${best_seed}`)
         Math.randomSeed(seed)
@@ -232,30 +232,21 @@ async function main() {
 
             // test transfer_encoding "dt"
             var transfer_doc = new Doc()
-            var o = {
-                merge_type: 'dt',
-                transfer_encoding: 'dt',
-                subscribe: update => {
-                    if (update['Transfer-Encoding'] === 'dt')
-                        transfer_doc.mergeBytes(update.body)
-                }
-            }
-            await braid_text.get('middle_doc', o)
-            await braid_text.forget('middle_doc', o)
+
+            var r = await braid_text.get('middle_doc', {
+                transfer_encoding: 'dt'
+            })
+
+            transfer_doc.mergeBytes(r.body)
 
             if (transfer_doc.get() !== await braid_text.get('middle_doc')) throw new Error('bad')
 
-            var o = {
-                merge_type: 'dt',
+            var r = await braid_text.get('doc', {
                 transfer_encoding: 'dt',
-                parents: middle_v,
-                subscribe: update => {
-                    if (update['Transfer-Encoding'] === 'dt')
-                        transfer_doc.mergeBytes(update.body)
-                }
-            }
-            await braid_text.get('doc', o)
-            await braid_text.forget('doc', o)
+                parents: middle_v
+            })
+
+            transfer_doc.mergeBytes(r.body)
 
             if (transfer_doc.get() !== await braid_text.get('doc')) throw new Error('bad')
 

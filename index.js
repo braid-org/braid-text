@@ -72,6 +72,10 @@ braid_text.serve = async (req, res, options = {}) => {
         return my_end(200)
     }
 
+    var get_current_version = () => ascii_ify(
+        resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
+            .map(x => JSON.stringify(x)).join(", "))
+
     if (req.method == "GET" || req.method == "HEAD") {
         if (!req.subscribe) {
             res.setHeader("Accept-Subscribe", "true")
@@ -88,20 +92,29 @@ braid_text.serve = async (req, res, options = {}) => {
 
             let x = null
             try {
-                x = await braid_text.get(resource, { version: req.version, parents: req.parents })
+                x = await braid_text.get(resource, {
+                    version: req.version,
+                    parents: req.parents,
+                    transfer_encoding: req.headers['accept-transfer-encoding']
+                })
             } catch (e) {
                 return my_end(500, "The server failed to get something. The error generated was: " + e)
             }
 
-            res.setHeader("Version", x.version.map((x) => JSON.stringify(x)).join(", "))
-
-            const buffer = Buffer.from(x.body, "utf8")
-            res.setHeader("Repr-Digest", `sha-256=:${require('crypto').createHash('sha256').update(buffer).digest('base64')}:`)
-            res.setHeader("Content-Length", buffer.length)
-
-            if (req.method === "HEAD") return my_end(200)
-
-            return my_end(200, buffer)
+            if (req.headers['accept-transfer-encoding'] === 'dt') {
+                res.setHeader("Current-Version", get_current_version())
+                res.setHeader("Transfer-Encoding", 'dt')
+                res.setHeader("Content-Length", x.body.length)
+                return my_end(209, req.method === "HEAD" ? null : x.body, 'Multiresponse')
+            } else {
+                if (req.version || req.parents)
+                    res.setHeader("Current-Version", get_current_version())
+                res.setHeader("Version", ascii_ify(x.version.map((x) => JSON.stringify(x)).join(", ")))
+                var buffer = Buffer.from(x.body, "utf8")
+                res.setHeader("Repr-Digest", `sha-256=:${require('crypto').createHash('sha256').update(buffer).digest('base64')}:`)
+                res.setHeader("Content-Length", buffer.length)
+                return my_end(200, req.method === "HEAD" ? null : buffer)
+            }
         } else {
             if (!res.hasHeader("editable")) res.setHeader("Editable", "true")
             res.setHeader("Merge-Type", merge_type)
@@ -112,7 +125,6 @@ braid_text.serve = async (req, res, options = {}) => {
                 version: req.version,
                 parents: req.parents,
                 merge_type,
-                transfer_encoding: req.headers['accept-transfer-encoding'],
                 subscribe: x => res.sendVersion(x),
                 write: (x) => res.write(x)
             }
@@ -171,7 +183,7 @@ braid_text.serve = async (req, res, options = {}) => {
 
             await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
             
-            res.setHeader("Version", resource.doc.getRemoteVersion().map((x) => x.join("-")).sort())
+            res.setHeader("Version", get_current_version())
 
             options.put_cb(options.key, resource.val)
         } catch (e) {
@@ -213,12 +225,38 @@ braid_text.get = async (key, options) => {
     let resource = (typeof key == 'string') ? await get_resource(key) : key
 
     if (!options.subscribe) {
-        return options.version || options.parents ?
-            {
+        var version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
+
+        if (options.transfer_encoding === 'dt') {
+            // optimization: if requesting current version
+            // pretend as if they didn't set a version,
+            // and let it be handled as the default
+            var op_v = options.version
+            if (op_v && v_eq(op_v, version)) op_v = null
+
+            var bytes = null
+            if (op_v || options.parents) {
+                if (op_v) {
+                    var doc = dt_get(resource.doc, op_v)
+                    bytes = doc.toBytes()
+                } else {
+                    bytes = resource.doc.toBytes()
+                    var doc = Doc.fromBytes(bytes)
+                }
+                if (options.parents) {
+                    bytes = doc.getPatchSince(
+                    dt_get_local_version(bytes, options.parents))
+                }
+                doc.free()
+            } else bytes = resource.doc.toBytes()
+            return { body: bytes }
+        }
+
+        return options.version || options.parents ? {
                 version: options.version || options.parents,
                 body: dt_get_string(resource.doc, options.version || options.parents)
             } : {
-                version: resource.doc.getRemoteVersion().map((x) => x.join("-")).sort(),
+                version,
                 body: resource.doc.get()
             }
     } else {
@@ -251,51 +289,32 @@ braid_text.get = async (key, options) => {
                 resource.doc = defrag_dt(resource.doc)
             }
 
-            if (options.transfer_encoding === 'dt') {
-                var o = {
-                    'Transfer-Encoding': 'dt',
-                    'Current-Version': resource.doc.getRemoteVersion().
-                        map(x => x.join("-")).
-                        map(JSON.stringify).map(ascii_ify).join(", "),
-                }
-                var bytes = resource.doc.toBytes()
-                if (!options.parents && !options.version) o.body = bytes
-                else {
-                    var doc = Doc.fromBytes(bytes)
-                    o.body = doc.getPatchSince(
-                        dt_get_local_version(bytes,
-                            options.parents || options.version))
-                    doc.free()
-                }
-                options.subscribe(o)
+            var updates = null
+            if (!options.parents && !options.version) {
+                options.subscribe({
+                    version: [],
+                    parents: [],
+                    body: "",
+                })
+
+                updates = dt_get_patches(resource.doc)
             } else {
-                var updates = null
-                if (!options.parents && !options.version) {
-                    options.subscribe({
-                        version: [],
-                        parents: [],
-                        body: "",
-                    })
-
-                    updates = dt_get_patches(resource.doc)
-                } else {
-                    // Then start the subscription from the parents in options
-                    updates = dt_get_patches(resource.doc, options.parents || options.version)
-                }
-
-                for (let u of updates)
-                    options.subscribe({
-                        version: [u.version],
-                        parents: u.parents,
-                        patches: [{ unit: u.unit, range: u.range, content: u.content }],
-                    })
-
-                // Output at least *some* data, or else chrome gets confused and
-                // thinks the connection failed.  This isn't strictly necessary,
-                // but it makes fewer scary errors get printed out in the JS
-                // console.
-                if (updates.length === 0) options.write?.("\r\n")
+                // Then start the subscription from the parents in options
+                updates = dt_get_patches(resource.doc, options.parents || options.version)
             }
+
+            for (let u of updates)
+                options.subscribe({
+                    version: [u.version],
+                    parents: u.parents,
+                    patches: [{ unit: u.unit, range: u.range, content: u.content }],
+                })
+
+            // Output at least *some* data, or else chrome gets confused and
+            // thinks the connection failed.  This isn't strictly necessary,
+            // but it makes fewer scary errors get printed out in the JS
+            // console.
+            if (updates.length === 0) options.write?.("\r\n")
 
             resource.clients.add(options)
         }

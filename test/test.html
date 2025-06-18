@@ -69,7 +69,7 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
-    "test transfer-encoding dt",
+    "test transfer-encoding dt (with parents)",
     async () => {
         await dt_p
         let key = 'test-' + Math.random().toString(36).slice(2)
@@ -85,23 +85,208 @@ runTest(
         if (!r.ok) throw 'got: ' + r.statusCode
 
         let r2 = await braid_fetch(`/${key}`, {
-            version: ['hi-0'],
-            subscribe: true,
+            parents: ['hi-0'],
             headers: {
-                'Merge-Type': 'dt',
                 'Accept-Transfer-Encoding': 'dt'
             }
         })
-        return await new Promise(async (done, fail) => {
-            r2.subscribe(async update => {
-                doc.mergeBytes(update.body)
-                done(update.extra_headers['current-version'] + ' ' +
-                    update.extra_headers['transfer-encoding'] + ' ' + 
-                    doc.get())
-            }, fail)
+
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('transfer-encoding') + ' ' + text + ' ' + r2.statusText
+    },
+    '"hi-1" dt xy Multiresponse'
+)
+
+runTest(
+    "test transfer-encoding dt",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
         })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            headers: {
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+
+        var doc = new Doc('yo')
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('transfer-encoding') + ' ' + text
     },
     '"hi-1" dt xy'
+)
+
+runTest(
+    "test GETing old version explicitly with transfer-encoding dt",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi∑-0'],
+            headers: {
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+
+        var doc = new Doc('yo')
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + text + ' ' + JSON.parse(r2.headers.get('current-version'))
+    },
+    '"hi\\u2211-1" x hi∑-1'
+)
+
+runTest(
+    "test GETing current version explicitly with transfer-encoding dt",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi∑-1'],
+            headers: {
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+
+        var doc = new Doc('yo')
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + text + ' ' + JSON.parse(r2.headers.get('current-version'))
+    },
+    '"hi\\u2211-1" xy hi∑-1'
+)
+
+runTest(
+    "test for Current-Version when GETing old version",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi∑-0']
+        })
+
+        var text = await r2.text()
+
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('version') + ' ' + text + ' ' + JSON.parse(r2.headers.get('current-version'))
+    },
+    '"hi\\u2211-1" "hi\\u2211-0" x hi∑-1'
+)
+
+runTest(
+    "test HEAD for GET without subscribe",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'HEAD'
+        })
+
+        var text = await r2.text()
+
+        return r2.headers.get('version') + ' ' + JSON.parse(r2.headers.get('version')) + ` text:[${text}]`
+    },
+    '"hi\\u2211-1" hi∑-1 text:[]'
+)
+
+runTest(
+    "test HEAD for GET without subscribe (with transfer-encoding)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            headers: {
+                'accept-transfer-encoding': 'dt'
+            }
+        })
+
+        var buf = await r2.arrayBuffer()
+
+        return r2.headers.get('current-version') + ' ' + JSON.parse(r2.headers.get('current-version')) + ` buf.byteLength:${buf.byteLength}`
+    },
+    '"hi\\u2211-1" hi∑-1 buf.byteLength:0'
+)
+
+runTest(
+    "test Version we get from PUTing",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        return r.headers.get('version')
+    },
+    '"hi\\u2211-1"'
 )
 
 runTest(
