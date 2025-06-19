@@ -95,7 +95,7 @@ runTest(
         var text = doc.get()
         doc.free()
 
-        return r2.headers.get('current-version') + ' ' + r2.headers.get('transfer-encoding') + ' ' + text + ' ' + r2.statusText
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('x-transfer-encoding') + ' ' + text + ' ' + r2.statusText
     },
     '"hi-1" dt xy Multiresponse'
 )
@@ -125,7 +125,7 @@ runTest(
         var text = doc.get()
         doc.free()
 
-        return r2.headers.get('current-version') + ' ' + r2.headers.get('transfer-encoding') + ' ' + text
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('x-transfer-encoding') + ' ' + text
     },
     '"hi-1" dt xy'
 )

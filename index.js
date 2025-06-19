@@ -103,7 +103,7 @@ braid_text.serve = async (req, res, options = {}) => {
 
             if (req.headers['accept-transfer-encoding'] === 'dt') {
                 res.setHeader("Current-Version", get_current_version())
-                res.setHeader("Transfer-Encoding", 'dt')
+                res.setHeader("X-Transfer-Encoding", 'dt')
                 res.setHeader("Content-Length", x.body.length)
                 return my_end(209, req.method === "HEAD" ? null : x.body, 'Multiresponse')
             } else {
