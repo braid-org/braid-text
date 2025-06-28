@@ -69,6 +69,192 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test when PUT cache/buffer size fails",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f1 = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-3000000'],
+            parents: ['yo-0'],
+            body: 'A'.repeat(3000000)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+
+        var f2 = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['ih-3000000'],
+            parents: ['yo-0'],
+            body: 'B'.repeat(3000000)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['yo-0'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        return `f1: ${(await f1).status}, f2: ${(await f2).status}`
+    },
+    'f1: 200, f2: 309'
+)
+
+runTest(
+    "test multiple patches",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'A'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['yo-1'],
+            parents: ['hi-0'],
+            patches: [
+                {unit: 'text', range: '[0:0]', content: 'C'},
+                {unit: 'text', range: '[1:1]', content: 'T'}
+            ]
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'CAT'
+)
+
+runTest(
+    "test PUT after subscribing",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var p_done
+        var p = new Promise(done => p_done = done)
+
+        var r = await braid_fetch(`/${key}`, {
+            subscribe: true
+        })
+        r.subscribe(update => {
+            if (update.version[0] === 'hi-0')
+                p_done(update.patches[0].content_text)
+        })
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        return await p
+    },
+    'x'
+)
+
+runTest(
+    "test out-of-order PUTs",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: ['hi-0'],
+            patches: [{unit: 'text', range: '[1:1]', content: 'y'}]
+        })
+
+        await new Promise(done => setTimeout(done, 500))
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        r = await f
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'xy'
+)
+
+runTest(
+    "test out-of-order PUTs (trial two)",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['ab-1'],
+            parents: ['hi-0'],
+            patches: [{unit: 'text', range: '[1:1]', content: 'y'}]
+        })
+
+        await new Promise(done => setTimeout(done, 500))
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xz'
+        })
+
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        r = await f
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'xyz'
+)
+
+runTest(
+    "test in-order PUTs",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: ['hi-0'],
+            patches: [{unit: 'text', range: '[1:1]', content: 'y'}]
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'xy'
+)
+
+runTest(
     "test transfer-encoding dt (with parents)",
     async () => {
         await dt_p

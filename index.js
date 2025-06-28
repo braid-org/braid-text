@@ -13,7 +13,6 @@ let braid_text = {
 }
 
 let waiting_puts = 0
-let prev_put_p = null
 
 let max_encoded_key_size = 240
 
@@ -152,28 +151,15 @@ braid_text.serve = async (req, res, options = {}) => {
 
         waiting_puts++
         if (braid_text.verbose) console.log(`waiting_puts(after++) = ${waiting_puts}`)
+        let done_my_turn = (statusCode, x, statusText, headers) => {
+            waiting_puts--
+            if (braid_text.verbose) console.log(`waiting_puts(after--) = ${waiting_puts}`)
+            my_end(statusCode, x, statusText, headers)
+        }
 
-        let my_prev_put_p = prev_put_p
-        let done_my_turn = null
-        prev_put_p = new Promise(
-            (done) =>
-            (done_my_turn = (statusCode, x, statusText, headers) => {
-                waiting_puts--
-                if (braid_text.verbose) console.log(`waiting_puts(after--) = ${waiting_puts}`)
-                my_end(statusCode, x, statusText, headers)
-                done()
-            })
-        )
-        let patches = null
-        let ee = null
         try {
-            patches = await req.patches()
+            var patches = await req.patches()
             for (let p of patches) p.content = p.content_text
-        } catch (e) { ee = e }
-        await my_prev_put_p
-
-        try {
-            if (ee) throw ee
 
             let body = null
             if (patches[0]?.unit === 'everything') {
@@ -181,8 +167,20 @@ braid_text.serve = async (req, res, options = {}) => {
                 patches = null
             }
 
-            await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
-            
+            if (req.parents) await wait_for_events(
+                options.key,
+                req.parents,
+                resource.actor_seqs,
+                // approximation of memory usage for this update
+                body ? body.length :
+                    patches.reduce((a, b) => a + b.range.length + b.content.length, 0),
+                options.put_buffer_max_time,
+                options.put_buffer_max_space)
+
+            var {change_count} = await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
+
+            if (req.version) got_event(options.key, req.version[0], change_count)
+           
             res.setHeader("Version", get_current_version())
 
             options.put_cb(options.key, resource.val)
@@ -509,7 +507,7 @@ braid_text.put = async (key, options) => {
 
     resource.need_defrag = true
 
-    await resource.db_delta(resource.doc.getPatchSince(v_before))
+    var post_commit_updates = []
 
     if (options.merge_type != "dt") {
         patches = get_xf_patches(resource.doc, v_before)
@@ -586,7 +584,7 @@ braid_text.put = async (key, options) => {
                 x.patches = patches
             }
             if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
-            client.subscribe(x)
+            post_commit_updates.push([client, x])
             client.my_last_sent_version = x.version
         }
     } else {
@@ -597,20 +595,27 @@ braid_text.put = async (key, options) => {
             if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
             for (let client of resource.simpleton_clients) {
                 if (client.my_timeout) continue
-                client.subscribe(x)
+                post_commit_updates.push([client, x])
                 client.my_last_sent_version = x.version
             }
         }
     }
 
-    let x = {
+    var x = {
         version: [og_v],
         parents: og_parents,
         patches: og_patches,
     }
     for (let client of resource.clients) {
-        if (!peer || client.peer !== peer) client.subscribe(x)
+        if (!peer || client.peer !== peer)
+            post_commit_updates.push([client, x])
     }
+
+    await resource.db_delta(resource.doc.getPatchSince(v_before))
+
+    for (var [client, x] of post_commit_updates) client.subscribe(x)
+
+    return { change_count }
 }
 
 braid_text.list = async () => {
@@ -818,6 +823,106 @@ async function file_sync(key, process_delta, get_init) {
             }))
         }
     }
+}
+
+async function wait_for_events(
+    key,
+    events,
+    actor_seqs,
+    my_space,
+    max_time = 3000,
+    max_space = 5 * 1024 * 1024) {
+
+    if (!wait_for_events.namespaces) wait_for_events.namespaces = {}
+    if (!wait_for_events.namespaces[key]) wait_for_events.namespaces[key] = {}
+    var ns = wait_for_events.namespaces[key]
+
+    if (!wait_for_events.space_used) wait_for_events.space_used = 0
+    if (wait_for_events.space_used + my_space > max_space) return
+    wait_for_events.space_used += my_space
+
+    var p_done = null
+    var p = new Promise(done => p_done = done)
+
+    var missing = 0
+    var on_find = () => {
+        missing--
+        if (!missing) p_done()
+    }
+    
+    for (let event of events) {
+        var [actor, seq] = decode_version(event)
+        if (actor_seqs?.[actor]?.has(seq)) continue
+        missing++
+
+        if (!ns.actor_seqs) ns.actor_seqs = {}
+        if (!ns.actor_seqs[actor]) ns.actor_seqs[actor] = []
+        sorted_set_insert(ns.actor_seqs[actor], seq)
+
+        if (!ns.events) ns.events = {}
+        if (!ns.events[event]) ns.events[event] = new Set()
+        ns.events[event].add(on_find)
+    }
+
+    if (missing) {
+        var t = setTimeout(() => {
+            for (let event of events) {
+                var [actor, seq] = decode_version(event)
+                
+                var cbs = ns.events[event]
+                if (!cbs) continue
+
+                cbs.delete(on_find)
+                if (cbs.size) continue
+
+                delete ns.events[event]
+
+                var seqs = ns.actor_seqs[actor]
+                if (!seqs) continue
+
+                sorted_set_delete(seqs, seq)
+                if (seqs.length) continue
+                
+                delete ns.actor_seqs[actor]
+            }
+            p_done()
+        }, max_time)
+
+        await p
+
+        clearTimeout(t)
+    }
+    wait_for_events.space_used -= my_space
+}
+
+async function got_event(key, event, change_count) {
+    var ns = wait_for_events.namespaces?.[key]
+    if (!ns) return
+
+    var [actor, seq] = decode_version(event)
+    var base_seq = seq + 1 - change_count
+
+    var seqs = ns.actor_seqs?.[actor]
+    if (!seqs) return
+
+    // binary search to find the first i >= base_seq
+    var i = 0, end = seqs.length
+    while (i < end) {
+        var mid = (i + end) >> 1
+        seqs[mid] < base_seq ? i = mid + 1 : end = mid
+    }
+    var start = i
+
+    // iterate up through seq
+    while (i < seqs.length && seqs[i] <= seq) {
+        var e = actor + "-" + seqs[i]
+        ns.events?.[e]?.forEach(cb => cb())
+        delete ns.events?.[e]
+        i++
+    }
+
+    seqs.splice(start, i - start)
+    if (!seqs.length) delete ns.actor_seqs[actor]
 }
 
 //////////////////////////////////////////////////////////////////
@@ -1906,6 +2011,25 @@ class RangeSet {
 
 function ascii_ify(s) {
     return s.replace(/[^\x20-\x7E]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
+}
+
+function sorted_set_find(arr, val) {
+    var left = 0, right = arr.length
+    while (left < right) {
+        var mid = (left + right) >> 1
+        arr[mid] < val ? left = mid + 1 : right = mid
+    }
+    return left
+}
+
+function sorted_set_insert(arr, val) {
+    var i = sorted_set_find(arr, val)
+    if (arr[i] !== val) arr.splice(i, 0, val)
+}
+
+function sorted_set_delete(arr, val) {
+    var i = sorted_set_find(arr, val)
+    if (arr[i] === val) arr.splice(i, 1)
 }
 
 braid_text.get_resource = get_resource
