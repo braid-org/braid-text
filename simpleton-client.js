@@ -17,7 +17,7 @@
 //     this is for outgoing changes;
 //     diff_function = () => ({patches, new_version}).
 //
-function simpleton_client(url, { apply_remote_update, generate_local_diff_update, content_type, on_error }) {
+function simpleton_client(url, { apply_remote_update, generate_local_diff_update, content_type, on_error, on_res }) {
     var peer = Math.random().toString(36).substr(2)
     var current_version = []
     var prev_state = ""
@@ -34,7 +34,8 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
         parents: () => current_version.length ? current_version : null,
         peer,
         signal: ac.signal
-    }).then(res =>
+    }).then(res => {
+        if (on_res) on_res(res)
         res.subscribe(update => {
             // Only accept the update if its parents == our current version
             update.parents.sort()
@@ -71,7 +72,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
                 prev_state = apply_remote_update(update)
             }
         }, on_error)
-    ).catch(on_error)
+    }).catch(on_error)
     
     return {
       stop: async () => {
