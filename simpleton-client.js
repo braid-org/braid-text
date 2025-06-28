@@ -115,7 +115,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
 
             outstanding_changes++
             try {
-                await braid_fetch(url, {
+                var r = await braid_fetch(url, {
                     headers: { "Merge-Type": "simpleton",
                         ...(content_type ? {"Content-Type": content_type} : {}) },
                     method: "PUT",
@@ -123,6 +123,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
                     version, parents, patches,
                     peer
                 })
+                if (!r.ok) throw new Error(`bad http status: ${r.status}${(r.status === 401 || r.status === 403) ? ` (access denied)` : ''}`)
             } catch (e) {
                 on_error(e)
                 throw e
