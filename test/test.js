@@ -128,11 +128,29 @@ function old_dt_get_local_version(bytes, version) {
     return local_version
 }
 
+async function test_misc() {
+    // make sure we get a "missing parent version"
+    // when we give wrong parents to braid_text.put
+    try {
+        await braid_text.put('test_misc', {
+            merge_type: 'dt',
+            version: ['ab-0'],
+            parents: ['missing-0'],
+            patches: [{ unit: 'text', range: '[0:0]', content: 'x' }]
+        })
+        throw new Error('test failed')
+    } catch (e) {
+        if (!e.message.startsWith('missing parent version')) throw new Error('test failed')
+    }
+}
+
 async function main() {
     let best_seed = NaN
     let best_n = Infinity
     let base = Math.floor(Math.random() * 10000000)
     let st = Date.now()
+
+    await test_misc()
 
     await test_dt_get_local_version()
 

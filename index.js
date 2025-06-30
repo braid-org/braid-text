@@ -3,8 +3,6 @@ let { Doc, OpLog, Branch } = require("@braid.org/diamond-types-node")
 let braidify = require("braid-http").http_server
 let fs = require("fs")
 
-let MISSING_PARENT_VERSION = 'missing parent version'
-
 let braid_text = {
     verbose: false,
     db_folder: './braid-text-db',
@@ -76,18 +74,25 @@ braid_text.serve = async (req, res, options = {}) => {
             .map(x => JSON.stringify(x)).join(", "))
 
     if (req.method == "GET" || req.method == "HEAD") {
+        // make sure we have the necessary version and parents
+        var unknowns = []
+        for (var event of (req.version || []).concat(req.parents || [])) {
+            var [actor, seq] = decode_version(event)
+            if (!resource.actor_seqs[actor]?.has(seq))
+                unknowns.push(event)
+        }
+        if (unknowns.length)
+            return my_end(309, '', "Version Unknown", {
+                Version: ascii_ify(unknowns.map(e => JSON.stringify(e)).join(', '))
+            })
+
         if (!req.subscribe) {
             res.setHeader("Accept-Subscribe", "true")
 
             // special case for HEAD asking for version/parents,
             // to be faster by not reconstructing body
-            if (req.method === "HEAD" && (req.version || req.parents)) {
-                if ((req.version || req.parents).every(event => {
-                    var [actor, seq] = decode_version(event)
-                    return resource.actor_seqs[actor]?.has(seq)
-                })) return my_end(200)
-                else return my_end(500, "Unknown Version")
-            }
+            if (req.method === "HEAD" && (req.version || req.parents))
+                return my_end(200)
 
             let x = null
             try {
@@ -167,15 +172,29 @@ braid_text.serve = async (req, res, options = {}) => {
                 patches = null
             }
 
-            if (req.parents) await wait_for_events(
-                options.key,
-                req.parents,
-                resource.actor_seqs,
-                // approximation of memory usage for this update
-                body ? body.length :
-                    patches.reduce((a, b) => a + b.range.length + b.content.length, 0),
-                options.put_buffer_max_time,
-                options.put_buffer_max_space)
+            if (req.parents) {
+                await wait_for_events(
+                    options.key,
+                    req.parents,
+                    resource.actor_seqs,
+                    // approximation of memory usage for this update
+                    body ? body.length :
+                        patches.reduce((a, b) => a + b.range.length + b.content.length, 0),
+                    options.put_buffer_max_time,
+                    options.put_buffer_max_space)
+
+                // make sure we have the necessary parents now
+                var unknowns = []
+                for (var event of req.parents) {
+                    var [actor, seq] = decode_version(event)
+                    if (!resource.actor_seqs[actor]?.has(seq)) unknowns.push(event)
+                }
+                if (unknowns.length)
+                    return done_my_turn(309, '', "Version Unknown", {
+                        Version: ascii_ify(unknowns.map(e => JSON.stringify(e)).join(', ')),
+                        'Retry-After': '1'
+                    })
+            }
 
             var {change_count} = await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
 
@@ -186,18 +205,7 @@ braid_text.serve = async (req, res, options = {}) => {
             options.put_cb(options.key, resource.val)
         } catch (e) {
             console.log(`${req.method} ERROR: ${e.stack}`)
-            if (e.message?.startsWith(MISSING_PARENT_VERSION)) {
-                // we couldn't apply the version, because we're missing its parents;
-                // we want to send some kind of error that gives the client faith,
-                // that resending this request later may work,
-                // hopefully after we've received the necessary parents.
-                return done_my_turn(309, e.message, 'Version Unknown', {
-                    Parents: req.headers.parents,
-                    'Retry-After': '1'
-                })
-            } else {
-                return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
-            }
+            return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
         }
 
         return done_my_turn(200)
@@ -364,7 +372,7 @@ braid_text.put = async (key, options) => {
         for (let p of options_parents) {
             let P = decode_version(p)
             if (!resource.actor_seqs[P[0]]?.has(P[1]))
-                throw new Error(`${MISSING_PARENT_VERSION}: ${p}`)
+                throw new Error(`missing parent version: ${p}`)
         }
     }
 

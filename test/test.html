@@ -485,7 +485,7 @@ runTest(
             parents: ['missing-0', 'y😀-0'],
             body: 'xx'
         })
-        return r.status + ' ' + r.ok + ' ' + r.statusText +  ' ' + r.headers.get('Parents')
+        return r.status + ' ' + r.ok + ' ' + r.statusText +  ' ' + r.headers.get('Version')
     },
     '309 false Version Unknown "missing-0", "y\\ud83d\\ude00-0"'
 )
@@ -797,6 +797,8 @@ runTest(
             method: 'HEAD',
             version: ['hi-5']
         })
+        if (r.status !== 309) throw 'expected 309, got: ' + r.status
+        if (r.statusText !== 'Version Unknown') throw 'unexpected status text: ' + r.statusText
         if (r.ok) throw 'found version we should not have found'
 
         var r = await braid_fetch(`/${key}`, {
@@ -808,6 +810,61 @@ runTest(
         return 'worked out!'
     },
     'worked out!'
+)
+
+runTest(
+    "test asking for parents that should and shouldn't be there",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-10'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            parents: ['hi-5']
+        })
+        if (r.status !== 309) throw 'expected 309, got: ' + r.status
+        if (r.ok) throw 'found parents we should not have found'
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            parents: ['hi-10']
+        })
+        if (!r.ok) throw 'could not find parents we should have found'
+
+        return 'worked out!'
+    },
+    'worked out!'
+)
+
+runTest(
+    "test that 309 returns all missing events",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-11'],
+            parents: [],
+            body: 'xyz'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            version: ['yo-1', 'hi-11'],
+            parents: ['hi-5', 'hi-8', 'hi-9', 'hi-10']
+        })
+        if (r.status !== 309) throw 'expected 309, got: ' + r.status
+        return r.headers.get('version')
+    },
+    '"yo-1", "hi-5", "hi-8"'
 )
 
 </script>
