@@ -30,7 +30,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
         headers: { "Merge-Type": "simpleton",
             ...(content_type ? {Accept: content_type} : {}) },
         subscribe: true,
-        retry: true,
+        retry: () => true,
         parents: () => current_version.length ? current_version : null,
         peer,
         signal: ac.signal
@@ -120,7 +120,7 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
                     headers: { "Merge-Type": "simpleton",
                         ...(content_type ? {"Content-Type": content_type} : {}) },
                     method: "PUT",
-                    retry: true,
+                    retry: () => true,
                     version, parents, patches,
                     peer
                 })
