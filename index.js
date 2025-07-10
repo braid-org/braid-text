@@ -180,8 +180,8 @@ braid_text.serve = async (req, res, options = {}) => {
                     // approximation of memory usage for this update
                     body ? body.length :
                         patches.reduce((a, b) => a + b.range.length + b.content.length, 0),
-                    options.put_buffer_max_time,
-                    options.put_buffer_max_space)
+                    options.recv_buffer_max_time,
+                    options.recv_buffer_max_space)
 
                 // make sure we have the necessary parents now
                 var unknowns = []
