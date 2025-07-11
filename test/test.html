@@ -1024,4 +1024,25 @@ runTest(
     '"yo-1", "hi-5", "hi-8"'
 )
 
+runTest(
+    "test that subscribe returns current-version header",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-11'],
+            parents: [],
+            body: 'xyz'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            subscribe: true
+        })
+        return r.headers.get('current-version')
+    },
+    '"hi-11"'
+)
+
 </script>
