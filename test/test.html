@@ -18,8 +18,20 @@
     .failed {
         background-color: #ffebee;
     }
+    #summaryContainer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-bottom: 20px;
+    }
+    .summaryBox {
+        width: 25px;
+        height: 25px;
+        border: 1px solid #ddd;
+    }    
 </style>
 <script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
+<div id="summaryContainer"></div>
 <div id="testContainer"></div>
 <script type=module>
 
@@ -51,20 +63,36 @@ function updateTestResult(div, passed, message, got, expected) {
     }
 }
 
+function createSummaryBox() {
+    var summaryContainer = document.getElementById('summaryContainer')
+    const box = document.createElement('div');
+    box.className = 'summaryBox running';
+    summaryContainer.appendChild(box);
+    return box;
+}
+
+function updateSummaryBox(box, passed) {
+    box.className = `summaryBox ${passed ? 'passed' : passed === false ? 'failed' : 'other'}`;
+}
+
 async function runTest(testName, testFunction, expectedResult) {
     delay += 70
 
     await new Promise(done => setTimeout(done, delay))
     const div = createTestDiv(testName)
+    const summaryBox = createSummaryBox()
     try {
         let x = await testFunction()
         if (x == expectedResult) {
             updateTestResult(div, true, x)
+            updateSummaryBox(summaryBox, true)
         } else {
             updateTestResult(div, false, "Mismatch:", x, expectedResult)
+            updateSummaryBox(summaryBox, false)
         }
     } catch (error) {
         updateTestResult(div, false, "Error:", error.message || error, expectedResult)
+        updateSummaryBox(summaryBox, false)
     }
 }
 
@@ -454,6 +482,135 @@ runTest(
         return r2.headers.get('current-version') + ' ' + JSON.parse(r2.headers.get('current-version')) + ` buf.byteLength:${buf.byteLength}`
     },
     '"hi\\u2211-1" hi∑-1 buf.byteLength:0'
+)
+
+runTest(
+    "test accept-encoding updates(dt) (with parents)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'x')
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            parents: ['hi-0'],
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                doc.mergeBytes(u.body)
+                done(doc.get())
+                doc.free()
+                a.abort()
+            })
+        })
+    },
+    'xy'
+)
+
+runTest(
+    "test accept-encoding updates(dt)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        var doc = new Doc('yo')
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                doc.mergeBytes(u.body)
+                done(doc.get())
+                doc.free()
+                a.abort()
+            })
+        })
+    },
+    'xy'
+)
+
+runTest(
+    "test accept-encoding updates(dt), getting non-encoded update",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        setTimeout(async () => {
+            await braid_fetch(`/${key}`, {
+                method: 'PUT',
+                version: ['yo-0'],
+                parents: ['hi-1'],
+                patches: [{unit: 'text', range: '[2:2]', content: 'z'}]
+            })
+        }, 200)
+
+        var results = []
+
+        var doc = new Doc('yo')
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                if (!u.status) {
+                    doc.mergeBytes(u.body)
+                    results.push(doc.get())
+                    doc.free()
+                } else {
+                    results.push(u.patches[0].content_text)
+                    done(results.join(''))
+                    a.abort()
+                }
+            })
+        })
+    },
+    'xyz'
 )
 
 runTest(

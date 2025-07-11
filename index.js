@@ -129,6 +129,9 @@ braid_text.serve = async (req, res, options = {}) => {
                 version: req.version,
                 parents: req.parents,
                 merge_type,
+                accept_encoding:
+                    req.headers['x-accept-encoding'] ??
+                    req.headers['accept-encoding'],
                 subscribe: x => res.sendVersion(x),
                 write: (x) => res.write(x)
             }
@@ -229,10 +232,9 @@ braid_text.get = async (key, options) => {
     if (options.parents) validate_version_array(options.parents)
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
+    var version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
 
     if (!options.subscribe) {
-        var version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
-
         if (options.transfer_encoding === 'dt') {
             // optimization: if requesting current version
             // pretend as if they didn't set a version,
@@ -251,7 +253,7 @@ braid_text.get = async (key, options) => {
                 }
                 if (options.parents) {
                     bytes = doc.getPatchSince(
-                    dt_get_local_version(bytes, options.parents))
+                        dt_get_local_version(bytes, options.parents))
                 }
                 doc.free()
             } else bytes = resource.doc.toBytes()
@@ -267,7 +269,6 @@ braid_text.get = async (key, options) => {
             }
     } else {
         if (options.merge_type != "dt") {
-            let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
             let x = { version }
 
             if (!options.parents && !options.version) {
@@ -295,32 +296,43 @@ braid_text.get = async (key, options) => {
                 resource.doc = defrag_dt(resource.doc)
             }
 
-            var updates = null
-            if (!options.parents && !options.version) {
-                options.subscribe({
-                    version: [],
-                    parents: [],
-                    body: "",
-                })
-
-                updates = dt_get_patches(resource.doc)
+            if (options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1].split(',').map(x=>x.trim()).includes('dt')) {
+                var bytes = resource.doc.toBytes()
+                if (options.parents) {
+                    var doc = Doc.fromBytes(bytes)
+                    bytes = doc.getPatchSince(
+                        dt_get_local_version(bytes, options.parents))
+                    doc.free()
+                }
+                options.subscribe({ encoding: 'dt', body: bytes })
             } else {
-                // Then start the subscription from the parents in options
-                updates = dt_get_patches(resource.doc, options.parents || options.version)
+                var updates = null
+                if (!options.parents && !options.version) {
+                    options.subscribe({
+                        version: [],
+                        parents: [],
+                        body: "",
+                    })
+
+                    updates = dt_get_patches(resource.doc)
+                } else {
+                    // Then start the subscription from the parents in options
+                    updates = dt_get_patches(resource.doc, options.parents || options.version)
+                }
+
+                for (let u of updates)
+                    options.subscribe({
+                        version: [u.version],
+                        parents: u.parents,
+                        patches: [{ unit: u.unit, range: u.range, content: u.content }],
+                    })
+
+                // Output at least *some* data, or else chrome gets confused and
+                // thinks the connection failed.  This isn't strictly necessary,
+                // but it makes fewer scary errors get printed out in the JS
+                // console.
+                if (updates.length === 0) options.write?.("\r\n")
             }
-
-            for (let u of updates)
-                options.subscribe({
-                    version: [u.version],
-                    parents: u.parents,
-                    patches: [{ unit: u.unit, range: u.range, content: u.content }],
-                })
-
-            // Output at least *some* data, or else chrome gets confused and
-            // thinks the connection failed.  This isn't strictly necessary,
-            // but it makes fewer scary errors get printed out in the JS
-            // console.
-            if (updates.length === 0) options.write?.("\r\n")
 
             resource.clients.add(options)
         }
