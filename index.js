@@ -291,11 +291,6 @@ braid_text.get = async (key, options) => {
             options.my_last_sent_version = x.version
             resource.simpleton_clients.add(options)
         } else {
-            if (resource.need_defrag) {
-                if (braid_text.verbose) console.log(`doing defrag..`)
-                resource.need_defrag = false
-                resource.doc = defrag_dt(resource.doc)
-            }
 
             if (options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1].split(',').map(x=>x.trim()).includes('dt')) {
                 var bytes = resource.doc.toBytes()
@@ -526,8 +521,6 @@ braid_text.put = async (key, options) => {
     for (let b of bytes) resource.doc.mergeBytes(b)
     resource.val = resource.doc.get()
 
-    resource.need_defrag = true
-
     var post_commit_updates = []
 
     if (options.merge_type != "dt") {
@@ -674,17 +667,12 @@ async function get_resource(key) {
 
         resource.db_delta = change
 
-        resource.doc = defrag_dt(resource.doc)
-        resource.need_defrag = false
-
         resource.actor_seqs = {}
 
-        let max_version = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
-        for (let i = 0; i <= max_version; i++) {
-            let v = resource.doc.localToRemoteVersion([i])[0]
-            if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
-            resource.actor_seqs[v[0]].add_range(v[1], v[1])
-        }
+        dt_get_actor_seq_runs([...resource.doc.toBytes()], (actor, base, len) => {
+            if (!resource.actor_seqs[actor]) resource.actor_seqs[actor] = new RangeSet()
+            resource.actor_seqs[actor].add_range(base, base + len - 1)
+        })
 
         resource.val = resource.doc.get()
 
@@ -1069,16 +1057,19 @@ function dt_get(doc, version, agent = null, anti_version = null) {
 }
 
 function dt_get_patches(doc, version = null) {
+    if (version && v_eq(version,
+        doc.getRemoteVersion().map((x) => x.join("-")).sort())) {
+        // they want everything past the end, which is nothing
+        return []
+    }
+
     let bytes = doc.toBytes()
     doc = Doc.fromBytes(bytes)
 
     let [_agents, versions, parentss] = dt_parse([...bytes])
 
     let op_runs = []
-    if (version && v_eq(version,
-        doc.getRemoteVersion().map((x) => x.join("-")).sort())) {
-        // they want everything past the end, which is nothing
-    } else if (version?.length) {
+    if (version?.length) {
         let frontier = {}
         version.forEach((x) => frontier[x] = true)
         let local_version = []
@@ -1221,6 +1212,48 @@ function dt_parse(byte_array) {
     }
 
     return [agents, versions, parentss]
+}
+
+function dt_get_actor_seq_runs(byte_array, cb) {
+    if (new TextDecoder().decode(new Uint8Array(byte_array.splice(0, 8))) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
+
+    if (byte_array.shift() != 0) throw new Error("dt parse error, expected version 0")
+
+    let agents = []
+
+    while (byte_array.length) {
+        let id = byte_array.shift()
+        let len = dt_read_varint(byte_array)
+        if (id == 1) {
+        } else if (id == 3) {
+            let goal = byte_array.length - len
+            while (byte_array.length > goal) {
+                agents.push(dt_read_string(byte_array))
+            }
+        } else if (id == 20) {
+        } else if (id == 21) {
+            let seqs = {}
+            let goal = byte_array.length - len
+            while (byte_array.length > goal) {
+                let part0 = dt_read_varint(byte_array)
+                let has_jump = part0 & 1
+                let agent_i = (part0 >> 1) - 1
+                let run_length = dt_read_varint(byte_array)
+                let jump = 0
+                if (has_jump) {
+                    let part2 = dt_read_varint(byte_array)
+                    jump = part2 >> 1
+                    if (part2 & 1) jump *= -1
+                }
+                let base = (seqs[agent_i] || 0) + jump
+
+                cb(agents[agent_i], base, run_length)
+                seqs[agent_i] = base + run_length
+            }
+        } else {
+            byte_array.splice(0, len)
+        }
+    }
 }
 
 function dt_get_local_version(bytes, version) {
@@ -1492,11 +1525,6 @@ function dt_create_bytes(version, parents, pos, del, ins) {
     return bytes
 }
 
-function defrag_dt(doc) {
-    let bytes = doc.toBytes()
-    doc.free()
-    return Doc.fromBytes(bytes, 'server')
-}
 
 function OpLog_remote_to_local(doc, frontier) {
     let map = Object.fromEntries(frontier.map((x) => [x, true]))

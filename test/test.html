@@ -97,6 +97,65 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test loading a previously saved resource",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f1 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-2'],
+            parents: [],
+            body: 'abc'
+        })
+
+        var f1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `
+                delete braid_text.cache['/${key}']
+                res.end()
+            `
+        })
+
+        var r = await braid_fetch(`/${key}`)
+        return await r.text()
+    },
+    'abc'
+)
+
+runTest(
+    "test non-contigous ids",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-10'],
+            parents: [],
+            body: 'abc'
+        })
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-20'],
+            parents: ['hi-10'],
+            body: 'ABC'
+        })
+
+        var f1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `
+                delete braid_text.cache['/${key}']
+                res.end()
+            `
+        })
+
+        var r = await braid_fetch(`/${key}`)
+        return await r.text()
+    },
+    'ABC'
+)
+
+runTest(
     "test when PUT cache/buffer size fails",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)

@@ -2,7 +2,7 @@
 var port = process.argv[2] || 8889
 
 var braid_text = require("../index.js")
-braid_text.db_folder = null
+braid_text.db_folder = './test_db_folder'
 
 var server = require("http").createServer(async (req, res) => {
     console.log(`${req.method} ${req.url}`)
@@ -10,6 +10,21 @@ var server = require("http").createServer(async (req, res) => {
     // Free the CORS
     braid_text.free_cors(res)
     if (req.method === 'OPTIONS') return
+
+    if (req.url.startsWith('/eval')) {
+        var body = await new Promise(done => {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => done(Buffer.concat(chunks)))
+        })
+        try {
+            eval('' + body)
+        } catch (error) {
+            res.writeHead(500, { 'Content-Type': 'text/plain' })
+            res.end(`Error: ${error.message}`)
+        }
+        return
+    }
 
     if (req.url.startsWith('/test.html')) {
         let parts = req.url.split(/[\?&=]/g)
@@ -45,6 +60,7 @@ var server = require("http").createServer(async (req, res) => {
     braid_text.serve(req, res)
 })
 
-server.listen(port, () => {
+// only listen on 'localhost' for security
+server.listen(port, 'localhost', () => {
     console.log(`serving: http://localhost:${port}/test.html`)
 })
