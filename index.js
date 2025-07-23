@@ -426,7 +426,7 @@ braid_text.put = async (key, options) => {
     // validate version: make sure we haven't seen it already
     if (resource.actor_seqs[v[0]]?.has(v[1])) {
 
-        if (!options.validate_already_seen_versions) return
+        if (!options.validate_already_seen_versions) return { change_count }
 
         // if we have seen it already, make sure it's the same as before
         let updates = dt_get_patches(resource.doc, og_parents)
@@ -483,7 +483,7 @@ braid_text.put = async (key, options) => {
         }
 
         // we already have this version, so nothing left to do
-        return
+        return { change_count: change_count }
     }
     if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
     resource.actor_seqs[v[0]].add_range(v[1] + 1 - change_count, v[1])

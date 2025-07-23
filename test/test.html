@@ -97,6 +97,98 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test PUTing a version that the server already has",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+
+        var r2 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+
+        return r1.status + " " + r2.status
+    },
+    '200 200'
+)
+
+runTest(
+    "test validate_already_seen_versions with same version",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
+
+                res.end('' + change_count)
+            })()`
+        })
+
+        var r2 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt", validate_already_seen_versions: true })
+
+                res.end('' + change_count)
+            })()`
+        })
+
+        return (await r1.text()) + " " + (await r2.text())
+    },
+    '3 3'
+)
+
+runTest(
+    "test validate_already_seen_versions with modified version",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
+
+                res.end('' + change_count)
+            })()`
+        })
+
+        var r2 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                try {
+                    var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "ABC"}], merge_type: "dt", validate_already_seen_versions: true })
+
+                    res.end('' + change_count)
+                } catch (e) {
+                    res.end(e.message)
+                }
+            })()`
+        })
+
+        return await r2.text()
+    },
+    'invalid update: different from previous update with same version'
+)
+
+runTest(
     "test loading a previously saved resource",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)
