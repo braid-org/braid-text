@@ -293,14 +293,20 @@ braid_text.get = async (key, options) => {
         } else {
 
             if (options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1].split(',').map(x=>x.trim()).includes('dt')) {
-                var bytes = resource.doc.toBytes()
-                if (options.parents) {
-                    var doc = Doc.fromBytes(bytes)
-                    bytes = doc.getPatchSince(
-                        dt_get_local_version(bytes, options.parents))
-                    doc.free()
+                // optimization: if client wants past current version,
+                //               send empty dt
+                if (options.parents && v_eq(options.parents, version)) {
+                    options.subscribe({ encoding: 'dt', body: new Doc().toBytes() })
+                } else {
+                    var bytes = resource.doc.toBytes()
+                    if (options.parents) {
+                        var doc = Doc.fromBytes(bytes)
+                        bytes = doc.getPatchSince(
+                            dt_get_local_version(bytes, options.parents))
+                        doc.free()
+                    }
+                    options.subscribe({ encoding: 'dt', body: bytes })
                 }
-                options.subscribe({ encoding: 'dt', body: bytes })
             } else {
                 var updates = null
                 if (!options.parents && !options.version) {

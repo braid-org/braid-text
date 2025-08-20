@@ -675,6 +675,45 @@ runTest(
 )
 
 runTest(
+    "test accept-encoding updates(dt) (with parents which are current version)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'xy')
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            parents: ['hi-1'],
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                doc.mergeBytes(u.body)
+                done(doc.get())
+                doc.free()
+                a.abort()
+            })
+        })
+    },
+    'xy'
+)
+
+runTest(
     "test accept-encoding updates(dt)",
     async () => {
         await dt_p
