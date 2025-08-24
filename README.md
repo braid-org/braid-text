@@ -37,7 +37,7 @@ Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chro
 
 Check out the `server-demo.js` file to see examples for how to add simple access control, where a user need only enter a password into a cookie in the javascript console like: `document.cookie = 'password'`; and a `/pages` endpoint to show all the edited pages.
 
-## General Use on Server
+## General Use as Server
 
 Install it in your project:
 ```shell
@@ -94,51 +94,52 @@ http_server.on("request", (req, res) => {
     - `patches`: <small style="color:lightgrey">[optional]</small> Array of patches, each of the form `{unit: 'text', range: '[1:3]', content: 'hi'}`, which would replace the second and third unicode code-points in the text with `hi`.  See Braid [Range-Patches](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-range-patch-01.txt).
     - `peer`: <small style="color:lightgrey">[optional]</small> Identifies this peer. This mutation will not be echoed back to `get` subscriptions that use this same `peer` header.
 
-## General Use on Client
+## General Use as Client
+
+Here's a basic running example to start:
 
 ```html
+<!-- 1. Your textarea -->
+<textarea id="my_textarea"></textarea>
+
+<!-- 2. Include the library -->
+<script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
 <script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
+
+<!-- 3. Wire it up -->
 <script>
-
-  // connect to the server
-  let simpleton = simpleton_client('https://example.org/some-resource', {
-    apply_remote_update: ({ state, patches }) => {
-
-      // Apply the incoming state or patches to local text here.
-      //
-      // Example data:
-      //   state: "Hello World"                               // The new text
-      //   patches: [{ range: [5, 5], content: " World" }]    // Patches that create the new text
-      //
-      // Then return the new state of textarea as a string:
-      return new_state
-    },
-    generate_local_diff_update: (prev_state) => {
-
-      // Compute diff between prev_state ^ and the current textarea string, such as:
-      //
-      //   var patches = [{
-      //     range: [5, 5],      // The range from position 5 to position 5
-      //     content: " World"   // is replaced with the string " World"
-      //   }]
-      //
-      // ...to insert something after a prev_state of "Hello".
-
-      // Then return the new state (as a string) and the diff (as `patches`)
-      return {new_state, patches}
-    },
+  // Connect to server
+  var simpleton = simpleton_client('https://braid.org/simpleton_example', {
+    on_state: state => my_textarea.value = state,  // incoming changes
+    get_state: () => my_textarea.value             // outgoing changes
   })
-    
-  ...
-    
-  // When changes occur in client's textarea, let simpleton know,
-  // so that it can call generate_local_diff_update() to ask for them.
-  simpleton.changed()
 
+  // Tell simpleton when user types
+  my_textarea.oninput = () => simpleton.changed()
 </script>
 ```
 
-See [editor.html](https://raw.githubusercontent.com/braid-org/braid-text/master/editor.html) for a simple working example.
+You should see something if you run this (though the server in that example will likely ignore your changes). 
+
+The basic idea is that you create a simpleton_client and tell it to connect to a url. Any incoming changes trigger the `on_state` callback. For outgoing changes, you'd think we would tell simpleton the new state when we get the `oninput` event — however, the network may be backed up, and simpleton wants to hold off on sending more updates. So instead, we just inform simpleton that a change has occurred and let it handle when to actually send the change to the server. 
+
+This decoupling between `simpleton.changed` and `get_state` is especially helpful when disconnecting from the server for extended periods (like getting on a plane for a couple hours). Without it, simpleton would have queued up a message for every change made during those two hours and try to send them all upon reconnection. With the decoupling, simpleton can wait until reconnection and then request a single diff to the new final state.
+
+### Finer-Grained Integration
+
+There are a couple ways to do a more fine-grained integration:
+
+**1. Receiving patches instead of full state**
+
+Rather than receiving a completely new state in `on_state`, you can receive just changes to the current state in `on_patches`, as an array of patches. This can be more efficient, especially if you're integrating with an editor that has an API for making edits (rather than needing to set the whole string, as with an HTML textarea). Even with a textarea though, getting patches can be helpful for updating the cursor or selection position.
+
+**2. Supplying custom patch generation**
+
+Rather than only supplying `get_state`, you can also supply `get_patches` — a function that accepts a string representing the document at some point in the past and returns an array of patches to get from there to the current state. 
+
+Simpleton has a default simple way of computing this (scanning for a common prefix and suffix), but you may have a better function that handles complex cases. For example, when a user pastes in what seems like a large change that replaces the entire document, proper diff analysis might reveal it's just a few edits here and there. Also, with some editors, the analogous `oninput` event may provide patches for free, making `get_patches` more efficient.
+
+You can see an example of both these finer-grained integration techniques here: [editor.html](https://raw.githubusercontent.com/braid-org/braid-text/master/editor.html).
 
 ## Client API
 
