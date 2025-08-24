@@ -9,16 +9,9 @@
 <script src="/simpleton-client.js"></script>
 <script>
   let simpleton = simpleton_client(location.pathname, {
-    apply_remote_update: ({ state, patches }) => {
-      if (state !== undefined) texty.value = state;
-      else apply_patches_and_update_selection(texty, patches);
-      return texty.value;
-    },
-    generate_local_diff_update: (prev_state) => {
-      var patches = diff(prev_state, texty.value);
-      if (patches.length === 0) return null;
-      return { patches, new_state: texty.value };
-    },
+    on_patches: (patches) => apply_patches_and_update_selection(texty, patches),
+    get_patches: (prev_state) => diff(prev_state, texty.value),
+    get_state: () => texty.value,
     on_error: (e) => {
       texty.disabled = true
       texty.style.background = '#fee'

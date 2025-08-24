@@ -148,38 +148,59 @@ simpleton = simpleton_client(url, options)
 
 - `url`: The URL of the resource to synchronize with.
 - `options`: An object containing the following properties:
-  - `apply_remote_update`: A function that will be called whenever an update is received from the server. It should have the following signature:
+
+  ### Incoming Updates
+
+  - `on_patches`: <small style="color:lightgrey">[optional]</small> A function called when patches are received from the server:
 
     ```javascript
-    ({state, patches}) => {...}
+    (patches) => {...}
     ```
 
-    - `state`: If present, represents the new value of the text.
-    - `patches`: If present, an array of patch objects, each representing a string-replace operation. Each patch object has the following properties:
+    - `patches`: An array of patch objects, each representing a string-replace operation. Each patch object has:
       - `range`: An array of two numbers, `[start, end]`, specifying the start and end positions of the characters to be deleted.
       - `content`: The text to be inserted in place of the deleted characters.
 
     Note that patches will always be in order, but the range positions of each patch reference the original string, i.e., the second patch's range values do not take into account the application of the first patch.
 
-    The function should apply the `state` or `patches` to the local text and return the new state.
-
-  - `generate_local_diff_update`: A function that will be called whenever a local update occurs, but may be delayed if the network is congested. It should have the following signature:
+  - `on_state`: <small style="color:lightgrey">[optional]</small> A function called when a complete state update is received from the server:
 
     ```javascript
-    (prev_state) => {...}
+    (state) => {...}
     ```
 
-    The function should calculate the difference between `prev_state` and the current state, and express this difference as an array of patches (similar to the ones described in `apply_remote_update`).
+    - `state`: The new complete value of the text.
 
-    If a difference is detected, the function should return an object with the following properties:
-    - `new_state`: The current state of the text.
-    - `patches`: An array of patch objects representing the changes.
+  ### Local State Management
 
-    If no difference is detected, the function should return `undefined` or `null`.
+  - `get_state`: **[required]** A function that returns the current state of the text:
+
+    ```javascript
+    () => current_state
+    ```
+
+  - `get_patches`: <small style="color:lightgrey">[optional]</small> A function that generates patches representing changes between a previous state and the current state:
+
+    ```javascript
+    (prev_state) => patches
+    ```
+
+    Returns an array of patch objects representing the changes. The default implementation finds a common prefix and suffix for a simple diff, but you can provide a more sophisticated implementation or track patches directly from your editor.
+
+  ### Other Options
 
   - `content_type`: <small style="color:lightgrey">[optional]</small> If set, this value will be sent in the `Accept` and `Content-Type` headers to the server.
 
-- `simpleton.changed()`: Call this function to report local updates whenever they occur, e.g., in the `oninput` event handler of a textarea being synchronized.
+### Methods
+
+- `simpleton.changed()`: Call this function to report local updates whenever they occur, e.g., in the `oninput` event handler of a textarea being synchronized. The system will call `get_patches` when it needs to send updates to the server.
+
+### Deprecated Options
+
+The following options are deprecated and should be replaced with the new API:
+
+- ~~`apply_remote_update`~~ → Use `on_patches` and `on_state` instead
+- ~~`generate_local_diff_update`~~ → Use `get_patches` and `get_state` instead
 
 ## Testing
 

@@ -2,22 +2,51 @@
 // 
 // url: resource endpoint
 //
-// apply_remote_update: ({patches, state}) => {...}
+// on_patches?: (patches) => void
+//     processes incoming patches
+//
+// on_state?: (state) => void
+//     processes incoming state
+//
+// get_patches?: (prev_state) => patches
+//     returns patches representing diff
+//       between prev_state and current state,
+//     which are guaranteed to be different
+//       if this method is being called
+//     (the default does this in a fast/simple way,
+//      finding a common prefix and suffix,
+//      but you can supply something better,
+//      or possibly keep track of patches as they come from your editor)
+//
+// get_state: () => current_state
+//     returns the current state
+//
+// [DEPRECATED] apply_remote_update: ({patches, state}) => {...}
 //     this is for incoming changes;
 //     one of these will be non-null,
 //     and can be applied to the current state.
 //
-// generate_local_diff_update: (prev_state) => {...}
+// [DEPRECATED] generate_local_diff_update: (prev_state) => {...}
 //     this is to generate outgoing changes,
 //     and if there are changes, returns { patches, new_state }
 //
 // content_type: used for Accept and Content-Type headers
 //
-// returns { changed(): (diff_function) => {...} }
-//     this is for outgoing changes;
-//     diff_function = () => ({patches, new_version}).
+// returns { changed }
+//     call changed whenever there is a local change,
+//     and the system will call get_patches when it needs to.
 //
-function simpleton_client(url, { apply_remote_update, generate_local_diff_update, content_type, on_error, on_res }) {
+function simpleton_client(url, {
+    on_patches,
+    on_state,
+    get_patches,
+    get_state,
+    apply_remote_update, // DEPRECATED
+    generate_local_diff_update, // DEPRECATED
+    content_type,
+    on_error,
+    on_res
+}) {
     var peer = Math.random().toString(36).substr(2)
     var current_version = []
     var prev_state = ""
@@ -69,7 +98,19 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
                     }
                 }
 
-                prev_state = apply_remote_update(update)
+                if (apply_remote_update) {
+                    // DEPRECATED
+                    prev_state = apply_remote_update(update)
+                } else {
+                    var patches = update.patches ||
+                        [{range: [0, 0], content: update.state}]
+                    if (on_patches) {
+                        on_patches(patches)
+                        prev_state = get_state()
+                    } else prev_state = apply_patches(prev_state, patches)
+                }
+
+                if (on_state) on_state(prev_state)
             }
         }, on_error)
     }).catch(on_error)
@@ -81,9 +122,17 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
       changed: async () => {
         if (outstanding_changes >= max_outstanding_changes) return
         while (true) {
-            var update = generate_local_diff_update(prev_state)
-            if (!update) return   // Stop if there wasn't a change!
-            var {patches, new_state} = update
+            if (generate_local_diff_update) {
+                // DEPRECATED
+                var update = generate_local_diff_update(prev_state)
+                if (!update) return   // Stop if there wasn't a change!
+                var {patches, new_state} = update
+            } else {
+                var new_state = get_state()
+                if (new_state === prev_state) return // Stop if there wasn't a change!
+                var patches = get_patches ? get_patches(prev_state) :
+                    [simple_diff(prev_state, new_state)]
+            }
 
             // convert from js-indicies to code-points
             let c = 0
@@ -133,18 +182,42 @@ function simpleton_client(url, { apply_remote_update, generate_local_diff_update
         }
       }
     }
-}
 
-function get_char_size(s, i) {
-    const charCode = s.charCodeAt(i)
-    return (charCode >= 0xd800 && charCode <= 0xdbff) ? 2 : 1
-}
-
-function count_code_points(str) {
-    let code_points = 0
-    for (let i = 0; i < str.length; i++) {
-        if (str.charCodeAt(i) >= 0xd800 && str.charCodeAt(i) <= 0xdbff) i++
-        code_points++
+    function get_char_size(s, i) {
+        const charCode = s.charCodeAt(i)
+        return (charCode >= 0xd800 && charCode <= 0xdbff) ? 2 : 1
     }
-    return code_points
+
+    function count_code_points(str) {
+        let code_points = 0
+        for (let i = 0; i < str.length; i++) {
+            if (str.charCodeAt(i) >= 0xd800 && str.charCodeAt(i) <= 0xdbff) i++
+            code_points++
+        }
+        return code_points
+    }
+
+    function simple_diff(a, b) {
+        // Find common prefix
+        var p = 0
+        var len = Math.min(a.length, b.length)
+        while (p < len && a[p] === b[p]) p++
+
+        // Find common suffix (from what remains after prefix)
+        var s = 0
+        len -= p
+        while (s < len && a[a.length - s - 1] === b[b.length - s - 1]) s++
+
+        return {range: [p, a.length - s], content: b.slice(p, b.length - s)}
+    }
+
+    function apply_patches(state, patches) {
+        var offset = 0
+        for (var p of patches) {
+            state = state.substring(0, p.range[0] + offset) + p.content + 
+                    state.substring(p.range[1] + offset)
+            offset += p.content.length - (p.range[1] - p.range[0])
+        }
+        return state
+    }
 }

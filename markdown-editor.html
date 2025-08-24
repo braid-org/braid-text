@@ -27,27 +27,14 @@ t = function() {
 };
 
 var simpleton = simpleton_client(location.pathname, {
-  apply_remote_update: function(x) {
-    if (x.state !== void 0) {
-      t().value = x.state;
-    } else {
-      apply_patches_and_update_selection(t(), x.patches);
-    }
+  on_patches: (patches) => {
+    apply_patches_and_update_selection(t(), patches);
     state.source = t().value;
     update_markdown_later();
-    return t().value;
   },
-  generate_local_diff_update: function(prev_state) {
-    var patches;
-    patches = diff(prev_state, t().value);
-    if (patches.length === 0) {
-      return null;
-    }
-    return {
-      patches: patches,
-      new_state: t().value
-    };
-  },
+  get_patches: (prev_state) => diff(prev_state, t().value),
+  get_state: () => t().value,
+
   on_error: (e) => {
     t().disabled = true
     t().style.background = '#fee'
