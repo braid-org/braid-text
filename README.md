@@ -102,7 +102,7 @@ Here's a basic running example to start:
 <!-- 1. Your textarea -->
 <textarea id="my_textarea"></textarea>
 
-<!-- 2. Include the library -->
+<!-- 2. Include the libraries -->
 <script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
 <script src="https://unpkg.com/braid-text/simpleton-client.js"></script>
 
@@ -119,88 +119,113 @@ Here's a basic running example to start:
 </script>
 ```
 
-You should see something if you run this (though the server in that example will likely ignore your changes). 
+You should see something if you run this (though the server in this example will likely ignore your changes). 
 
-The basic idea is that you create a simpleton_client and tell it to connect to a url. Any incoming changes trigger the `on_state` callback. For outgoing changes, you'd think we would tell simpleton the new state when we get the `oninput` event — however, the network may be backed up, and simpleton wants to hold off on sending more updates. So instead, we just inform simpleton that a change has occurred and let it handle when to actually send the change to the server. 
+### How It Works
 
-This decoupling between `simpleton.changed` and `get_state` is especially helpful when disconnecting from the server for extended periods (like getting on a plane for a couple hours). Without it, simpleton would have queued up a message for every change made during those two hours and try to send them all upon reconnection. With the decoupling, simpleton can wait until reconnection and then request a single diff to the new final state.
+The client uses a **decoupled update mechanism** for efficiency:
 
-### Finer-Grained Integration
+1. When users type, you call `simpleton.changed()` to notify the client that something changed
+2. The client decides *when* to actually fetch and send updates based on network conditions
+3. When ready, it calls your `get_state` function to get the current text
 
-There are a couple ways to do a more fine-grained integration:
+This design prevents network congestion and handles disconnections gracefully. For example, if you edit offline for hours, the client will send just one efficient diff when reconnecting, rather than thousands of individual keystrokes.
 
-**1. Receiving patches instead of full state**
+### Advanced Integration
 
-Rather than receiving a completely new state in `on_state`, you can receive just changes to the current state in `on_patches`, as an array of patches. This can be more efficient, especially if you're integrating with an editor that has an API for making edits (rather than needing to set the whole string, as with an HTML textarea). Even with a textarea though, getting patches can be helpful for updating the cursor or selection position.
+For better performance and control, you can work with patches instead of full text:
 
-**2. Supplying custom patch generation**
+#### Receiving Patches
 
-Rather than only supplying `get_state`, you can also supply `get_patches` — a function that accepts a string representing the document at some point in the past and returns an array of patches to get from there to the current state. 
+Instead of receiving complete text updates, you can process individual changes:
 
-Simpleton has a default simple way of computing this (scanning for a common prefix and suffix), but you may have a better function that handles complex cases. For example, when a user pastes in what seems like a large change that replaces the entire document, proper diff analysis might reveal it's just a few edits here and there. Also, with some editors, the analogous `oninput` event may provide patches for free, making `get_patches` more efficient.
+```javascript
+var simpleton = simpleton_client(url, {
+  on_patches: (patches) => {
+    // Apply each patch to your editor..
+  },
+  get_state: () => editor.getValue()
+})
+```
 
-You can see an example of both these finer-grained integration techniques here: [editor.html](https://raw.githubusercontent.com/braid-org/braid-text/master/editor.html).
+This is more efficient for large documents and helps preserve cursor position.
+
+#### Custom Patch Generation
+
+You can provide your own diff algorithm or use patches from your editor's API:
+
+```javascript
+var simpleton = simpleton_client(url, {
+  on_state: state => editor.setValue(state),
+  get_state: () => editor.getValue(),
+  get_patches: (prev_state) => {
+    // Use your own diff algorithm or editor's change tracking
+    return compute_patches(prev_state, editor.getValue())
+  }
+})
+```
+
+See [editor.html](https://github.com/braid-org/braid-text/blob/master/editor.html) for a complete example with CodeMirror integration.
 
 ## Client API
+
+### Constructor
 
 ```javascript
 simpleton = simpleton_client(url, options)
 ```
 
-- `url`: The URL of the resource to synchronize with.
-- `options`: An object containing the following properties:
+Creates a new Simpleton client that synchronizes with a Braid-Text server.
 
-  ### Incoming Updates
+**Parameters:**
+- `url`: The URL of the resource to synchronize with
+- `options`: Configuration object with the following properties:
 
-  - `on_patches`: <small style="color:lightgrey">[optional]</small> A function called when patches are received from the server:
+#### Required Options
 
-    ```javascript
-    (patches) => {...}
-    ```
+- `get_state`: **[required]** Function that returns the current text state
+  ```javascript
+  () => current_text_string
+  ```
 
-    - `patches`: An array of patch objects, each representing a string-replace operation. Each patch object has:
-      - `range`: An array of two numbers, `[start, end]`, specifying the start and end positions of the characters to be deleted.
-      - `content`: The text to be inserted in place of the deleted characters.
+#### Incoming Updates (choose one)
 
-    Note that patches will always be in order, but the range positions of each patch reference the original string, i.e., the second patch's range values do not take into account the application of the first patch.
+- `on_state`: <small style="color:lightgrey">[optional]</small> Callback for receiving complete state updates
+  ```javascript
+  (state) => { /* update your UI with new text */ }
+  ```
 
-  - `on_state`: <small style="color:lightgrey">[optional]</small> A function called when a complete state update is received from the server:
+- `on_patches`: <small style="color:lightgrey">[optional]</small> Callback for receiving incremental changes
+  ```javascript
+  (patches) => { /* apply patches to your editor */ }
+  ```
+  Each patch has:
+  - `range`: `[start, end]` - positions to delete (in original text coordinates)
+  - `content`: Text to insert at that position
+  
+  **Note:** All patches reference positions in the original text before any patches are applied.
 
-    ```javascript
-    (state) => {...}
-    ```
+#### Outgoing Updates
 
-    - `state`: The new complete value of the text.
+- `get_patches`: <small style="color:lightgrey">[optional]</small> Custom function to generate patches
+  ```javascript
+  (previous_state) => array_of_patches
+  ```
+  If not provided, uses a simple prefix/suffix diff algorithm.
 
-  ### Local State Management
+#### Additional Options
 
-  - `get_state`: **[required]** A function that returns the current state of the text:
-
-    ```javascript
-    () => current_state
-    ```
-
-  - `get_patches`: <small style="color:lightgrey">[optional]</small> A function that generates patches representing changes between a previous state and the current state:
-
-    ```javascript
-    (prev_state) => patches
-    ```
-
-    Returns an array of patch objects representing the changes. The default implementation finds a common prefix and suffix for a simple diff, but you can provide a more sophisticated implementation or track patches directly from your editor.
-
-  ### Other Options
-
-  - `content_type`: <small style="color:lightgrey">[optional]</small> If set, this value will be sent in the `Accept` and `Content-Type` headers to the server.
+- `content_type`: <small style="color:lightgrey">[optional]</small> MIME type for `Accept` and `Content-Type` headers
 
 ### Methods
 
-- `simpleton.changed()`: Call this function to report local updates whenever they occur, e.g., in the `oninput` event handler of a textarea being synchronized. The system will call `get_patches` when it needs to send updates to the server.
+- `simpleton.changed()`: Notify the client that local changes have occurred. Call this in your editor's change event handler. The client will call `get_patches` and `get_state` when it's ready to send updates.
 
 ### Deprecated Options
 
 The following options are deprecated and should be replaced with the new API:
 
-- ~~`apply_remote_update`~~ → Use `on_patches` and `on_state` instead
+- ~~`apply_remote_update`~~ → Use `on_patches` or `on_state` instead
 - ~~`generate_local_diff_update`~~ → Use `get_patches` and `get_state` instead
 
 ## Testing
