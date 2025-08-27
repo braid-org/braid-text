@@ -97,6 +97,90 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test subscribing and verifying digests [simpleton]",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi-0'],
+            subscribe: true
+        })
+        var parts = []
+        var p = new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                parts.push(update.extra_headers['repr-digest'])
+                if (parts.length > 1) done()
+            }, fail)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+        let rr = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-2'],
+            parents: ['hi-1'],
+            patches: [{unit: "text", range: "[1:1]", content: "Y"}]
+        })
+        if (!rr.ok) throw 'got: ' + rr.statusCode
+
+        await p
+        return JSON.stringify(parts)
+    },
+    '["sha-256=:Xd6JaIf2dUybFb/jpEGuSAbfL96UABMR4IvxEGIuC74=:","sha-256=:77cl3INcGEtczN0zK3eOgW/YWYAOm8ub73LkVcF2/rA=:"]'
+)
+
+runTest(
+    "test subscribing and verifying digests [dt]",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi-0'],
+            headers: { 'merge-type': 'dt' },
+            subscribe: true
+        })
+        var parts = []
+        var p = new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+
+                console.log(`update: ${JSON.stringify(update, null, 4)}`)
+
+                parts.push(update.extra_headers['repr-digest'])
+                if (parts.length > 1) done()
+            }, fail)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+        let rr = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-2'],
+            parents: ['hi-1'],
+            patches: [{unit: "text", range: "[2:2]", content: "Y"}]
+        })
+        if (!rr.ok) throw 'got: ' + rr.statusCode
+
+        await p
+        return JSON.stringify(parts)
+    },
+    '["sha-256=:Xd6JaIf2dUybFb/jpEGuSAbfL96UABMR4IvxEGIuC74=:","sha-256=:QknHazou37wCCwv3JXnCoAvXcKszP6xBTxLIiUAETgI=:"]'
+)
+
+runTest(
     "test PUTing a version that the server already has",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)

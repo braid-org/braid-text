@@ -70,8 +70,7 @@ braid_text.serve = async (req, res, options = {}) => {
     }
 
     var get_current_version = () => ascii_ify(
-        resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
-            .map(x => JSON.stringify(x)).join(", "))
+        resource.version.map(x => JSON.stringify(x)).join(", "))
 
     if (req.method == "GET" || req.method == "HEAD") {
         // make sure we have the necessary version and parents
@@ -133,7 +132,17 @@ braid_text.serve = async (req, res, options = {}) => {
                 accept_encoding:
                     req.headers['x-accept-encoding'] ??
                     req.headers['accept-encoding'],
-                subscribe: x => res.sendVersion(x),
+                subscribe: x => {
+
+                    // this is a sanity/rhobustness check..
+                    // ..this digest is checked on the client..
+                    // ..it is not strictly necessary
+                    if (x.version && v_eq(x.version, resource.version)) {
+                        x["Repr-Digest"] = `sha-256=:${require('crypto').createHash('sha256').update(Buffer.from(resource.val, "utf8")).digest('base64')}:`
+                    }
+
+                    res.sendVersion(x)
+                },
                 write: (x) => res.write(x)
             }
 
@@ -233,7 +242,7 @@ braid_text.get = async (key, options) => {
     if (options.parents) validate_version_array(options.parents)
 
     let resource = (typeof key == 'string') ? await get_resource(key) : key
-    var version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
+    var version = resource.version
 
     if (!options.subscribe) {
         if (options.transfer_encoding === 'dt') {
@@ -390,7 +399,7 @@ braid_text.put = async (key, options) => {
         }
     }
 
-    let parents = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
+    let parents = resource.version
     let og_parents = options_parents || parents
 
     let max_pos = resource.length_cache.get('' + og_parents) ??
@@ -526,6 +535,7 @@ braid_text.put = async (key, options) => {
 
     for (let b of bytes) resource.doc.mergeBytes(b)
     resource.val = resource.doc.get()
+    resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
     var post_commit_updates = []
 
@@ -533,7 +543,7 @@ braid_text.put = async (key, options) => {
         patches = get_xf_patches(resource.doc, v_before)
         if (braid_text.verbose) console.log(JSON.stringify({ patches }))
 
-        let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
+        let version = resource.version
 
         for (let client of resource.simpleton_clients) {
             if (peer && client.peer === peer) {
@@ -546,7 +556,7 @@ braid_text.put = async (key, options) => {
                     // if the doc has been freed, exit early
                     if (resource.doc.__wbg_ptr === 0) return
 
-                    let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
+                    let version = resource.version
                     let x = { version }
                     x.parents = client.my_last_seen_version
 
@@ -609,7 +619,7 @@ braid_text.put = async (key, options) => {
         }
     } else {
         if (resource.simpleton_clients.size) {
-            let version = resource.doc.getRemoteVersion().map((x) => x.join("-")).sort()
+            let version = resource.version
             patches = get_xf_patches(resource.doc, v_before)
             let x = { version, parents, patches }
             if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
@@ -681,6 +691,7 @@ async function get_resource(key) {
         })
 
         resource.val = resource.doc.get()
+        resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
         resource.length_cache = createSimpleCache(braid_text.length_cache_size)
 
