@@ -157,9 +157,6 @@ runTest(
         var parts = []
         var p = new Promise(async (done, fail) => {
             r2.subscribe(update => {
-
-                console.log(`update: ${JSON.stringify(update, null, 4)}`)
-
                 parts.push(update.extra_headers['repr-digest'])
                 if (parts.length > 1) done()
             }, fail)

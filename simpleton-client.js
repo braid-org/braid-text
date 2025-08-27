@@ -65,7 +65,7 @@ function simpleton_client(url, {
         signal: ac.signal
     }).then(res => {
         if (on_res) on_res(res)
-        res.subscribe(update => {
+        res.subscribe(async update => {
             // Only accept the update if its parents == our current version
             update.parents.sort()
             if (current_version.length === update.parents.length
@@ -109,6 +109,14 @@ function simpleton_client(url, {
                         prev_state = get_state()
                     } else prev_state = apply_patches(prev_state, patches)
                 }
+
+                // if the server gave us a digest,
+                // go ahead and check it against our new state..
+                if (update.extra_headers &&
+                    update.extra_headers["repr-digest"] &&
+                    update.extra_headers["repr-digest"].startsWith('sha-256=') &&
+                    update.extra_headers["repr-digest"] !== `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(prev_state)))))}:`)
+                    throw new Error('repr-digest mismatch')
 
                 if (on_state) on_state(prev_state)
             }
