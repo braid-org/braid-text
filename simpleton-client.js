@@ -115,7 +115,7 @@ function simpleton_client(url, {
                 if (update.extra_headers &&
                     update.extra_headers["repr-digest"] &&
                     update.extra_headers["repr-digest"].startsWith('sha-256=') &&
-                    update.extra_headers["repr-digest"] !== `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(prev_state)))))}:`)
+                    update.extra_headers["repr-digest"] !== await get_digest(prev_state))
                     throw new Error('repr-digest mismatch')
 
                 if (on_state) on_state(prev_state)
@@ -174,10 +174,13 @@ function simpleton_client(url, {
             outstanding_changes++
             try {
                 var r = await braid_fetch(url, {
-                    headers: { "Merge-Type": "simpleton",
-                        ...(content_type ? {"Content-Type": content_type} : {}) },
+                    headers: {
+                        "Merge-Type": "simpleton",
+                        "Repr-Digest": await get_digest(prev_state),
+                        ...(content_type ? {"Content-Type": content_type} : {})
+                    },
                     method: "PUT",
-                    retry: () => true,
+                    retry: (res) => res.status !== 550,
                     version, parents, patches,
                     peer
                 })
@@ -227,5 +230,10 @@ function simpleton_client(url, {
             offset += p.content.length - (p.range[1] - p.range[0])
         }
         return state
+    }
+
+    async function get_digest(s) {
+        var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+        return `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(bytes)))}:`
     }
 }

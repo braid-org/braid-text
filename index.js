@@ -114,7 +114,7 @@ braid_text.serve = async (req, res, options = {}) => {
                     res.setHeader("Current-Version", get_current_version())
                 res.setHeader("Version", ascii_ify(x.version.map((x) => JSON.stringify(x)).join(", ")))
                 var buffer = Buffer.from(x.body, "utf8")
-                res.setHeader("Repr-Digest", `sha-256=:${require('crypto').createHash('sha256').update(buffer).digest('base64')}:`)
+                res.setHeader("Repr-Digest", get_digest(buffer))
                 res.setHeader("Content-Length", buffer.length)
                 return my_end(200, req.method === "HEAD" ? null : buffer)
             }
@@ -136,10 +136,8 @@ braid_text.serve = async (req, res, options = {}) => {
 
                     // this is a sanity/rhobustness check..
                     // ..this digest is checked on the client..
-                    // ..it is not strictly necessary
-                    if (x.version && v_eq(x.version, resource.version)) {
-                        x["Repr-Digest"] = `sha-256=:${require('crypto').createHash('sha256').update(Buffer.from(resource.val, "utf8")).digest('base64')}:`
-                    }
+                    if (x.version && v_eq(x.version, resource.version))
+                        x["Repr-Digest"] = get_digest(resource.val)
 
                     res.sendVersion(x)
                 },
@@ -210,6 +208,19 @@ braid_text.serve = async (req, res, options = {}) => {
             }
 
             var {change_count} = await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
+
+            // if Repr-Digest is set,
+            // and the request version is also our new current version,
+            // then verify the digest..
+            if (req.headers['repr-digest'] &&
+                v_eq(req.version, resource.version) &&
+                req.headers['repr-digest'] !== get_digest(resource.val)) {
+                console.log(`repr-digest mismatch!`)
+
+                // we return a special 550 error code,
+                // which simpleton will pick up on to stop retrying
+                return done_my_turn(550, "repr-digest mismatch!")
+            }
 
             if (req.version) got_event(options.key, req.version[0], change_count)
            
@@ -2096,6 +2107,11 @@ function sorted_set_insert(arr, val) {
 function sorted_set_delete(arr, val) {
     var i = sorted_set_find(arr, val)
     if (arr[i] === val) arr.splice(i, 1)
+}
+
+function get_digest(s) {
+    if (typeof s === 'string') s = Buffer.from(s, "utf8")
+    return `sha-256=:${require('crypto').createHash('sha256').update(s).digest('base64')}:`
 }
 
 braid_text.get_resource = get_resource

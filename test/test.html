@@ -97,6 +97,56 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test PUT digest (good)",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        async function get_digest(s) {
+            var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+            return `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(bytes)))}:`
+        }
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx',
+            headers: {
+                'Repr-Digest': await get_digest('xx')
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
+    "test PUT digest (bad)",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        async function get_digest(s) {
+            var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+            return `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(bytes)))}:`
+        }
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx',
+            headers: {
+                'Repr-Digest': await get_digest('yy')
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+        return 'ok'
+    },
+    'got: 550'
+)
+
+runTest(
     "test subscribing and verifying digests [simpleton]",
     async () => {
         let key = 'test-' + Math.random().toString(36).slice(2)
