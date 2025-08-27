@@ -115,8 +115,12 @@ function simpleton_client(url, {
                 if (update.extra_headers &&
                     update.extra_headers["repr-digest"] &&
                     update.extra_headers["repr-digest"].startsWith('sha-256=') &&
-                    update.extra_headers["repr-digest"] !== await get_digest(prev_state))
+                    update.extra_headers["repr-digest"] !== await get_digest(prev_state)) {
+                    console.log('repr-digest mismatch!')
+                    console.log('repr-digest: ' + update.extra_headers["repr-digest"])
+                    console.log('state: ' + prev_state)
                     throw new Error('repr-digest mismatch')
+                }
 
                 if (on_state) on_state(prev_state)
             }
