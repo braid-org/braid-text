@@ -45,7 +45,8 @@ function simpleton_client(url, {
     generate_local_diff_update, // DEPRECATED
     content_type,
     on_error,
-    on_res
+    on_res,
+    on_ack
 }) {
     var peer = Math.random().toString(36).substr(2)
     var current_version = []
@@ -194,6 +195,7 @@ function simpleton_client(url, {
                 throw e
             }
             outstanding_changes--
+            if (on_ack && !outstanding_changes) on_ack()
         }
       }
     }
