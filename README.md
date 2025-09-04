@@ -135,6 +135,14 @@ This design prevents network congestion and handles disconnections gracefully. F
 
 For better performance and control, you can work with patches instead of full text:
 
+#### Patch Format
+
+Each patch is an object with two properties:
+- `range`: `[start, end]` - The range of characters to delete
+- `content`: The text to insert at that position
+
+Patches in an array each have positions which refer to the **original text** before any other patches are applied.
+
 #### Receiving Patches
 
 Instead of receiving complete text updates, you can process individual changes:
@@ -212,6 +220,8 @@ Creates a new Simpleton client that synchronizes with a Braid-Text server.
   (previous_state) => array_of_patches
   ```
   If not provided, uses a simple prefix/suffix diff algorithm.
+
+  **Note:** All patches must reference positions in the original text before any patches are applied.
 
 #### Additional Options
 
