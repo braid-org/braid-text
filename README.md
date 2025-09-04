@@ -109,7 +109,7 @@ Here's a basic running example to start:
 <!-- 3. Wire it up -->
 <script>
   // Connect to server
-  var simpleton = simpleton_client('https://braid.org/simpleton_example', {
+  var simpleton = simpleton_client('https://braid.org/public-sandbox', {
     on_state: state => my_textarea.value = state,  // incoming changes
     get_state: () => my_textarea.value             // outgoing changes
   })
