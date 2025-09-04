@@ -119,7 +119,7 @@ Here's a basic running example to start:
 </script>
 ```
 
-You should see something if you run this (though the server in this example will likely ignore your changes). 
+You should see some text in a box if you run this, and if you run it in another tab, you should be able to edit that text collaboratively.
 
 ### How It Works
 
