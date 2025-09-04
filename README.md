@@ -165,7 +165,7 @@ var simpleton = simpleton_client(url, {
 })
 ```
 
-See [editor.html](https://github.com/braid-org/braid-text/blob/master/editor.html) for a complete example with CodeMirror integration.
+See [editor.html](https://github.com/braid-org/braid-text/blob/master/editor.html) for a complete example.
 
 ## Client API
 
