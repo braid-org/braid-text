@@ -44,9 +44,11 @@ function simpleton_client(url, {
     apply_remote_update, // DEPRECATED
     generate_local_diff_update, // DEPRECATED
     content_type,
+
     on_error,
     on_res,
-    on_ack
+    on_ack,
+    send_digests
 }) {
     var peer = Math.random().toString(36).substr(2)
     var current_version = []
@@ -55,6 +57,10 @@ function simpleton_client(url, {
     var outstanding_changes = 0
     var max_outstanding_changes = 10
     var ac = new AbortController()
+
+    // temporary: our old code uses this deprecated api,
+    //        and our old code wants to send digests..
+    if (apply_remote_update) send_digests = true
 
     braid_fetch(url, {
         headers: { "Merge-Type": "simpleton",
@@ -181,8 +187,8 @@ function simpleton_client(url, {
                 var r = await braid_fetch(url, {
                     headers: {
                         "Merge-Type": "simpleton",
-                        "Repr-Digest": await get_digest(prev_state),
-                        ...(content_type ? {"Content-Type": content_type} : {})
+                        ...send_digests && {"Repr-Digest": await get_digest(prev_state)},
+                        ...content_type && {"Content-Type": content_type}
                     },
                     method: "PUT",
                     retry: (res) => res.status !== 550,
