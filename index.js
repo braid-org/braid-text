@@ -81,7 +81,7 @@ braid_text.serve = async (req, res, options = {}) => {
                 unknowns.push(event)
         }
         if (unknowns.length)
-            return my_end(309, '', "Version Unknown", {
+            return my_end(309, '', "Version Unknown Here", {
                 Version: ascii_ify(unknowns.map(e => JSON.stringify(e)).join(', '))
             })
 

@@ -1276,7 +1276,7 @@ runTest(
             version: ['hi-5']
         })
         if (r.status !== 309) throw 'expected 309, got: ' + r.status
-        if (r.statusText !== 'Version Unknown') throw 'unexpected status text: ' + r.statusText
+        if (r.statusText !== 'Version Unknown Here') throw 'unexpected status text: ' + r.statusText
         if (r.ok) throw 'found version we should not have found'
 
         var r = await braid_fetch(`/${key}`, {
