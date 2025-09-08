@@ -201,7 +201,7 @@ braid_text.serve = async (req, res, options = {}) => {
                     if (!resource.actor_seqs[actor]?.has(seq)) unknowns.push(event)
                 }
                 if (unknowns.length)
-                    return done_my_turn(309, '', "Version Unknown", {
+                    return done_my_turn(309, '', "Version Unknown Here", {
                         Version: ascii_ify(unknowns.map(e => JSON.stringify(e)).join(', ')),
                         'Retry-After': '1'
                     })
