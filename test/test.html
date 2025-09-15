@@ -97,6 +97,174 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test selection-sharing-prototype PUT and GET",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let time = Date.now()
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        let o = await r2.json()
+        return o.hello.time === time ? 'times match' : 'bad'
+    },
+    'times match'
+)
+
+runTest(
+    "test selection-sharing-prototype GET/subscribe",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        var a = new AbortController()
+        let r = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            signal: a.signal,
+            subscribe: true,
+            peer: 'abc',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+        var p = new Promise(done => {
+            r.subscribe(update => {
+                var body = update.body_text
+                if (body.length > 2) done(body)
+            })
+        })
+
+        var time = Date.now()
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            peer: 'xyz',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        var ret_val = JSON.parse(await p).hello.time === time ? 'times match' : 'bad'
+
+        a.abort()
+
+        return ret_val
+    },
+    'times match'
+)
+
+runTest(
+    "test selection-sharing-prototype PUT old cursor",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let time = Date.now()
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r3 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hoop',
+                    time: time - 5
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r3.ok) return 'got: ' + r3.status
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        let o = await r2.json()
+        return o.hello.yo
+    },
+    'hi'
+)
+
+runTest(
+    "test selection-sharing-prototype PUT really old cursor",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let time = Date.now() - 1000 * 60 * 60 * 24
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        let o = await r2.json()
+        return JSON.stringify(o)
+    },
+    '{}'
+)
+
+runTest(
     "test PUT digest (good)",
     async () => {
         let key = 'test-' + Math.random().toString(36).slice(2)

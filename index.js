@@ -40,6 +40,52 @@ braid_text.serve = async (req, res, options = {}) => {
 
     let peer = req.headers["peer"]
 
+    // selection sharing prototype
+    if (req.headers['selection-sharing-prototype']) {
+        res.setHeader('Content-Type', 'application/json')
+
+        if (!resource.selections) resource.selections = {}
+        if (!resource.selection_clients) resource.selection_clients = new Set()
+
+        if (req.method === "GET" || req.method === "HEAD") {
+            if (!req.subscribe) {
+                return my_end(200, JSON.stringify(resource.selections))
+            } else {
+                var client = {peer, res}
+                resource.selection_clients.add(client)
+                res.startSubscription({
+                    onClose: () => resource.selection_clients.delete(client)
+                })
+                res.sendUpdate({ body: JSON.stringify(resource.selections) })
+                return
+            }
+        } else if (req.method == "PUT" || req.method == "POST" || req.method == "PATCH") {
+            var body = (await req.patches())[0].content_text
+            var json = JSON.parse(body)
+
+            // only keep new selections if they are newer
+            for (var [user, selection] of Object.entries(json)) {
+                if (resource.selections[user] && resource.selections[user].time > selection.time) delete json[user]
+                else resource.selections[user] = selection
+            }
+
+            // remove old selections that are too old
+            var long_ago = Date.now() - 1000 * 60 * 5
+            for (var [user, selection] of Object.entries(resource.selections))
+                if (selection.time < long_ago) {
+                    delete resource.selections[user]
+                    delete json[user]
+                }
+
+            body = JSON.stringify(json)
+            if (body.length > 2)
+                for (let client of resource.selection_clients)
+                    if (client.peer !== peer) client.res.sendUpdate({ body })
+            
+            return my_end(200)
+        }
+    }
+
     let merge_type = req.headers["merge-type"]
     if (!merge_type) merge_type = 'simpleton'
     if (merge_type !== 'simpleton' && merge_type !== 'dt') return my_end(400, `Unknown merge type: ${merge_type}`)
