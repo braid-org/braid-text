@@ -1,6 +1,4 @@
-
 var port = process.argv[2] || 8888
-
 var braid_text = require("./index.js")
 
 // TODO: set a custom database folder
