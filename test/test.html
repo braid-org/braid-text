@@ -733,6 +733,35 @@ runTest(
 )
 
 runTest(
+    "test put with transfer-encoding: dt",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'xy')
+
+        var bytes = doc.toBytes()
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var key = '/${key}'
+
+                var {change_count} = await braid_text.put(key, {
+                    body: new Uint8Array([${'' + bytes}]),
+                    transfer_encoding: "dt"
+                })
+                var {body, version} = await braid_text.get(key, {})
+
+                res.end('' + change_count + " " + body + " " + version)
+            })()`
+        })
+
+        return await r1.text()
+    },
+    '2 xy hi-1'
+)
+
+runTest(
     "test transfer-encoding dt (with parents)",
     async () => {
         await dt_p

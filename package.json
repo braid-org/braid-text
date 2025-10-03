@@ -1,6 +1,6 @@
 {
   "name": "braid-text",
-  "version": "0.2.63",
+  "version": "0.2.64",
   "description": "Library for collaborative text over http using braid.",
   "author": "Braid Working Group",
   "repository": "braid-org/braid-text",

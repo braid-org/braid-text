@@ -433,6 +433,26 @@ braid_text.put = async (key, options) => {
         })
     }
 
+    let resource = (typeof key == 'string') ? await get_resource(key) : key
+
+    if (options.transfer_encoding === 'dt') {
+        var start_i = 1 + resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
+        
+        resource.doc.mergeBytes(body)
+
+        var end_i = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
+        for (var i = start_i; i <= end_i; i++) {
+            let v = resource.doc.localToRemoteVersion([i])[0]
+            if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new braid_text.RangeSet()
+            resource.actor_seqs[v[0]].add_range(v[1], v[1])
+        }
+        resource.val = resource.doc.get()
+        resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
+
+        await resource.db_delta(body)
+        return { change_count: end_i - start_i + 1 }
+    }
+
     if (version) validate_version_array(version)
 
     // translate a single parent of "root" to the empty array (same meaning)
@@ -444,8 +464,6 @@ braid_text.put = async (key, options) => {
     if (body != null && patches) throw new Error(`cannot have a body and patches`)
     if (body != null && (typeof body !== 'string')) throw new Error(`body must be a string`)
     if (patches) validate_patches(patches)
-
-    let resource = (typeof key == 'string') ? await get_resource(key) : key
 
     if (options_parents) {
         // make sure we have all these parents
