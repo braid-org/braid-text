@@ -13,21 +13,16 @@ var server = require("http").createServer(async (req, res) => {
     braid_text.free_cors(res)
     if (req.method === 'OPTIONS') return res.end()
 
-    if (req.url.endsWith("?editor")) {
+    var q = req.url.split('?').slice(-1)[0]
+    if (q === 'editor' || q === 'markdown-editor') {
         res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
-        require("fs").createReadStream("./editor.html").pipe(res)
+        require("fs").createReadStream(`./${q}.html`).pipe(res)
         return
     }
 
-    if (req.url.endsWith("?markdown-editor")) {
-        res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
-        require("fs").createReadStream("./markdown-editor.html").pipe(res)
-        return
-    }
-
-    if (req.url == '/simpleton-client.js') {
+    if (req.url === '/simpleton-client.js' || req.url === '/web-utils.js') {
         res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-cache" })
-        require("fs").createReadStream("./simpleton-client.js").pipe(res)
+        require("fs").createReadStream("." + req.url).pipe(res)
         return
     }
 
