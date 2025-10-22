@@ -1,8 +1,11 @@
 
 var port = process.argv[2] || 8889
 
-var braid_text = require("../index.js")
-braid_text.db_folder = './test_db_folder'
+var braid_text = require(`${__dirname}/../index.js`)
+braid_text.db_folder = `${__dirname}/test_db_folder`
+
+var braid_text2 = braid_text.create_braid_text()
+braid_text2.db_folder = null
 
 var server = require("http").createServer(async (req, res) => {
     console.log(`${req.method} ${req.url}`)

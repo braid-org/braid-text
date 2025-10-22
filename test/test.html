@@ -97,6 +97,69 @@ async function runTest(testName, testFunction, expectedResult) {
 }
 
 runTest(
+    "test updating meta data",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+                resource.update_meta({ test_meta_info: 42 })
+                res.end(JSON.stringify(resource.meta))
+            })()`
+        })
+
+        return (await r1.text())
+    },
+    '{"test_meta_info":42}'
+)
+
+runTest(
+    "test updating meta data when do db_folder set",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text2.get_resource('/${key}')
+                resource.update_meta({ test_meta_info: 42 })
+                res.end(JSON.stringify(resource.meta))
+            })()`
+        })
+
+        return (await r1.text())
+    },
+    '{"test_meta_info":42}'
+)
+
+runTest(
+    "test loading a meta file from disk",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+                resource.update_meta({ test_meta_info: 42 })
+
+                await new Promise(done => setTimeout(done, 200))
+
+                delete braid_text.cache['/${key}']
+
+                var resource = await braid_text.get_resource('/${key}')
+                res.end(JSON.stringify(resource.meta))
+            })()`
+        })
+
+        return (await r1.text())
+    },
+    '{"test_meta_info":42}'
+)
+
+runTest(
     "test selection-sharing-prototype PUT and GET",
     async () => {
         let key = 'test-' + Math.random().toString(36).slice(2)
