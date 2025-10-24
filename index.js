@@ -1,6 +1,6 @@
 
 let { Doc, OpLog, Branch } = require("@braid.org/diamond-types-node")
-let braidify = require("braid-http").http_server
+let {http_server: braidify, fetch: braid_fetch} = require("braid-http")
 let fs = require("fs")
 
 function create_braid_text() {
@@ -291,6 +291,28 @@ function create_braid_text() {
     }
 
     braid_text.get = async (key, options) => {
+        if (key instanceof URL) {
+            if (!options) options = {}
+
+            options.my_abort = new AbortController()
+
+            var params = {
+                signal: options.my_abort.signal,
+                retry: () => true,
+                subscribe: !!options.subscribe,
+                heartbeats: 120,
+            }
+            for (var x of ['headers', 'parents', 'version', 'peer'])
+                if (options[x] != null) params[x] = options[x]
+
+            var res = await braid_fetch(key.href, params)
+
+            if (options.subscribe) {
+                res.subscribe(options.subscribe)
+                return res
+            } else return await res.text()
+        }
+
         if (!options) {
             // if it doesn't exist already, don't create it in this case
             if (!braid_text.cache[key]) return
@@ -412,6 +434,8 @@ function create_braid_text() {
     braid_text.forget = async (key, options) => {
         if (!options) throw new Error('options is required')
 
+        if (key instanceof URL) return options.my_abort.abort()
+
         let resource = (typeof key == 'string') ? await get_resource(key) : key
 
         if (options.merge_type != "dt")
@@ -420,6 +444,20 @@ function create_braid_text() {
     }
 
     braid_text.put = async (key, options) => {
+        if (key instanceof URL) {
+            options.my_abort = new AbortController()
+
+            var params = {
+                method: 'PUT',
+                signal: options.my_abort.signal,
+                retry: () => true,
+            }
+            for (var x of ['headers', 'parents', 'version', 'peer', 'body'])
+                if (options[x] != null) params[x] = options[x]
+
+            return await braid_fetch(key.href, params)
+        }
+
         let { version, patches, body, peer } = options
 
         // support for json patch puts..
@@ -894,11 +932,11 @@ function create_braid_text() {
         var meta_filename = `${braid_text.db_folder}/.meta/${encoded}`
         var meta_dirty = null
         var meta_saving = null
+        var meta_file_content = '{}'
         try {
-            set_meta(JSON.parse(await fs.promises.readFile(meta_filename)))
-        } catch (e) {
-            console.error(`Error processing meta file: ${meta_filename}`)
-        }
+            var meta_file_content = await fs.promises.readFile(meta_filename)
+        } catch (e) {}
+        set_meta(JSON.parse(meta_file_content))
 
         let chain = Promise.resolve()
         return {
