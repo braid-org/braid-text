@@ -16,6 +16,15 @@ function create_braid_text() {
 
     let max_encoded_key_size = 240
 
+    braid_text.sync = async (a, b, options) => {
+        braid_text.get(a, {
+            subscribe: update => braid_text.put(b, update)
+        })
+        braid_text.get(b, {
+            subscribe: update => braid_text.put(a, update)
+        })
+    }
+
     braid_text.serve = async (req, res, options = {}) => {
         options = {
             key: req.url.split('?')[0], // Default key
@@ -237,7 +246,7 @@ function create_braid_text() {
                         req.parents,
                         resource.actor_seqs,
                         // approximation of memory usage for this update
-                        body ? body.length :
+                        body != null ? body.length :
                             patches.reduce((a, b) => a + b.range.length + b.content.length, 0),
                         options.recv_buffer_max_time,
                         options.recv_buffer_max_space)
@@ -270,7 +279,8 @@ function create_braid_text() {
                     return done_my_turn(550, "repr-digest mismatch!")
                 }
 
-                if (req.version) got_event(options.key, req.version[0], change_count)
+                if (req.version?.length)
+                    got_event(options.key, req.version[0], change_count)
             
                 res.setHeader("Version", get_current_version())
 
@@ -308,7 +318,12 @@ function create_braid_text() {
             var res = await braid_fetch(key.href, params)
 
             if (options.subscribe) {
-                res.subscribe(options.subscribe)
+                res.subscribe(update => {
+                    update.body = update.body_text
+                    if (update.patches)
+                        for (var p of update.patches) p.content = p.content_text
+                    options.subscribe(update)
+                })
                 return res
             } else return await res.text()
         }
@@ -452,7 +467,7 @@ function create_braid_text() {
                 signal: options.my_abort.signal,
                 retry: () => true,
             }
-            for (var x of ['headers', 'parents', 'version', 'peer', 'body'])
+            for (var x of ['headers', 'parents', 'version', 'peer', 'body', 'patches'])
                 if (options[x] != null) params[x] = options[x]
 
             return await braid_fetch(key.href, params)
@@ -494,6 +509,12 @@ function create_braid_text() {
         }
 
         if (version) validate_version_array(version)
+        if (version && !version.length) {
+            console.log(`warning: ignoring put with empty version`)
+            return { change_count: 0 }
+        }
+        if (version && version.length > 1)
+            throw new Error(`cannot put a version with multiple ids`)
 
         // translate a single parent of "root" to the empty array (same meaning)
         let options_parents = options.parents
