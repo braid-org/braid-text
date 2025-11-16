@@ -14,6 +14,11 @@ var server = require("http").createServer(async (req, res) => {
     braid_text.free_cors(res)
     if (req.method === 'OPTIONS') return
 
+    if (req.url.startsWith('/have_error')) {
+        res.statusCode = 569
+        return res.end('error')
+    }
+
     if (req.url.startsWith('/eval')) {
         var body = await new Promise(done => {
             var chunks = []

@@ -16,13 +16,168 @@ function create_braid_text() {
 
     let max_encoded_key_size = 240
 
-    braid_text.sync = async (a, b, options) => {
-        braid_text.get(a, {
-            subscribe: update => braid_text.put(b, update)
-        })
-        braid_text.get(b, {
-            subscribe: update => braid_text.put(a, update)
-        })
+    braid_text.sync = async (a, b, options = {}) => {
+        var unsync_cbs = []
+        options.my_unsync = () => unsync_cbs.forEach(cb => cb())
+
+        if (!options.merge_type) options.merge_type = 'dt'
+
+        if ((a instanceof URL) === (b instanceof URL)) {
+            var a_ops = {
+                subscribe: update => braid_text.put(b, update),
+                merge_type: options.merge_type,
+            }
+            braid_text.get(a, a_ops)
+            unsync_cbs.push(() => braid_text.forget(a, a_ops))
+
+            var b_ops = {
+                subscribe: update => braid_text.put(a, update),
+                merge_type: options.merge_type,
+            }
+            braid_text.get(b, b_ops)
+            unsync_cbs.push(() => braid_text.forget(b, b_ops))
+        } else {
+            // make a=local and b=remote (swap if not)
+            if (a instanceof URL) { let swap = a; a = b; b = swap }
+
+            var resource = (typeof a == 'string') ? await get_resource(a) : a
+
+            function extend_frontier(frontier, version, parents) {
+                // special case:
+                // if current frontier has all parents,
+                //    then we can just remove those
+                //    and add version
+                var frontier_set = new Set(frontier)
+                if (parents.length &&
+                    parents.every(p => frontier_set.has(p))) {
+                    parents.forEach(p => frontier_set.delete(p))
+                    for (var event of version) frontier_set.add(event)
+                    frontier = [...frontier_set.values()]
+                } else {
+                    // full-proof approach..
+                    var looking_for = frontier_set
+                    for (var event of version) looking_for.add(event)
+
+                    frontier = []
+                    var shadow = new Set()
+
+                    var bytes = resource.doc.toBytes()
+                    var [_, events, parentss] = braid_text.dt_parse([...bytes])
+                    for (var i = events.length - 1; i >= 0 && looking_for.size; i--) {
+                        var e = events[i].join('-')
+                        if (looking_for.has(e)) {
+                            looking_for.delete(e)
+                            if (!shadow.has(e)) frontier.push(e)
+                            shadow.add(e)
+                        }
+                        if (shadow.has(e))
+                            parentss[i].forEach(p => shadow.add(p.join('-')))
+                    }
+                }
+                return frontier.sort()
+            }
+
+            var closed
+            var disconnect
+            unsync_cbs.push(() => {
+                closed = true
+                disconnect()
+            })
+
+            connect()
+            async function connect() {
+                if (options.on_connect) options.on_connect()
+
+                if (closed) return
+
+                var ac = new AbortController()
+                var disconnect_cbs = [() => ac.abort()]
+
+                disconnect = () => disconnect_cbs.forEach(cb => cb())
+
+                try {
+                    // fork-point
+                    async function check_version(version) {
+                        var r = await braid_fetch(b.href, {
+                            signal: ac.signal,
+                            method: "HEAD",
+                            version
+                        })
+                        if (!r.ok && r.status !== 309 && r.status !== 500)
+                            throw new Error(`unexpected HEAD status: ${r.status}`)
+                        return r.ok
+                    }
+
+                    function extend_fork_point(update) {
+                        resource.meta.fork_point =
+                            extend_frontier(resource.meta.fork_point,
+                                update.version, update.parents)
+                        resource.change_meta()
+                    }
+
+                    // see if remote has the fork point
+                    if (resource.meta.fork_point &&
+                        !(await check_version(resource.meta.fork_point))) {
+                        resource.meta.fork_point = null
+                        resource.change_meta()
+                    }
+
+                    // otherwise let's binary search for new fork point..
+                    if (!resource.meta.fork_point) {
+                        var bytes = resource.doc.toBytes()
+                        var [_, events, __] = braid_text.dt_parse([...bytes])
+                        events = events.map(x => x.join('-'))
+
+                        var min = -1
+                        var max = events.length
+                        while (min + 1 < max) {
+                            var i = Math.floor((min + max)/2)
+                            var version = [events[i]]
+                            if (await check_version(version)) {
+                                min = i
+                                resource.meta.fork_point = version
+                            } else max = i
+                        }
+                    }
+
+                    // local -> remote
+                    var a_ops = {
+                        subscribe: update => {
+                            update.signal = ac.signal
+                            braid_text.put(b, update).then((x) => {
+                                extend_fork_point(update)
+                            }).catch(e => {
+                                if (e.name === 'AbortError') {
+                                    // ignore
+                                } else throw e
+                            })
+                        }
+                    }
+                    if (resource.meta.fork_point)
+                        a_ops.parents = resource.meta.fork_point
+                    disconnect_cbs.push(() => braid_text.forget(a, a_ops))
+                    braid_text.get(a, a_ops)
+
+                    // remote -> local
+                    var b_ops = {
+                        dont_retry: true,
+                        subscribe: async update => {
+                            await braid_text.put(a, update)
+                            extend_fork_point(update)
+                        },
+                    }
+                    disconnect_cbs.push(() => braid_text.forget(b, b_ops))
+                    // NOTE: this should not return, but it might throw
+                    await braid_text.get(b, b_ops)
+                } catch (e) {
+                    if (closed) return
+
+                    disconnect()
+                    console.log(`disconnected, retrying in 1 second`)
+                    setTimeout(connect, 1000)
+                }
+            }            
+        }
     }
 
     braid_text.serve = async (req, res, options = {}) => {
@@ -45,6 +200,10 @@ function create_braid_text() {
 
             braidify(req, res)
             if (res.is_multiplexer) return
+
+            // Sort version arrays from external sources
+            if (req.version) req.version.sort()
+            if (req.parents) req.parents.sort()
         } catch (e) {
             return my_end(500, "The server failed to process this request. The error generated was: " + e)
         }
@@ -301,6 +460,15 @@ function create_braid_text() {
     }
 
     braid_text.get = async (key, options) => {
+        if (options && options.version) {
+            validate_version_array(options.version)
+            options.version.sort()
+        }
+        if (options && options.parents) {
+            validate_version_array(options.parents)
+            options.parents.sort()
+        }
+
         if (key instanceof URL) {
             if (!options) options = {}
 
@@ -308,22 +476,29 @@ function create_braid_text() {
 
             var params = {
                 signal: options.my_abort.signal,
-                retry: () => true,
                 subscribe: !!options.subscribe,
                 heartbeats: 120,
             }
+            if (!options.dont_retry) params.retry = () => true
             for (var x of ['headers', 'parents', 'version', 'peer'])
                 if (options[x] != null) params[x] = options[x]
 
             var res = await braid_fetch(key.href, params)
 
             if (options.subscribe) {
-                res.subscribe(update => {
+                if (options.dont_retry) {
+                    var error_happened
+                    var error_promise = new Promise((_, fail) => error_happened = fail)
+                }
+
+                res.subscribe(async update => {
                     update.body = update.body_text
                     if (update.patches)
                         for (var p of update.patches) p.content = p.content_text
-                    options.subscribe(update)
-                })
+                    await options.subscribe(update)
+                }, e => options.dont_retry && error_happened(e))
+
+                if (options.dont_retry) return await error_promise
                 return res
             } else return await res.text()
         }
@@ -333,9 +508,6 @@ function create_braid_text() {
             if (!braid_text.cache[key]) return
             return (await get_resource(key)).val
         }
-
-        if (options.version) validate_version_array(options.version)
-        if (options.parents) validate_version_array(options.parents)
 
         let resource = (typeof key == 'string') ? await get_resource(key) : key
         var version = resource.version
@@ -374,13 +546,19 @@ function create_braid_text() {
                     body: resource.doc.get()
                 }
         } else {
+            options.my_subscribe_chain = Promise.resolve()
+            options.my_subscribe = (x) =>
+                options.my_subscribe_chain =
+                options.my_subscribe_chain.then(() =>
+                    options.subscribe(x))
+
             if (options.merge_type != "dt") {
                 let x = { version }
 
                 if (!options.parents && !options.version) {
                     x.parents = []
                     x.body = resource.doc.get()
-                    options.subscribe(x)
+                    options.my_subscribe(x)
                 } else {
                     x.parents = options.version ? options.version : options.parents
                     options.my_last_seen_version = x.parents
@@ -389,7 +567,7 @@ function create_braid_text() {
                     let local_version = OpLog_remote_to_local(resource.doc, x.parents)
                     if (local_version) {
                         x.patches = get_xf_patches(resource.doc, local_version)
-                        options.subscribe(x)
+                        options.my_subscribe(x)
                     }
                 }
 
@@ -401,7 +579,7 @@ function create_braid_text() {
                     // optimization: if client wants past current version,
                     //               send empty dt
                     if (options.parents && v_eq(options.parents, version)) {
-                        options.subscribe({ encoding: 'dt', body: new Doc().toBytes() })
+                        options.my_subscribe({ encoding: 'dt', body: new Doc().toBytes() })
                     } else {
                         var bytes = resource.doc.toBytes()
                         if (options.parents) {
@@ -410,12 +588,12 @@ function create_braid_text() {
                                 dt_get_local_version(bytes, options.parents))
                             doc.free()
                         }
-                        options.subscribe({ encoding: 'dt', body: bytes })
+                        options.my_subscribe({ encoding: 'dt', body: bytes })
                     }
                 } else {
                     var updates = null
                     if (!options.parents && !options.version) {
-                        options.subscribe({
+                        options.my_subscribe({
                             version: [],
                             parents: [],
                             body: "",
@@ -428,7 +606,7 @@ function create_braid_text() {
                     }
 
                     for (let u of updates)
-                        options.subscribe({
+                        options.my_subscribe({
                             version: [u.version],
                             parents: u.parents,
                             patches: [{ unit: u.unit, range: u.range, content: u.content }],
@@ -459,8 +637,20 @@ function create_braid_text() {
     }
 
     braid_text.put = async (key, options) => {
+        if (options.version) {
+            validate_version_array(options.version)
+            options.version.sort()
+        }
+        if (options.parents) {
+            validate_version_array(options.parents)
+            options.parents.sort()
+        }
+
         if (key instanceof URL) {
             options.my_abort = new AbortController()
+            if (options.signal)
+                options.signal.addEventListener('abort', () =>
+                    options.my_abort.abort())
 
             var params = {
                 method: 'PUT',
@@ -473,315 +663,311 @@ function create_braid_text() {
             return await braid_fetch(key.href, params)
         }
 
-        let { version, patches, body, peer } = options
-
-        // support for json patch puts..
-        if (patches?.length && patches.every(x => x.unit === 'json')) {
+        return await within_fiber('put:' + key, async () => {
             let resource = (typeof key == 'string') ? await get_resource(key) : key
-            
-            let x = JSON.parse(resource.doc.get())
-            for (let p of patches)
-                apply_patch(x, p.range, p.content === '' ? undefined : JSON.parse(p.content))
 
-            return await braid_text.put(key, {
-                body: JSON.stringify(x, null, 4)
-            })
-        }
-
-        let resource = (typeof key == 'string') ? await get_resource(key) : key
-
-        if (options.transfer_encoding === 'dt') {
-            var start_i = 1 + resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
-            
-            resource.doc.mergeBytes(body)
-
-            var end_i = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
-            for (var i = start_i; i <= end_i; i++) {
-                let v = resource.doc.localToRemoteVersion([i])[0]
-                if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new braid_text.RangeSet()
-                resource.actor_seqs[v[0]].add_range(v[1], v[1])
+            // support for json patch puts..
+            if (options.patches && options.patches.length &&
+                options.patches.every(x => x.unit === 'json')) {
+                let x = JSON.parse(resource.doc.get())
+                for (let p of options.patches)
+                    apply_patch(x, p.range, p.content === '' ? undefined : JSON.parse(p.content))
+                options = { body: JSON.stringify(x, null, 4) }
             }
-            resource.val = resource.doc.get()
-            resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
-            await resource.db_delta(body)
-            return { change_count: end_i - start_i + 1 }
-        }
+            let { version, patches, body, peer } = options
 
-        if (version) validate_version_array(version)
-        if (version && !version.length) {
-            console.log(`warning: ignoring put with empty version`)
-            return { change_count: 0 }
-        }
-        if (version && version.length > 1)
-            throw new Error(`cannot put a version with multiple ids`)
+            if (options.transfer_encoding === 'dt') {
+                var start_i = 1 + resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
+                
+                resource.doc.mergeBytes(body)
 
-        // translate a single parent of "root" to the empty array (same meaning)
-        let options_parents = options.parents
-        if (options_parents?.length === 1 && options_parents[0] === 'root')
-            options_parents = []
+                var end_i = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
+                for (var i = start_i; i <= end_i; i++) {
+                    let v = resource.doc.localToRemoteVersion([i])[0]
+                    if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new braid_text.RangeSet()
+                    resource.actor_seqs[v[0]].add_range(v[1], v[1])
+                }
+                resource.val = resource.doc.get()
+                resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
-        if (options_parents) validate_version_array(options_parents)
-        if (body != null && patches) throw new Error(`cannot have a body and patches`)
-        if (body != null && (typeof body !== 'string')) throw new Error(`body must be a string`)
-        if (patches) validate_patches(patches)
-
-        if (options_parents) {
-            // make sure we have all these parents
-            for (let p of options_parents) {
-                let P = decode_version(p)
-                if (!resource.actor_seqs[P[0]]?.has(P[1]))
-                    throw new Error(`missing parent version: ${p}`)
+                await resource.db_delta(body)
+                return { change_count: end_i - start_i + 1 }
             }
-        }
 
-        let parents = resource.version
-        let og_parents = options_parents || parents
+            if (version && !version.length) {
+                console.log(`warning: ignoring put with empty version`)
+                return { change_count: 0 }
+            }
+            if (version && version.length > 1)
+                throw new Error(`cannot put a version with multiple ids`)
 
-        let max_pos = resource.length_cache.get('' + og_parents) ??
-            (v_eq(parents, og_parents) ? resource.doc.len() : dt_len(resource.doc, og_parents))
-        
-        if (body != null) {
-            patches = [{
-                unit: 'text',
-                range: `[0:${max_pos}]`,
-                content: body
-            }]
-        }
+            // translate a single parent of "root" to the empty array (same meaning)
+            let options_parents = options.parents
+            if (options_parents?.length === 1 && options_parents[0] === 'root')
+                options_parents = []
 
-        let og_patches = patches
-        patches = patches.map((p) => ({
-            ...p,
-            range: p.range.match(/\d+/g).map((x) => parseInt(x)),
-            content_codepoints: [...p.content],
-        })).sort((a, b) => a.range[0] - b.range[0])
+            if (body != null && patches) throw new Error(`cannot have a body and patches`)
+            if (body != null && (typeof body !== 'string')) throw new Error(`body must be a string`)
+            if (patches) validate_patches(patches)
 
-        // validate patch positions
-        let must_be_at_least = 0
-        for (let p of patches) {
-            if (p.range[0] < must_be_at_least || p.range[0] > max_pos) throw new Error(`invalid patch range position: ${p.range[0]}`)
-            if (p.range[1] < p.range[0] || p.range[1] > max_pos) throw new Error(`invalid patch range position: ${p.range[1]}`)
-            must_be_at_least = p.range[1]
-        }
-
-        let change_count = patches.reduce((a, b) => a + b.content_codepoints.length + (b.range[1] - b.range[0]), 0)
-
-        let og_v = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
-
-        let v = decode_version(og_v)
-
-        resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
-            a + (b.content_codepoints?.length ?? 0) - (b.range[1] - b.range[0]),
-            max_pos))
-
-        // validate version: make sure we haven't seen it already
-        if (resource.actor_seqs[v[0]]?.has(v[1])) {
-
-            if (!options.validate_already_seen_versions) return { change_count }
-
-            // if we have seen it already, make sure it's the same as before
-            let updates = dt_get_patches(resource.doc, og_parents)
-
-            let seen = {}
-            for (let u of updates) {
-                u.version = decode_version(u.version)
-
-                if (!u.content) {
-                    // delete
-                    let v = u.version
-                    for (let i = 0; i < u.end - u.start; i++) {
-                        let ps = (i < u.end - u.start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
-                        seen[JSON.stringify([v[0], v[1] - i, ps, u.start + i])] = true
-                    }
-                } else {
-                    // insert
-                    let v = u.version
-                    let content = [...u.content]
-                    for (let i = 0; i < content.length; i++) {
-                        let ps = (i > 0) ? [`${v[0]}-${v[1] - content.length + i}`] : u.parents
-                        seen[JSON.stringify([v[0], v[1] + 1 - content.length + i, ps, u.start + i, content[i]])] = true
-                    }
+            if (options_parents) {
+                // make sure we have all these parents
+                for (let p of options_parents) {
+                    let P = decode_version(p)
+                    if (!resource.actor_seqs[P[0]]?.has(P[1]))
+                        throw new Error(`missing parent version: ${p}`)
                 }
             }
 
+            let parents = resource.version
+            let og_parents = options_parents || parents
+
+            let max_pos = resource.length_cache.get('' + og_parents) ??
+                (v_eq(parents, og_parents) ? resource.doc.len() : dt_len(resource.doc, og_parents))
+            
+            if (body != null) {
+                patches = [{
+                    unit: 'text',
+                    range: `[0:${max_pos}]`,
+                    content: body
+                }]
+            }
+
+            let og_patches = patches
+            patches = patches.map((p) => ({
+                ...p,
+                range: p.range.match(/\d+/g).map((x) => parseInt(x)),
+                content_codepoints: [...p.content],
+            })).sort((a, b) => a.range[0] - b.range[0])
+
+            // validate patch positions
+            let must_be_at_least = 0
+            for (let p of patches) {
+                if (p.range[0] < must_be_at_least || p.range[0] > max_pos) throw new Error(`invalid patch range position: ${p.range[0]}`)
+                if (p.range[1] < p.range[0] || p.range[1] > max_pos) throw new Error(`invalid patch range position: ${p.range[1]}`)
+                must_be_at_least = p.range[1]
+            }
+
+            let change_count = patches.reduce((a, b) => a + b.content_codepoints.length + (b.range[1] - b.range[0]), 0)
+
+            let og_v = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
+
+            let v = decode_version(og_v)
+
+            resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
+                a + (b.content_codepoints?.length ?? 0) - (b.range[1] - b.range[0]),
+                max_pos))
+
+            // validate version: make sure we haven't seen it already
+            if (resource.actor_seqs[v[0]]?.has(v[1])) {
+
+                if (!options.validate_already_seen_versions) return { change_count }
+
+                // if we have seen it already, make sure it's the same as before
+                let updates = dt_get_patches(resource.doc, og_parents)
+
+                let seen = {}
+                for (let u of updates) {
+                    u.version = decode_version(u.version)
+
+                    if (!u.content) {
+                        // delete
+                        let v = u.version
+                        for (let i = 0; i < u.end - u.start; i++) {
+                            let ps = (i < u.end - u.start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
+                            seen[JSON.stringify([v[0], v[1] - i, ps, u.start + i])] = true
+                        }
+                    } else {
+                        // insert
+                        let v = u.version
+                        let content = [...u.content]
+                        for (let i = 0; i < content.length; i++) {
+                            let ps = (i > 0) ? [`${v[0]}-${v[1] - content.length + i}`] : u.parents
+                            seen[JSON.stringify([v[0], v[1] + 1 - content.length + i, ps, u.start + i, content[i]])] = true
+                        }
+                    }
+                }
+
+                v = `${v[0]}-${v[1] + 1 - change_count}`
+                let ps = og_parents
+                let offset = 0
+                for (let p of patches) {
+                    // delete
+                    for (let i = p.range[0]; i < p.range[1]; i++) {
+                        let vv = decode_version(v)
+
+                        if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] - 1 + offset])]) throw new Error('invalid update: different from previous update with same version')
+
+                        offset--
+                        ps = [v]
+                        v = vv
+                        v = `${v[0]}-${v[1] + 1}`
+                    }
+                    // insert
+                    for (let i = 0; i < p.content_codepoints?.length ?? 0; i++) {
+                        let vv = decode_version(v)
+                        let c = p.content_codepoints[i]
+
+                        if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] + offset, c])]) throw new Error('invalid update: different from previous update with same version')
+
+                        offset++
+                        ps = [v]
+                        v = vv
+                        v = `${v[0]}-${v[1] + 1}`
+                    }
+                }
+
+                // we already have this version, so nothing left to do
+                return { change_count: change_count }
+            }
+            if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
+            resource.actor_seqs[v[0]].add_range(v[1] + 1 - change_count, v[1])
+
+            // reduce the version sequence by the number of char-edits
             v = `${v[0]}-${v[1] + 1 - change_count}`
+
             let ps = og_parents
+
+            let v_before = resource.doc.getLocalVersion()
+
+            let bytes = []
+
             let offset = 0
             for (let p of patches) {
                 // delete
-                for (let i = p.range[0]; i < p.range[1]; i++) {
-                    let vv = decode_version(v)
-
-                    if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] - 1 + offset])]) throw new Error('invalid update: different from previous update with same version')
-
-                    offset--
-                    ps = [v]
-                    v = vv
-                    v = `${v[0]}-${v[1] + 1}`
+                let del = p.range[1] - p.range[0]
+                if (del) {
+                    bytes.push(dt_create_bytes(v, ps, p.range[0] + offset, del, null))
+                    offset -= del
+                    v = decode_version(v)
+                    ps = [`${v[0]}-${v[1] + (del - 1)}`]
+                    v = `${v[0]}-${v[1] + del}`
                 }
                 // insert
-                for (let i = 0; i < p.content_codepoints?.length ?? 0; i++) {
-                    let vv = decode_version(v)
-                    let c = p.content_codepoints[i]
-
-                    if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] + offset, c])]) throw new Error('invalid update: different from previous update with same version')
-
-                    offset++
-                    ps = [v]
-                    v = vv
-                    v = `${v[0]}-${v[1] + 1}`
+                if (p.content?.length) {
+                    bytes.push(dt_create_bytes(v, ps, p.range[1] + offset, 0, p.content))
+                    offset += p.content_codepoints.length
+                    v = decode_version(v)
+                    ps = [`${v[0]}-${v[1] + (p.content_codepoints.length - 1)}`]
+                    v = `${v[0]}-${v[1] + p.content_codepoints.length}`
                 }
             }
 
-            // we already have this version, so nothing left to do
-            return { change_count: change_count }
-        }
-        if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
-        resource.actor_seqs[v[0]].add_range(v[1] + 1 - change_count, v[1])
+            for (let b of bytes) resource.doc.mergeBytes(b)
+            resource.val = resource.doc.get()
+            resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
-        // reduce the version sequence by the number of char-edits
-        v = `${v[0]}-${v[1] + 1 - change_count}`
+            var post_commit_updates = []
 
-        let ps = og_parents
+            if (options.merge_type != "dt") {
+                patches = get_xf_patches(resource.doc, v_before)
+                if (braid_text.verbose) console.log(JSON.stringify({ patches }))
 
-        let v_before = resource.doc.getLocalVersion()
+                let version = resource.version
 
-        let bytes = []
+                for (let client of resource.simpleton_clients) {
+                    if (peer && client.peer === peer) {
+                        client.my_last_seen_version = [og_v]
+                    }
 
-        let offset = 0
-        for (let p of patches) {
-            // delete
-            let del = p.range[1] - p.range[0]
-            if (del) {
-                bytes.push(dt_create_bytes(v, ps, p.range[0] + offset, del, null))
-                offset -= del
-                v = decode_version(v)
-                ps = [`${v[0]}-${v[1] + (del - 1)}`]
-                v = `${v[0]}-${v[1] + del}`
-            }
-            // insert
-            if (p.content?.length) {
-                bytes.push(dt_create_bytes(v, ps, p.range[1] + offset, 0, p.content))
-                offset += p.content_codepoints.length
-                v = decode_version(v)
-                ps = [`${v[0]}-${v[1] + (p.content_codepoints.length - 1)}`]
-                v = `${v[0]}-${v[1] + p.content_codepoints.length}`
-            }
-        }
+                    function set_timeout(time_override) {
+                        if (client.my_timeout) clearTimeout(client.my_timeout)
+                        client.my_timeout = setTimeout(() => {
+                            // if the doc has been freed, exit early
+                            if (resource.doc.__wbg_ptr === 0) return
 
-        for (let b of bytes) resource.doc.mergeBytes(b)
-        resource.val = resource.doc.get()
-        resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
+                            let version = resource.version
+                            let x = { version }
+                            x.parents = client.my_last_seen_version
 
-        var post_commit_updates = []
+                            if (braid_text.verbose) console.log("rebasing after timeout.. ")
+                            if (braid_text.verbose) console.log("    client.my_unused_version_count = " + client.my_unused_version_count)
+                            x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, client.my_last_seen_version))
 
-        if (options.merge_type != "dt") {
-            patches = get_xf_patches(resource.doc, v_before)
-            if (braid_text.verbose) console.log(JSON.stringify({ patches }))
+                            if (braid_text.verbose) console.log(`sending from rebase: ${JSON.stringify(x)}`)
+                            client.my_subscribe(x)
+                            client.my_last_sent_version = x.version
 
-            let version = resource.version
+                            delete client.my_timeout
+                        }, time_override ?? Math.min(3000, 23 * Math.pow(1.5, client.my_unused_version_count - 1)))
+                    }
 
-            for (let client of resource.simpleton_clients) {
-                if (peer && client.peer === peer) {
-                    client.my_last_seen_version = [og_v]
-                }
+                    if (client.my_timeout) {
+                        if (peer && client.peer === peer) {
+                            if (!v_eq(client.my_last_sent_version, og_parents)) {
+                                // note: we don't add to client.my_unused_version_count,
+                                // because we're already in a timeout;
+                                // we'll just extend it here..
+                                set_timeout()
+                            } else {
+                                // hm.. it appears we got a correctly parented version,
+                                // which suggests that maybe we can stop the timeout early
+                                set_timeout(0)
+                            }
+                        }
+                        continue
+                    }
 
-                function set_timeout(time_override) {
-                    if (client.my_timeout) clearTimeout(client.my_timeout)
-                    client.my_timeout = setTimeout(() => {
-                        // if the doc has been freed, exit early
-                        if (resource.doc.__wbg_ptr === 0) return
-
-                        let version = resource.version
-                        let x = { version }
-                        x.parents = client.my_last_seen_version
-
-                        if (braid_text.verbose) console.log("rebasing after timeout.. ")
-                        if (braid_text.verbose) console.log("    client.my_unused_version_count = " + client.my_unused_version_count)
-                        x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, client.my_last_seen_version))
-
-                        if (braid_text.verbose) console.log(`sending from rebase: ${JSON.stringify(x)}`)
-                        client.subscribe(x)
-                        client.my_last_sent_version = x.version
-
-                        delete client.my_timeout
-                    }, time_override ?? Math.min(3000, 23 * Math.pow(1.5, client.my_unused_version_count - 1)))
-                }
-
-                if (client.my_timeout) {
+                    let x = { version }
                     if (peer && client.peer === peer) {
                         if (!v_eq(client.my_last_sent_version, og_parents)) {
-                            // note: we don't add to client.my_unused_version_count,
-                            // because we're already in a timeout;
-                            // we'll just extend it here..
+                            client.my_unused_version_count = (client.my_unused_version_count ?? 0) + 1
                             set_timeout()
+                            continue
                         } else {
-                            // hm.. it appears we got a correctly parented version,
-                            // which suggests that maybe we can stop the timeout early
-                            set_timeout(0)
+                            delete client.my_unused_version_count
                         }
-                    }
-                    continue
-                }
 
-                let x = { version }
-                if (peer && client.peer === peer) {
-                    if (!v_eq(client.my_last_sent_version, og_parents)) {
-                        client.my_unused_version_count = (client.my_unused_version_count ?? 0) + 1
-                        set_timeout()
-                        continue
+                        x.parents = options.version
+                        if (!v_eq(version, options.version)) {
+                            if (braid_text.verbose) console.log("rebasing..")
+                            x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, [og_v]))
+                        } else {
+                            // this client already has this version,
+                            // so let's pretend to send it back, but not
+                            if (braid_text.verbose) console.log(`not reflecting back to simpleton`)
+                            client.my_last_sent_version = x.version
+                            continue
+                        }
                     } else {
-                        delete client.my_unused_version_count
+                        x.parents = parents
+                        x.patches = patches
                     }
-
-                    x.parents = options.version
-                    if (!v_eq(version, options.version)) {
-                        if (braid_text.verbose) console.log("rebasing..")
-                        x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, [og_v]))
-                    } else {
-                        // this client already has this version,
-                        // so let's pretend to send it back, but not
-                        if (braid_text.verbose) console.log(`not reflecting back to simpleton`)
-                        client.my_last_sent_version = x.version
-                        continue
-                    }
-                } else {
-                    x.parents = parents
-                    x.patches = patches
-                }
-                if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
-                post_commit_updates.push([client, x])
-                client.my_last_sent_version = x.version
-            }
-        } else {
-            if (resource.simpleton_clients.size) {
-                let version = resource.version
-                patches = get_xf_patches(resource.doc, v_before)
-                let x = { version, parents, patches }
-                if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
-                for (let client of resource.simpleton_clients) {
-                    if (client.my_timeout) continue
+                    if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
                     post_commit_updates.push([client, x])
                     client.my_last_sent_version = x.version
                 }
+            } else {
+                if (resource.simpleton_clients.size) {
+                    let version = resource.version
+                    patches = get_xf_patches(resource.doc, v_before)
+                    let x = { version, parents, patches }
+                    if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
+                    for (let client of resource.simpleton_clients) {
+                        if (client.my_timeout) continue
+                        post_commit_updates.push([client, x])
+                        client.my_last_sent_version = x.version
+                    }
+                }
             }
-        }
 
-        var x = {
-            version: [og_v],
-            parents: og_parents,
-            patches: og_patches,
-        }
-        for (let client of resource.clients) {
-            if (!peer || client.peer !== peer)
-                post_commit_updates.push([client, x])
-        }
+            var x = {
+                version: [og_v],
+                parents: og_parents,
+                patches: og_patches,
+            }
+            for (let client of resource.clients) {
+                if (!peer || client.peer !== peer)
+                    post_commit_updates.push([client, x])
+            }
 
-        await resource.db_delta(resource.doc.getPatchSince(v_before))
+            await resource.db_delta(resource.doc.getPatchSince(v_before))
 
-        for (var [client, x] of post_commit_updates) client.subscribe(x)
+            for (var [client, x] of post_commit_updates) client.my_subscribe(x)
 
-        return { change_count }
+            return { change_count }
+        })
     }
 
     braid_text.list = async () => {
@@ -821,10 +1007,7 @@ function create_braid_text() {
                 : { change: () => { }, change_meta: () => {} }
 
             resource.db_delta = change
-            resource.update_meta = (meta) => {
-                Object.assign(resource.meta, meta)
-                change_meta()
-            }
+            resource.change_meta = change_meta
 
             resource.actor_seqs = {}
 
@@ -959,48 +1142,45 @@ function create_braid_text() {
         } catch (e) {}
         set_meta(JSON.parse(meta_file_content))
 
-        let chain = Promise.resolve()
         return {
-            change: async (bytes) => {
-                await (chain = chain.then(async () => {
-                    if (!bytes) currentSize = threshold
-                    else currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
-                    const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
-                    if (currentSize < threshold) {
-                        if (braid_text.verbose) console.log(`appending to db..`)
+            change: (bytes) => within_fiber('file:' + key, async () => {
+                if (!bytes) currentSize = threshold
+                else currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
+                const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
+                if (currentSize < threshold) {
+                    if (braid_text.verbose) console.log(`appending to db..`)
 
-                        let buffer = Buffer.allocUnsafe(4)
-                        buffer.writeUInt32LE(bytes.length, 0)
-                        await fs.promises.appendFile(filename, buffer)
-                        await fs.promises.appendFile(filename, bytes)
+                    let buffer = Buffer.allocUnsafe(4)
+                    buffer.writeUInt32LE(bytes.length, 0)
+                    await fs.promises.appendFile(filename, buffer)
+                    await fs.promises.appendFile(filename, bytes)
 
-                        if (braid_text.verbose) console.log("wrote to : " + filename)
-                    } else {
+                    if (braid_text.verbose) console.log("wrote to : " + filename)
+                } else {
+                    try {
+                        if (braid_text.verbose) console.log(`starting new db..`)
+
+                        currentNumber++
+                        const init = get_init()
+                        const buffer = Buffer.allocUnsafe(4)
+                        buffer.writeUInt32LE(init.length, 0)
+
+                        const newFilename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
+                        await fs.promises.writeFile(newFilename, buffer)
+                        await fs.promises.appendFile(newFilename, init)
+
+                        if (braid_text.verbose) console.log("wrote to : " + newFilename)
+
+                        currentSize = 4 + init.length
+                        threshold = currentSize * 10
                         try {
-                            if (braid_text.verbose) console.log(`starting new db..`)
-
-                            currentNumber++
-                            const init = get_init()
-                            const buffer = Buffer.allocUnsafe(4)
-                            buffer.writeUInt32LE(init.length, 0)
-
-                            const newFilename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
-                            await fs.promises.writeFile(newFilename, buffer)
-                            await fs.promises.appendFile(newFilename, init)
-
-                            if (braid_text.verbose) console.log("wrote to : " + newFilename)
-
-                            currentSize = 4 + init.length
-                            threshold = currentSize * 10
-                            try {
-                                await fs.promises.unlink(filename)
-                            } catch (e) { }
-                        } catch (e) {
-                            if (braid_text.verbose) console.log(`e = ${e.stack}`)
-                        }
+                            await fs.promises.unlink(filename)
+                        } catch (e) { }
+                    } catch (e) {
+                        if (braid_text.verbose) console.log(`e = ${e.stack}`)
                     }
-                }))
-            },
+                }
+            }),
             change_meta: async () => {
                 meta_dirty = true
                 if (meta_saving) return
@@ -2269,6 +2449,20 @@ function create_braid_text() {
     function get_digest(s) {
         if (typeof s === 'string') s = Buffer.from(s, "utf8")
         return `sha-256=:${require('crypto').createHash('sha256').update(s).digest('base64')}:`
+    }
+
+    function within_fiber(id, func) {
+        if (!within_fiber.chains) within_fiber.chains = {}
+        var prev = within_fiber.chains[id] || Promise.resolve()
+        var curr = prev.then(async () => {
+            try {
+                return await func()
+            } finally {
+                if (within_fiber.chains[id] === curr)
+                    delete within_fiber.chains[id]
+            }
+        })
+        return within_fiber.chains[id] = curr
     }
 
     braid_text.get_resource = get_resource

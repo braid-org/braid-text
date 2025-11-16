@@ -223,11 +223,11 @@ async function main() {
             if (middle_doc.get() != await braid_text.get('middle_doc')) throw new Error('bad')
 
             // test getting old version
-            let middle_v = middle_doc.getRemoteVersion().map(x => x.join('-'))
+            let middle_v = middle_doc.getRemoteVersion().map(x => x.join('-')).sort()
             console.log(`middle_doc = ${await braid_text.get('middle_doc')}`)
             console.log(`middle_v = `, middle_v)
-            
-            let doc_v = doc.getRemoteVersion().map(x => x.join('-'))
+
+            let doc_v = doc.getRemoteVersion().map(x => x.join('-')).sort()
             console.log(`doc_v = `, doc_v)
 
             console.log(`doc = `, await braid_text.get('doc', {version: middle_v}))
@@ -269,11 +269,18 @@ async function main() {
             if (transfer_doc.get() !== await braid_text.get('doc')) throw new Error('bad')
 
             // try getting updates from middle_doc to doc
-            var o = {merge_type: 'dt', parents: middle_v, subscribe: update => {
-                braid_text.put('middle_doc', update)
-            }}
-            await braid_text.get('doc', o)
-            await braid_text.forget('doc', o)
+            if (!v_eq(middle_v, doc_v)) {
+                var o
+                await new Promise(async done => {
+                    o = {merge_type: 'dt', parents: middle_v, subscribe: async update => {
+                        await braid_text.put('middle_doc', update)
+                        middle_v = (await braid_text.get_resource('middle_doc')).version
+                        if (v_eq(doc_v, middle_v)) done()
+                    }}
+                    braid_text.get('doc', o)
+                })
+                await braid_text.forget('doc', o)
+            }
 
             if (await braid_text.get('middle_doc') != await braid_text.get('doc')) throw new Error('bad')
 
@@ -356,6 +363,10 @@ function make_random_edit(doc) {
 
     // work here
     console.log(`doc => ${doc.get()}`)
+}
+
+function v_eq(v1, v2) {
+    return v1.length == v2.length && v1.every((x, i) => x == v2[i])
 }
 
 //////////////////////////////////////////////////////////////////
