@@ -1,0 +1,2107 @@
+// Shared test definitions that work in both Node.js and browser environments
+// This file exports a function that takes a test runner and braid_fetch implementation
+
+function defineTests(runTest, braid_fetch) {
+
+runTest(
+    "test subscribe update with body_text",
+    async () => {
+        var key = 'test' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r1p = braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var x = await new Promise(done => {
+                    braid_text.get(new URL('http://localhost:8889/${key}'), {
+                        subscribe: update => {
+                            if (update.body_text === 'yo') done(update.body_text)
+                        }
+                    })
+                })
+                res.end(x)
+            })()`
+        })
+
+        var r2 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'yo'
+        })
+
+        var r1 = await r1p
+        if (!r1.ok) return 'got: ' + r.status
+
+        return await r1.text()
+    },
+    'yo'
+)
+
+runTest(
+    "test braid_text.sync, key to url, where url breaks",
+    async () => {
+        var key = 'test' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var count = 0
+                var ops
+                braid_text.sync('/${key}', new URL('http://localhost:8889/have_error'), ops = {
+                    on_connect: () => {
+                        count++
+                        if (count === 2) {
+                            res.end('it reconnected!')
+                            ops.my_unsync()
+                        }
+                    }
+                })
+            })()`
+        })
+        return await r.text()
+
+    },
+    'it reconnected!'
+)
+
+runTest(
+    "test braid_text.sync, url to key",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+        var key_b = 'test-b-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                braid_text.sync(new URL('http://localhost:8889/${key_a}'), '/${key_b}')
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        await new Promise(done => setTimeout(done, 100))
+
+        var r = await braid_fetch(`/${key_b}`)
+        return 'got: ' + (await r.text())
+    },
+    'got: hi'
+)
+
+runTest(
+    "test braid_text.sync, url to resource",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+        var key_b = 'test-b-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key_b}')
+                braid_text.sync(new URL('http://localhost:8889/${key_a}'), resource)
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        await new Promise(done => setTimeout(done, 100))
+
+        var r = await braid_fetch(`/${key_b}`)
+        return 'got: ' + (await r.text())
+    },
+    'got: hi'
+)
+
+runTest(
+    "test braid_text.sync, with two urls",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+        var key_b = 'test-b-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                braid_text.sync(new URL('http://localhost:8889/${key_a}'),
+                    new URL('http://localhost:8889/${key_b}'))
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        await new Promise(done => setTimeout(done, 100))
+
+        var r = await braid_fetch(`/${key_b}`)
+        return 'got: ' + (await r.text())
+    },
+    'got: hi'
+)
+
+runTest(
+    "test braid_text.sync, key to url",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+        var key_b = 'test-b-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                braid_text.sync('/${key_a}', new URL('http://localhost:8889/${key_b}'))
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        await new Promise(done => setTimeout(done, 100))
+
+        var r = await braid_fetch(`/${key_b}`)
+        return 'got: ' + (await r.text())
+    },
+    'got: hi'
+)
+
+runTest(
+    "test braid_text.sync, key to url, when HEAD fails",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var count = 0
+                var ops
+                braid_text.sync('/${key_a}', new URL('http://localhost:8889/have_error'), ops = {
+                    on_connect: () => {
+                        count++
+                        if (count === 2) {
+                            res.end('it reconnected!')
+                            ops.my_unsync()
+                        }
+                    }
+                })
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        return await r.text()
+    },
+    'it reconnected!'
+)
+
+runTest(
+    "test when remote doesn't have a fork-point that we think they have",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+        var key_b = 'test-b-' + Math.random().toString(36).slice(2)
+        var key_c = 'test-c-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                braid_text.sync('/${key_a}', new URL('http://localhost:8889/${key_b}'))
+                await new Promise(done => setTimeout(done, 100))
+                braid_text.sync('/${key_a}', new URL('http://localhost:8889/${key_c}'))
+                await new Promise(done => setTimeout(done, 100))
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        return await (await braid_fetch(`/${key_c}`)).text()
+    },
+    'hi'
+)
+
+runTest(
+    "test when we don't have a fork-point with remote, but they do have a shared version",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+        var key_b = 'test-b-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var ops = {}
+                braid_text.sync('/${key_a}', '/${key_b}', ops)
+                await new Promise(done => setTimeout(done, 100))
+                ops.my_unsync()
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'yo'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var ops = {}
+                braid_text.sync('/${key_a}', new URL('http://localhost:8889/${key_b}'), ops)
+                await new Promise(done => setTimeout(done, 100))
+                ops.my_unsync()
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        return await (await braid_fetch(`/${key_b}`)).text()
+    },
+    'yo'
+)
+
+runTest(
+    "test braid_text.sync, with two keys",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+        var key_b = 'test-b-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                braid_text.sync('/${key_a}', '/${key_b}')
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        await new Promise(done => setTimeout(done, 100))
+
+        var r = await braid_fetch(`/${key_b}`)
+        return 'got: ' + (await r.text())
+    },
+    'got: hi'
+)
+
+runTest(
+    "test putting version with multiple event ids, should have error",
+    async () => {
+        var key_a = 'test-a-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key_a}`, {
+            method: 'PUT',
+            version: ['abc-1', 'xyz-2'],
+            body: 'hi'
+        })
+        return '' + (await r.text()).includes('cannot put a version with multiple ids')
+    },
+    'true'
+)
+
+runTest(
+    "test braid_text.get(url), with no options",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                res.end(await braid_text.get(new URL('http://localhost:8889/${key}')))
+            })()`
+        })
+
+        return 'got: ' + (await r1.text())
+    },
+    'got: hi'
+)
+
+runTest(
+    "test braid_text.get(url), with headers",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['xyz-1'],
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                res.end(await braid_text.get(new URL('http://localhost:8889/${key}'), {
+                    headers: {
+                        version: '"xyz-0"'
+                    }
+                }))
+            })()`
+        })
+
+        return 'got: ' + (await r1.text())
+    },
+    'got: h'
+)
+
+runTest(
+    "test braid_text.get(url), with parents",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['xyz-1'],
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                res.end(await braid_text.get(new URL('http://localhost:8889/${key}'), {
+                    parents: ['xyz-0']
+                }))
+            })()`
+        })
+
+        return 'got: ' + (await r1.text())
+    },
+    'got: h'
+)
+
+runTest(
+    "test braid_text.get(url), with version and peer",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['xyz-1'],
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                res.end(await braid_text.get(new URL('http://localhost:8889/${key}'), {
+                    version: ['xyz-0'],
+                    peer: 'xyz'
+                }))
+            })()`
+        })
+
+        return 'got: ' + (await r1.text())
+    },
+    'got: h'
+)
+
+runTest(
+    "test braid_text.get(url) with subscription",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['xyz-1'],
+            body: 'hi'
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var url = new URL('http://localhost:8889/${key}')
+                var update = await new Promise(done => {
+                    var o = {
+                        subscribe: update => {
+                            braid_text.forget(url, o)
+                            done(update)
+                        }
+                    }
+                    braid_text.get(url, o)
+                })
+                res.end(update.body)
+            })()`
+        })
+
+        return 'got: ' + (await r1.text())
+    },
+    'got: hi'
+)
+
+runTest(
+    "test braid_text.put(url), with body",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var r = await braid_text.put(new URL('http://localhost:8889/${key}'),
+                    {body: 'yo'})
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r1 = await braid_fetch(`/${key}`)
+        return 'got: ' + (await r1.text())
+    },
+    'got: yo'
+)
+
+runTest(
+    "test braid_text.put(url), with body and headers",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var r = await braid_text.put(new URL('http://localhost:8889/${key}'),
+                    {body: 'yo', headers: {version: '"abc123-1"'}})
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r2 = await braid_fetch(`/${key}`)
+        return 'got: ' + (await r2.text()) + ' -- version: ' + r2.headers.get('version')
+    },
+    'got: yo -- version: "abc123-1"'
+)
+
+runTest(
+    "test braid_text.put(url), with body and version and parents",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'hi',
+            version: ['abc-1']
+        })
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var r = await braid_text.put(new URL('http://localhost:8889/${key}'),
+                    {body: 'yo', version: ['xyz-3'], parents: ['abc-1']})
+                res.end('')
+            })()`
+        })
+        if (!r1.ok) return 'got: ' + r1.status
+
+        let r2 = await braid_fetch(`/${key}`)
+        return 'got: ' + (await r2.text()) + ' -- version: ' + r2.headers.get('version')
+    },
+    'got: yo -- version: "xyz-3"'
+)
+
+runTest(
+    "test braid_text.put(url), with peer",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var r = await braid_text.put(new URL('http://localhost:8889/${key}'),
+                    {body: 'yo', peer: 'xyz', parents: []})
+                res.end('')
+            })()`
+        })
+        if (!r1.ok) return 'got: ' + r1.status
+
+        let r2 = await braid_fetch(`/${key}`)
+        return 'got: ' + (await r2.text()) + ' -- version: ' + r2.headers.get('version')
+    },
+    'got: yo -- version: "xyz-1"'
+)
+
+runTest(
+    "test loading a meta file from disk",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+                resource.meta = { test_meta_info: 42 }
+                resource.change_meta()
+
+                await new Promise(done => setTimeout(done, 200))
+
+                delete braid_text.cache['/${key}']
+
+                var resource = await braid_text.get_resource('/${key}')
+                res.end(JSON.stringify(resource.meta))
+            })()`
+        })
+
+        return (await r1.text())
+    },
+    '{"test_meta_info":42}'
+)
+
+runTest(
+    "test selection-sharing-prototype PUT and GET",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let time = Date.now()
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        let o = await r2.json()
+        return o.hello.time === time ? 'times match' : 'bad'
+    },
+    'times match'
+)
+
+runTest(
+    "test selection-sharing-prototype GET/subscribe",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        var a = new AbortController()
+        let r = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            signal: a.signal,
+            subscribe: true,
+            peer: 'abc',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+        var p = new Promise(done => {
+            r.subscribe(update => {
+                var body = update.body_text
+                if (body.length > 2) done(body)
+            })
+        })
+
+        var time = Date.now()
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            peer: 'xyz',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        var ret_val = JSON.parse(await p).hello.time === time ? 'times match' : 'bad'
+
+        a.abort()
+
+        return ret_val
+    },
+    'times match'
+)
+
+runTest(
+    "test selection-sharing-prototype PUT old cursor",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let time = Date.now()
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r3 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hoop',
+                    time: time - 5
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r3.ok) return 'got: ' + r3.status
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        let o = await r2.json()
+        return o.hello.yo
+    },
+    'hi'
+)
+
+runTest(
+    "test selection-sharing-prototype PUT really old cursor",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let time = Date.now() - 1000 * 60 * 60 * 24
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                hello: {
+                    yo: 'hi',
+                    time
+                }
+            }),
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'GET',
+            headers: {
+                'selection-sharing-prototype': 'true'
+            }
+        })
+        if (!r2.ok) return 'got: ' + r2.status
+
+        let o = await r2.json()
+        return JSON.stringify(o)
+    },
+    '{}'
+)
+
+runTest(
+    "test PUT digest (good)",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        async function get_digest(s) {
+            var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+            return `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(bytes)))}:`
+        }
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx',
+            headers: {
+                'Repr-Digest': await get_digest('xx')
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
+    "test PUT digest (bad)",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        async function get_digest(s) {
+            var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+            return `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(bytes)))}:`
+        }
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx',
+            headers: {
+                'Repr-Digest': await get_digest('yy')
+            }
+        })
+        if (!r.ok) return 'got: ' + r.status
+        return 'ok'
+    },
+    'got: 550'
+)
+
+runTest(
+    "test subscribing and verifying digests [simpleton]",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            version: ['hi-0'],
+            subscribe: true
+        })
+        var parts = []
+        var p = new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                parts.push(update.extra_headers['repr-digest'])
+                if (parts.length > 1) {
+                    done()
+                    a.abort()
+                }
+            }, fail)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+        let rr = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-2'],
+            parents: ['hi-1'],
+            patches: [{unit: "text", range: "[1:1]", content: "Y"}]
+        })
+        if (!rr.ok) throw 'got: ' + rr.statusCode
+
+        await p
+        return JSON.stringify(parts)
+    },
+    '["sha-256=:Xd6JaIf2dUybFb/jpEGuSAbfL96UABMR4IvxEGIuC74=:","sha-256=:77cl3INcGEtczN0zK3eOgW/YWYAOm8ub73LkVcF2/rA=:"]'
+)
+
+runTest(
+    "test subscribing and verifying digests [dt]",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            version: ['hi-0'],
+            headers: { 'merge-type': 'dt' },
+            subscribe: true
+        })
+        var parts = []
+        var p = new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                parts.push(update.extra_headers['repr-digest'])
+                if (parts.length > 1) {
+                    done()
+                    a.abort()
+                }
+            }, fail)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+        let rr = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-2'],
+            parents: ['hi-1'],
+            patches: [{unit: "text", range: "[2:2]", content: "Y"}]
+        })
+        if (!rr.ok) throw 'got: ' + rr.statusCode
+
+        await p
+        return JSON.stringify(parts)
+    },
+    '["sha-256=:Xd6JaIf2dUybFb/jpEGuSAbfL96UABMR4IvxEGIuC74=:","sha-256=:QknHazou37wCCwv3JXnCoAvXcKszP6xBTxLIiUAETgI=:"]'
+)
+
+runTest(
+    "test PUTing a version that the server already has",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+
+        var r2 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+
+        return r1.status + " " + r2.status
+    },
+    '200 200'
+)
+
+runTest(
+    "test validate_already_seen_versions with same version",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
+
+                res.end('' + change_count)
+            })()`
+        })
+
+        var r2 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt", validate_already_seen_versions: true })
+
+                res.end('' + change_count)
+            })()`
+        })
+
+        return (await r1.text()) + " " + (await r2.text())
+    },
+    '3 3'
+)
+
+runTest(
+    "test validate_already_seen_versions with modified version",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
+
+                res.end('' + change_count)
+            })()`
+        })
+
+        var r2 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var resource = await braid_text.get_resource('/${key}')
+
+                try {
+                    var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "ABC"}], merge_type: "dt", validate_already_seen_versions: true })
+
+                    res.end('' + change_count)
+                } catch (e) {
+                    res.end(e.message)
+                }
+            })()`
+        })
+
+        return await r2.text()
+    },
+    'invalid update: different from previous update with same version'
+)
+
+runTest(
+    "test loading a previously saved resource",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f1 = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-2'],
+            parents: [],
+            body: 'abc'
+        })
+
+        var f1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `
+                delete braid_text.cache['/${key}']
+                res.end()
+            `
+        })
+
+        var r = await braid_fetch(`/${key}`)
+        return await r.text()
+    },
+    'abc'
+)
+
+runTest(
+    "test non-contigous ids",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-10'],
+            parents: [],
+            body: 'abc'
+        })
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-20'],
+            parents: ['hi-10'],
+            body: 'ABC'
+        })
+
+        var f1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `
+                delete braid_text.cache['/${key}']
+                res.end()
+            `
+        })
+
+        var r = await braid_fetch(`/${key}`)
+        return await r.text()
+    },
+    'ABC'
+)
+
+runTest(
+    "test when PUT cache/buffer size fails",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f1 = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-3000000'],
+            parents: ['yo-0'],
+            body: 'A'.repeat(3000000)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+
+        var f2 = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['ih-3000000'],
+            parents: ['yo-0'],
+            body: 'B'.repeat(3000000)
+        })
+
+        await new Promise(done => setTimeout(done, 300))
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['yo-0'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        return `f1: ${(await f1).status}, f2: ${(await f2).status}`
+    },
+    'f1: 200, f2: 309'
+)
+
+runTest(
+    "test multiple patches",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'A'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['yo-1'],
+            parents: ['hi-0'],
+            patches: [
+                {unit: 'text', range: '[0:0]', content: 'C'},
+                {unit: 'text', range: '[1:1]', content: 'T'}
+            ]
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'CAT'
+)
+
+runTest(
+    "test PUT after subscribing",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var p_done
+        var p = new Promise(done => p_done = done)
+
+        var a = new AbortController()
+        var r = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true
+        })
+        r.subscribe(update => {
+            if (update.version[0] === 'hi-0') {
+                p_done(update.patches[0].content_text)
+                a.abort()
+            }
+        })
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        return await p
+    },
+    'x'
+)
+
+runTest(
+    "test out-of-order PUTs",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: ['hi-0'],
+            patches: [{unit: 'text', range: '[1:1]', content: 'y'}]
+        })
+
+        await new Promise(done => setTimeout(done, 500))
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+
+        if (!r.ok) throw 'got: ' + r.status
+
+        r = await f
+        if (!r.ok) throw 'got: ' + r.status
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'xy'
+)
+
+runTest(
+    "test out-of-order PUTs (trial two)",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var f = braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['ab-1'],
+            parents: ['hi-0'],
+            patches: [{unit: 'text', range: '[1:1]', content: 'y'}]
+        })
+
+        await new Promise(done => setTimeout(done, 500))
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xz'
+        })
+
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        r = await f
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'xyz'
+)
+
+runTest(
+    "test in-order PUTs",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-0'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: ['hi-0'],
+            patches: [{unit: 'text', range: '[1:1]', content: 'y'}]
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r2 = await braid_fetch(`/${key}`)
+        return await r2.text()
+    },
+    'xy'
+)
+
+runTest(
+    "test put with transfer-encoding: dt",
+    async () => {
+        await dt_p
+        var key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'xy')
+
+        var bytes = doc.toBytes()
+
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var key = '/${key}'
+
+                var {change_count} = await braid_text.put(key, {
+                    body: new Uint8Array([${'' + bytes}]),
+                    transfer_encoding: "dt"
+                })
+                var {body, version} = await braid_text.get(key, {})
+
+                res.end('' + change_count + " " + body + " " + version)
+            })()`
+        })
+
+        return await r1.text()
+    },
+    '2 xy hi-1'
+)
+
+runTest(
+    "test transfer-encoding dt (with parents)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'x')
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            parents: ['hi-0'],
+            headers: {
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('x-transfer-encoding') + ' ' + text + ' ' + r2.statusText
+    },
+    '"hi-1" dt xy Multiresponse'
+)
+
+runTest(
+    "test transfer-encoding dt",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            headers: {
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+
+        var doc = new Doc('yo')
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('x-transfer-encoding') + ' ' + text
+    },
+    '"hi-1" dt xy'
+)
+
+runTest(
+    "test GETing old version explicitly with transfer-encoding dt",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi∑-0'],
+            headers: {
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+
+        var doc = new Doc('yo')
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + text + ' ' + JSON.parse(r2.headers.get('current-version'))
+    },
+    '"hi\\u2211-1" x hi∑-1'
+)
+
+runTest(
+    "test GETing current version explicitly with transfer-encoding dt",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi∑-1'],
+            headers: {
+                'Accept-Transfer-Encoding': 'dt'
+            }
+        })
+
+        var doc = new Doc('yo')
+        doc.mergeBytes([...new Uint8Array(await r2.arrayBuffer())])
+        var text = doc.get()
+        doc.free()
+
+        return r2.headers.get('current-version') + ' ' + text + ' ' + JSON.parse(r2.headers.get('current-version'))
+    },
+    '"hi\\u2211-1" xy hi∑-1'
+)
+
+runTest(
+    "test for Current-Version when GETing old version",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            version: ['hi∑-0']
+        })
+
+        var text = await r2.text()
+
+        return r2.headers.get('current-version') + ' ' + r2.headers.get('version') + ' ' + text + ' ' + JSON.parse(r2.headers.get('current-version'))
+    },
+    '"hi\\u2211-1" "hi\\u2211-0" x hi∑-1'
+)
+
+runTest(
+    "test HEAD for GET without subscribe",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'HEAD'
+        })
+
+        var text = await r2.text()
+
+        return r2.headers.get('version') + ' ' + JSON.parse(r2.headers.get('version')) + ` text:[${text}]`
+    },
+    '"hi\\u2211-1" hi∑-1 text:[]'
+)
+
+runTest(
+    "test HEAD for GET without subscribe (with transfer-encoding)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        let r2 = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            headers: {
+                'accept-transfer-encoding': 'dt'
+            }
+        })
+
+        var buf = await r2.arrayBuffer()
+
+        return r2.headers.get('current-version') + ' ' + JSON.parse(r2.headers.get('current-version')) + ` buf.byteLength:${buf.byteLength}`
+    },
+    '"hi\\u2211-1" hi∑-1 buf.byteLength:0'
+)
+
+runTest(
+    "test accept-encoding updates(dt) (with parents)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'x')
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            parents: ['hi-0'],
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                doc.mergeBytes(u.body)
+                done(doc.get())
+                doc.free()
+                a.abort()
+            })
+        })
+    },
+    'xy'
+)
+
+runTest(
+    "test accept-encoding updates(dt) (with parents which are current version)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        var doc = new Doc('hi')
+        doc.ins(0, 'xy')
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            parents: ['hi-1'],
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                doc.mergeBytes(u.body)
+                done(doc.get())
+                doc.free()
+                a.abort()
+            })
+        })
+    },
+    'xy'
+)
+
+runTest(
+    "test accept-encoding updates(dt)",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        var doc = new Doc('yo')
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                doc.mergeBytes(u.body)
+                done(doc.get())
+                doc.free()
+                a.abort()
+            })
+        })
+    },
+    'xy'
+)
+
+runTest(
+    "test accept-encoding updates(dt), getting non-encoded update",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true,
+            headers: {
+                'merge-type': 'dt',
+                'X-Accept-Encoding': 'updates(dt)'
+            }
+        })
+
+        setTimeout(async () => {
+            await braid_fetch(`/${key}`, {
+                method: 'PUT',
+                version: ['yo-0'],
+                parents: ['hi-1'],
+                patches: [{unit: 'text', range: '[2:2]', content: 'z'}]
+            })
+        }, 200)
+
+        var results = []
+
+        var doc = new Doc('yo')
+        return await new Promise(done => {
+            r2.subscribe(u => {
+                if (!u.status) {
+                    doc.mergeBytes(u.body)
+                    results.push(doc.get())
+                    doc.free()
+                } else {
+                    results.push(u.patches[0].content_text)
+                    done(results.join(''))
+                    a.abort()
+                }
+            })
+        })
+    },
+    'xyz'
+)
+
+runTest(
+    "test Version we get from PUTing",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi∑-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        return r.headers.get('version')
+    },
+    '"hi\\u2211-1"'
+)
+
+runTest(
+    "test error code when missing parents",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: ['missing-0', 'y😀-0'],
+            body: 'xx'
+        })
+        return r.status + ' ' + r.ok + ' ' + r.statusText +  ' ' + r.headers.get('Version')
+    },
+    '309 false Version Unknown Here "missing-0", "y\\ud83d\\ude00-0"'
+)
+
+runTest(
+    "test subscribing starting at a version using simpleton",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            version: ['hi-0'],
+            subscribe: true
+        })
+        return await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                done(JSON.stringify(update.parents))
+                a.abort()
+            }, fail)
+        })
+    },
+    JSON.stringify([ "hi-0" ])
+)
+
+runTest(
+    "test subscribing starting at a version using dt",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            version: ['hi-0'],
+            subscribe: true,
+            headers: {
+                'Merge-Type': 'dt'
+            }
+        })
+        return r2.headers.get('merge-type') + ':' + await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                done(JSON.stringify(update.parents))
+                a.abort()
+            }, fail)
+        })
+    },
+    'dt:' + JSON.stringify([ "hi-0" ])
+)
+
+runTest(
+    "test subscribing starting at the latest version using dt",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            version: ['hi-1'],
+            subscribe: true,
+            headers: {
+                'Merge-Type': 'dt'
+            }
+        })
+        return await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                done('got something')
+                a.abort()
+            }, fail)
+            setTimeout(() => {
+                done('got nothing')
+                a.abort()
+            }, 1500)
+        })
+    },
+    'got nothing'
+)
+
+runTest(
+    "test subscribing starting at beginning using dt",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true,
+            headers: {
+                'Merge-Type': 'dt'
+            }
+        })
+        return r2.headers.get('merge-type') + ':' + await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                if (update.version[0] === 'hi-1') {
+                    done('got it!')
+                    a.abort()
+                }
+            }, fail)
+        })
+    },
+    'dt:got it!'
+)
+
+runTest(
+    "test dt_create_bytes with big agent name",
+    async () => {
+        let x = await (await fetch(`/test.html?dt_create_bytes_big_name`)).json()
+        return JSON.stringify(x)
+    },
+    JSON.stringify({ok: true})
+)
+
+runTest(
+    "test dt_create_bytes with many agent names",
+    async () => {
+        let x = await (await fetch(`/test.html?dt_create_bytes_many_names`)).json()
+        return JSON.stringify(x)
+    },
+    JSON.stringify({ok: true})
+)
+
+runTest(
+    "test deleting a resource",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'hi'
+        })
+
+        await fetch(`/${key}`, {method: 'DELETE'})
+
+        let r = await fetch(`/${key}`)
+
+        return await r.text()
+    },
+    ''
+)
+
+runTest(
+    "test getting a binary update from a subscription",
+    async () => {
+        return await new Promise(async (done, fail) => {
+            let key = 'test-' + Math.random().toString(36).slice(2)
+
+            await fetch(`/${key}`, {
+                method: 'PUT',
+                body: JSON.stringify({a: 5, b: 6}, null, 4)
+            })
+
+            var a = new AbortController()
+            let r = await braid_fetch(`/${key}`, {
+                signal: a.signal,
+                subscribe: true
+            })
+
+            r.subscribe(update => {
+                done(update.body_text)
+                a.abort()
+            }, fail)
+        })
+    },
+    JSON.stringify({a: 5, b: 6}, null, 4)
+)
+
+runTest(
+    "test sending a json patch to some json-text",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({a: 5, b: 6})
+        })
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Range': 'json a' },
+            body: '67'
+        })
+
+        let r = await fetch(`/${key}`)
+
+        return await r.text()
+    },
+    JSON.stringify({a: 67, b: 6}, null, 4)
+)
+
+runTest(
+    "test sending multiple json patches to some json-text",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({a: 5, b: 6, c: 7})
+        })
+
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Range': 'json a' },
+            patches: [{
+                unit: 'json',
+                range: 'a',
+                content: '55',
+            }, {
+                unit: 'json',
+                range: 'b',
+                content: '66',
+            }]
+        })
+
+        let r = await fetch(`/${key}`)
+
+        return await r.text()
+    },
+    JSON.stringify({a: 55, b: 66, c: 7}, null, 4)
+)
+
+runTest(
+    "test deleting something using a json patch",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            body: JSON.stringify({a: 5, b: 6}, null, 4)
+        })
+
+        await fetch(`/${key}`, {
+            method: 'PUT',
+            headers: { 'Content-Range': 'json a' },
+            body: ''
+        })
+
+        let r = await fetch(`/${key}`)
+
+        return await r.text()
+    },
+    JSON.stringify({b: 6}, null, 4)
+)
+
+runTest(
+    "test length updating",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        await fetch(`/${key}`, { method: 'PUT', body: '' })
+        await fetch(`/${key}`, { method: 'PUT', body: '0123456789' })
+        await fetch(`/${key}`, { method: 'PUT', body: '0123456789' })
+        await fetch(`/${key}`, { method: 'PUT', body: '0123456789' })
+
+        let r = await fetch(`/${key}`, { method: 'HEAD' })
+        return '' + parseInt(r.headers.get('version').split('-')[1])
+    },
+    '19'
+)
+
+runTest(
+    "test retry when parents not there..",
+    async () => {
+        return await new Promise(done => {
+            var count = 0
+            var key = 'test-' + Math.random().toString(36).slice(2)
+            var a = new AbortController()
+            braid_fetch(`/${key}`, {
+                signal: a.signal,
+                multiplex: false,
+                method: 'PUT',
+                version: ['hi-3'],
+                parents: ['hi-1'],
+                body: 'xx',
+                onFetch: () => {
+                    count++
+                    if (count === 2) {
+                        done('retried!')
+                        a.abort()
+                    }
+                },
+                retry: true
+            })
+        })
+    },
+    'retried!'
+)
+
+runTest(
+    "test asking for a version that should and shouldn't be there",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-10'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            version: ['hi-5']
+        })
+        if (r.status !== 309) throw 'expected 309, got: ' + r.status
+        if (r.statusText !== 'Version Unknown Here') throw 'unexpected status text: ' + r.statusText
+        if (r.ok) throw 'found version we should not have found'
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            version: ['hi-10']
+        })
+        if (!r.ok) throw 'could not find version we should have found'
+
+        return 'worked out!'
+    },
+    'worked out!'
+)
+
+runTest(
+    "test asking for parents that should and shouldn't be there",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-10'],
+            parents: [],
+            body: 'x'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            parents: ['hi-5']
+        })
+        if (r.status !== 309) throw 'expected 309, got: ' + r.status
+        if (r.ok) throw 'found parents we should not have found'
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            parents: ['hi-10']
+        })
+        if (!r.ok) throw 'could not find parents we should have found'
+
+        return 'worked out!'
+    },
+    'worked out!'
+)
+
+runTest(
+    "test that 309 returns all missing events",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-11'],
+            parents: [],
+            body: 'xyz'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'HEAD',
+            version: ['yo-1', 'hi-11'],
+            parents: ['hi-5', 'hi-8', 'hi-9', 'hi-10']
+        })
+        if (r.status !== 309) throw 'expected 309, got: ' + r.status
+        return r.headers.get('version')
+    },
+    '"yo-1", "hi-5", "hi-8"'
+)
+
+runTest(
+    "test that subscribe returns current-version header",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-11'],
+            parents: [],
+            body: 'xyz'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        var r = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true
+        })
+        var result = r.headers.get('current-version')
+        a.abort()
+        return result
+    },
+    '"hi-11"'
+)
+
+}
+
+// Export for both Node.js and browser environments
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = defineTests
+}
