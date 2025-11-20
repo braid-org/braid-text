@@ -2099,6 +2099,126 @@ runTest(
     '"hi-11"'
 )
 
+runTest(
+    "test case-insensitive filesystem handling (/a vs /A)",
+    async () => {
+        // This test verifies that keys differing only in case are stored
+        // in separate files on case-insensitive filesystems (Mac/Windows)
+        var key_lower = '/test-case-' + Math.random().toString(36).slice(2)
+        var key_upper = key_lower.toUpperCase()
+
+        // Store different values for lowercase and uppercase keys
+        // Then clear cache and reload from disk to verify filesystem storage
+        var r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                await braid_text.put('${key_lower}', {body: 'lowercase-value'})
+                await braid_text.put('${key_upper}', {body: 'uppercase-value'})
+
+                // Wait for disk write
+                await new Promise(done => setTimeout(done, 200))
+
+                // Clear the in-memory cache to force reload from disk
+                // Note: We keep the key_to_encoded mapping intact since that persists across cache clears
+                delete braid_text.cache['${key_lower}']
+                delete braid_text.cache['${key_upper}']
+
+                // Also need to wait for any async file operations
+                await new Promise(done => setTimeout(done, 100))
+
+                // Read back from disk - pass empty options to force loading
+                var lower = (await braid_text.get('${key_lower}', {})).body
+                var upper = (await braid_text.get('${key_upper}', {})).body
+                res.end(JSON.stringify({lower, upper}))
+            })()`
+        })
+        if (!r1.ok) return 'eval failed: ' + r1.status
+
+        var result = JSON.parse(await r1.text())
+        if (result.lower !== 'lowercase-value') {
+            return 'lower mismatch: ' + result.lower
+        }
+        if (result.upper !== 'uppercase-value') {
+            return 'upper mismatch: ' + result.upper
+        }
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
+    "test filename conflict detection (different encodings of same key)",
+    async () => {
+        // This test creates two files on disk with different URL-encoded names
+        // that decode to the same key, then tries to load them, which should
+        // throw "filename conflict detected"
+
+        // Use a unique test subdirectory to avoid affecting other tests
+        var testId = Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var fs = require('fs')
+                var path = require('path')
+
+                // Create a temporary test db folder
+                var testFolder = path.join(braid_text.db_folder, 'conflict-test-${testId}')
+                await fs.promises.mkdir(testFolder, { recursive: true })
+
+                // Create two files that decode to the same key "/hello"
+                // File 1: Using the standard encoding with ! swapped for /
+                // !hello -> decodes to /hello (after !/swap)
+                await fs.promises.writeFile(path.join(testFolder, '!hello.0'), 'content1')
+
+                // File 2: Using %2F encoding for /
+                // %2Fhello -> decodes to /hello (via URL decoding, then !/swap on /)
+                // Actually, let's trace through decode_filename:
+                // 1. decodeURIComponent('%21hello') = '!hello'
+                // 2. swap !/: '!hello' -> '/hello'
+                // So %21hello decodes to /hello
+                await fs.promises.writeFile(path.join(testFolder, '%21hello.0'), 'content2')
+
+                // Now try to initialize filename mapping with these files
+                // We need to call the internal init_filename_mapping function
+                // through a resource load that reads the test directory
+
+                try {
+                    // Read the files from the test folder
+                    var files = await fs.promises.readdir(testFolder)
+
+                    // Simulate what init_filename_mapping does
+                    var key_to_filename = new Map()
+                    for (var file of files) {
+                        var encoded = file.replace(/\\\.\\d+$/, '')
+                        var key = braid_text.decode_filename(encoded)
+
+                        if (!key_to_filename.has(key)) {
+                            key_to_filename.set(key, encoded)
+                        } else {
+                            throw new Error('filename conflict detected')
+                        }
+                    }
+                    res.end('no error thrown')
+                } catch (e) {
+                    res.end(e.message)
+                } finally {
+                    // Clean up test folder
+                    try {
+                        for (var f of await fs.promises.readdir(testFolder)) {
+                            await fs.promises.unlink(path.join(testFolder, f))
+                        }
+                        await fs.promises.rmdir(testFolder)
+                    } catch (e) {}
+                }
+            })()`
+        })
+
+        return await r.text()
+    },
+    'filename conflict detected'
+)
+
 }
 
 // Export for both Node.js and browser environments

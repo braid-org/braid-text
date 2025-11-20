@@ -1068,6 +1068,11 @@ function create_braid_text() {
                 }
             }
 
+            // Populate key_to_filename mapping from existing files
+            var files = (await fs.promises.readdir(braid_text.db_folder))
+                .filter(x => /\.\d+$/.test(x))
+            init_filename_mapping(files)
+
             done()
         })
         await db_folder_init.p
@@ -2202,24 +2207,59 @@ function create_braid_text() {
         return i
     }
 
-    function encode_filename(filename) {
-        // Swap all "!" and "/" characters
-        let swapped = filename.replace(/[!/]/g, (match) => (match === "!" ? "/" : "!"))
+    var {
+        encode_file_path_component, ensure_unique_case_insensitive_path_component
+    } = require('url-file-db/canonical_path')
 
-        // Encode the filename using encodeURIComponent()
-        let encoded = encodeURIComponent(swapped)
+    // Mapping between keys and their encoded filenames
+    // Populated at init time, used to avoid re-encoding and handle case collisions
+    var key_to_filename = new Map()
+    var ifilenames = new Set()
+
+    function encode_filename(key) {
+        // Return cached encoding if we've seen this key before
+        if (key_to_filename.has(key)) {
+            return key_to_filename.get(key)
+        }
+
+        // Swap all "!" and "/" characters so paths are more readable on disk
+        var swapped = key.replace(/[!/]/g, (match) => (match === "!" ? "/" : "!"))
+
+        // Encode unsafe filesystem characters
+        var encoded = encode_file_path_component(swapped)
+
+        // Resolve case collisions for case-insensitive filesystems (Mac/Windows)
+        encoded = ensure_unique_case_insensitive_path_component(encoded, ifilenames)
+
+        // Cache the mapping
+        key_to_filename.set(key, encoded)
+        ifilenames.add(encoded.toLowerCase())
 
         return encoded
     }
 
     function decode_filename(encodedFilename) {
-        // Decode the filename using decodeURIComponent()
-        let decoded = decodeURIComponent(encodedFilename)
+        // Decode the filename
+        var decoded = decodeURIComponent(encodedFilename)
 
-        // Swap all "/" and "!" characters
+        // Swap all "/" and "!" characters back
         decoded = decoded.replace(/[!/]/g, (match) => (match === "/" ? "!" : "/"))
 
         return decoded
+    }
+
+    // Populate key_to_filename mapping from existing files on disk
+    function init_filename_mapping(files) {
+        for (var file of files) {
+            // Extract the encoded key (strip extension like .0, .1, etc.)
+            var encoded = file.replace(/\.\d+$/, '')
+            var key = decode_filename(encoded)
+
+            if (!key_to_filename.has(key)) {
+                key_to_filename.set(key, encoded)
+                ifilenames.add(encoded.toLowerCase())
+            } else throw new Error('filename conflict detected')
+        }
     }
 
     function validate_version_array(x) {
