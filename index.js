@@ -2216,7 +2216,7 @@ function create_braid_text() {
     }
 
     var {
-        encode_file_path_component, ensure_unique_case_insensitive_path_component
+        encode_file_path_component, encode_to_avoid_icase_collision
     } = require('url-file-db/canonical_path')
 
     // Mapping between keys and their encoded filenames
@@ -2237,7 +2237,7 @@ function create_braid_text() {
         var encoded = encode_file_path_component(swapped)
 
         // Resolve case collisions for case-insensitive filesystems (Mac/Windows)
-        encoded = ensure_unique_case_insensitive_path_component(encoded, ifilenames)
+        encoded = encode_to_avoid_icase_collision(encoded, ifilenames)
 
         // Cache the mapping
         key_to_filename.set(key, encoded)

@@ -1,6 +1,6 @@
 {
   "name": "braid-text",
-  "version": "0.2.73",
+  "version": "0.2.74",
   "description": "Library for collaborative text over http using braid.",
   "author": "Braid Working Group",
   "repository": "braid-org/braid-text",
@@ -8,6 +8,6 @@
   "dependencies": {
     "@braid.org/diamond-types-node": "^2.0.0",
     "braid-http": "~1.3.83",
-    "url-file-db": "^0.0.10"
+    "url-file-db": "^0.0.19"
   }
 }
