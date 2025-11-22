@@ -304,6 +304,17 @@ function create_braid_text() {
             if (!req.subscribe) {
                 res.setHeader("Accept-Subscribe", "true")
 
+                // Set headers based on request type
+                // Current-Version: always for dt encoding, or when version/parents present
+                if (req.headers['accept-transfer-encoding'] === 'dt' || req.version || req.parents) {
+                    res.setHeader("Current-Version", get_current_version())
+                }
+
+                // Merge-Type: only when version/parents present
+                if (req.version || req.parents) {
+                    res.setHeader("Merge-Type", merge_type)
+                }
+
                 // special case for HEAD asking for version/parents,
                 // to be faster by not reconstructing body
                 if (req.method === "HEAD" && (req.version || req.parents))
@@ -321,13 +332,10 @@ function create_braid_text() {
                 }
 
                 if (req.headers['accept-transfer-encoding'] === 'dt') {
-                    res.setHeader("Current-Version", get_current_version())
                     res.setHeader("X-Transfer-Encoding", 'dt')
                     res.setHeader("Content-Length", x.body.length)
                     return my_end(209, req.method === "HEAD" ? null : x.body, 'Multiresponse')
                 } else {
-                    if (req.version || req.parents)
-                        res.setHeader("Current-Version", get_current_version())
                     res.setHeader("Version", ascii_ify(x.version.map((x) => JSON.stringify(x)).join(", ")))
                     var buffer = Buffer.from(x.body, "utf8")
                     res.setHeader("Repr-Digest", get_digest(buffer))
@@ -2258,7 +2266,13 @@ function create_braid_text() {
             if (!key_to_filename.has(key)) {
                 key_to_filename.set(key, encoded)
                 ifilenames.add(encoded.toLowerCase())
-            } else throw new Error('filename conflict detected')
+            } else {
+                // Already have this key mapped - verify it maps to the same encoding
+                if (key_to_filename.get(key) !== encoded) {
+                    throw new Error(`filename conflict detected: key "${key}" maps to both "${key_to_filename.get(key)}" and "${encoded}"`)
+                }
+                // Otherwise it's just a re-initialization, skip it
+            }
         }
     }
 

@@ -2147,6 +2147,59 @@ runTest(
 )
 
 runTest(
+    "test Merge-Type header per Braid spec",
+    async () => {
+        let key = 'test-merge-type-' + Math.random().toString(36).slice(2)
+
+        // First PUT some content (15 characters, so version is alice-14)
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['alice-14'],
+            parents: [],
+            body: 'initial content'
+        })
+
+        // Test 1: GET with Version header should include Merge-Type
+        let r1 = await braid_fetch(`/${key}`, {
+            version: ['alice-14']
+        })
+        if (!r1.headers.get('merge-type')) return 'Missing Merge-Type with Version header'
+
+        // Test 2: GET with empty Version header should still include Merge-Type
+        let r2 = await braid_fetch(`/${key}`, {
+            headers: {
+                'Version': ''
+            }
+        })
+        if (!r2.headers.get('merge-type')) return 'Missing Merge-Type with empty Version header'
+
+        // Test 3: GET with Parents header should include Merge-Type
+        let r3 = await braid_fetch(`/${key}`, {
+            parents: []
+        })
+        if (!r3.headers.get('merge-type')) return 'Missing Merge-Type with Parents header'
+
+        // Test 4: Regular GET without Version/Parents should NOT include Merge-Type
+        let r4 = await braid_fetch(`/${key}`)
+        if (r4.headers.get('merge-type')) return 'Unexpected Merge-Type without Version/Parents'
+
+        // Test 5: GET with Subscribe should include Merge-Type
+        let a = new AbortController()
+        let r5 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true
+        })
+        if (!r5.headers.get('merge-type')) return 'Missing Merge-Type with Subscribe'
+
+        // Close subscription
+        a.abort()
+
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
     "test filename conflict detection (different encodings of same key)",
     async () => {
         // This test creates two files on disk with different URL-encoded names

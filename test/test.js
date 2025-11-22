@@ -233,6 +233,20 @@ async function runConsoleTests() {
     console.log(`Total: ${totalTests} | Passed: ${passedTests} | Failed: ${failedTests}`)
     console.log('='.repeat(50))
 
+    // Clean up test database folder
+    console.log('Cleaning up test database folder...')
+    const fs = require('fs')
+    const path = require('path')
+    const testDbPath = path.join(__dirname, 'test_db_folder')
+    try {
+        if (fs.existsSync(testDbPath)) {
+            fs.rmSync(testDbPath, { recursive: true, force: true })
+            console.log('Test database folder removed')
+        }
+    } catch (err) {
+        console.log(`Warning: Could not remove test database folder: ${err.message}`)
+    }
+
     // Force close the server and all connections
     console.log('Closing server...')
     testServer.server.close(() => {
