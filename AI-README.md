@@ -12,7 +12,7 @@ Follow these steps to create a new release:
 
 2. **Run Tests**
    - Run `node test/test.js` - should show all 74 tests passing
-   - Run `node test/fuzz-test.js` - should run without errors (best_n = Infinity @ NaN indicates success)
+   - Run `node test/fuzz-test.js` - runs 10,000 iterations (takes ~5-10 minutes), should complete with `best_n = Infinity @ NaN` indicating success
    - Both tests must pass before proceeding
 
 3. **Commit Changes**
@@ -38,9 +38,10 @@ Follow these steps to create a new release:
 ### test/fuzz-test.js
 - Fuzz testing suite that generates random edits and verifies correctness
 - Tests diamond-types integration and merge operations
-- Runs 10,000 iterations by default
-- Success indicated by `best_n = Infinity @ NaN` (no failures found)
+- Runs 10,000 iterations by default (takes approximately 5-10 minutes)
+- Success indicated by `best_n = Infinity @ NaN` at completion (no failures found)
 - Run with: `node test/fuzz-test.js`
+- Let it run to completion - do not interrupt
 
 ## Project Structure
 
