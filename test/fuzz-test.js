@@ -270,16 +270,20 @@ async function main() {
 
             // try getting updates from middle_doc to doc
             if (!v_eq(middle_v, doc_v)) {
-                var o
+                var ac = new AbortController()
                 await new Promise(async done => {
-                    o = {merge_type: 'dt', parents: middle_v, subscribe: async update => {
-                        await braid_text.put('middle_doc', update)
-                        middle_v = (await braid_text.get_resource('middle_doc')).version
-                        if (v_eq(doc_v, middle_v)) done()
-                    }}
-                    braid_text.get('doc', o)
+                    braid_text.get('doc', {
+                        signal: ac.signal,
+                        merge_type: 'dt',
+                        parents: middle_v,
+                        subscribe: async update => {
+                            await braid_text.put('middle_doc', update)
+                            middle_v = (await braid_text.get_resource('middle_doc')).version
+                            if (v_eq(doc_v, middle_v)) done()
+                        }
+                    })
                 })
-                await braid_text.forget('doc', o)
+                ac.abort()
             }
 
             if (await braid_text.get('middle_doc') != await braid_text.get('doc')) throw new Error('bad')

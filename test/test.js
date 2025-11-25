@@ -69,6 +69,11 @@ function createTestServer(options = {}) {
             return res.end('error')
         }
 
+        if (req.url.startsWith('/404')) {
+            res.statusCode = 404
+            return res.end('Not Found')
+        }
+
         if (req.url.startsWith('/eval')) {
             var body = await new Promise(done => {
                 var chunks = []

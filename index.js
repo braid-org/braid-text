@@ -17,25 +17,37 @@ function create_braid_text() {
     let max_encoded_key_size = 240
 
     braid_text.sync = async (a, b, options = {}) => {
-        var unsync_cbs = []
-        options.my_unsync = () => unsync_cbs.forEach(cb => cb())
-
         if (!options.merge_type) options.merge_type = 'dt'
 
         if ((a instanceof URL) === (b instanceof URL)) {
+            // Both are URLs or both are local keys
+            var a_first_put, b_first_put
+            var a_first_put_promise = new Promise(done => a_first_put = done)
+            var b_first_put_promise = new Promise(done => b_first_put = done)
+
             var a_ops = {
-                subscribe: update => braid_text.put(b, update),
+                signal: options.signal,
+                subscribe: update => {
+                    update.signal = options.signal
+                    braid_text.put(b, update).then(a_first_put)
+                },
                 merge_type: options.merge_type,
             }
-            braid_text.get(a, a_ops)
-            unsync_cbs.push(() => braid_text.forget(a, a_ops))
+            braid_text.get(a, a_ops).then(x =>
+                x || b_first_put_promise.then(() =>
+                    braid_text.get(a, a_ops)))
 
             var b_ops = {
-                subscribe: update => braid_text.put(a, update),
+                signal: options.signal,
+                subscribe: update => {
+                    update.signal = options.signal
+                    braid_text.put(a, update).then(b_first_put)
+                },
                 merge_type: options.merge_type,
             }
-            braid_text.get(b, b_ops)
-            unsync_cbs.push(() => braid_text.forget(b, b_ops))
+            braid_text.get(b, b_ops).then(x =>
+                x || a_first_put_promise.then(() =>
+                    braid_text.get(b, b_ops)))
         } else {
             // make a=local and b=remote (swap if not)
             if (a instanceof URL) { let swap = a; a = b; b = swap }
@@ -78,11 +90,14 @@ function create_braid_text() {
             }
 
             var closed
-            var disconnect
-            unsync_cbs.push(() => {
+            var disconnect = () => {}
+            options.signal?.addEventListener('abort', () => {
                 closed = true
                 disconnect()
             })
+
+            var local_first_put
+            var local_first_put_promise = new Promise(done => local_first_put = done)
 
             connect()
             async function connect() {
@@ -91,9 +106,7 @@ function create_braid_text() {
                 if (closed) return
 
                 var ac = new AbortController()
-                var disconnect_cbs = [() => ac.abort()]
-
-                disconnect = () => disconnect_cbs.forEach(cb => cb())
+                disconnect = () => ac.abort()
 
                 try {
                     // fork-point
@@ -142,9 +155,11 @@ function create_braid_text() {
 
                     // local -> remote
                     var a_ops = {
+                        signal: ac.signal,
                         subscribe: update => {
                             update.signal = ac.signal
                             braid_text.put(b, update).then((x) => {
+                                local_first_put()
                                 extend_fork_point(update)
                             }).catch(e => {
                                 if (e.name === 'AbortError') {
@@ -155,20 +170,26 @@ function create_braid_text() {
                     }
                     if (resource.meta.fork_point)
                         a_ops.parents = resource.meta.fork_point
-                    disconnect_cbs.push(() => braid_text.forget(a, a_ops))
                     braid_text.get(a, a_ops)
 
                     // remote -> local
                     var b_ops = {
+                        signal: ac.signal,
                         dont_retry: true,
                         subscribe: async update => {
                             await braid_text.put(a, update)
                             extend_fork_point(update)
                         },
                     }
-                    disconnect_cbs.push(() => braid_text.forget(b, b_ops))
-                    // NOTE: this should not return, but it might throw
-                    await braid_text.get(b, b_ops)
+                    // Handle case where remote doesn't exist yet - wait for local to create it
+                    var remote_result = await braid_text.get(b, b_ops)
+                    if (remote_result === null) {
+                        // Remote doesn't exist yet, wait for local to put something
+                        await local_first_put_promise
+                        disconnect()
+                        connect()
+                    }
+                    // NOTE: if remote exists, this should not return, but it might throw
                 } catch (e) {
                     if (closed) return
 
@@ -176,7 +197,7 @@ function create_braid_text() {
                     console.log(`disconnected, retrying in 1 second`)
                     setTimeout(connect, 1000)
                 }
-            }            
+            }
         }
     }
 
@@ -468,15 +489,9 @@ function create_braid_text() {
 
         // Handle URL - make a DELETE request
         if (key instanceof URL) {
-            options.my_abort = new AbortController()
-            if (options.signal)
-                options.signal.addEventListener('abort', () =>
-                    options.my_abort.abort())
-
             var params = {
                 method: 'DELETE',
-                signal: options.my_abort.signal,
-                retry: () => true,
+                signal: options.signal,
             }
             for (var x of ['headers', 'peer'])
                 if (options[x] != null) params[x] = options[x]
@@ -502,18 +517,20 @@ function create_braid_text() {
         if (key instanceof URL) {
             if (!options) options = {}
 
-            options.my_abort = new AbortController()
-
             var params = {
-                signal: options.my_abort.signal,
+                signal: options.signal,
                 subscribe: !!options.subscribe,
                 heartbeats: 120,
             }
-            if (!options.dont_retry) params.retry = () => true
+            if (!options.dont_retry) {
+                params.retry = (res) => res.status !== 404
+            }
             for (var x of ['headers', 'parents', 'version', 'peer'])
                 if (options[x] != null) params[x] = options[x]
 
             var res = await braid_fetch(key.href, params)
+
+            if (res.status === 404) return null
 
             if (options.subscribe) {
                 if (options.dont_retry) {
@@ -603,6 +620,8 @@ function create_braid_text() {
 
                 options.my_last_sent_version = x.version
                 resource.simpleton_clients.add(options)
+                options.signal?.addEventListener('abort', () =>
+                    resource.simpleton_clients.delete(options))
             } else {
 
                 if (options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1].split(',').map(x=>x.trim()).includes('dt')) {
@@ -650,20 +669,10 @@ function create_braid_text() {
                 }
 
                 resource.clients.add(options)
+                options.signal?.addEventListener('abort', () =>
+                    resource.clients.delete(options))
             }
         }
-    }
-
-    braid_text.forget = async (key, options) => {
-        if (!options) throw new Error('options is required')
-
-        if (key instanceof URL) return options.my_abort.abort()
-
-        let resource = (typeof key == 'string') ? await get_resource(key) : key
-
-        if (options.merge_type != "dt")
-            resource.simpleton_clients.delete(options)
-        else resource.clients.delete(options)
     }
 
     braid_text.put = async (key, options) => {
@@ -677,14 +686,9 @@ function create_braid_text() {
         }
 
         if (key instanceof URL) {
-            options.my_abort = new AbortController()
-            if (options.signal)
-                options.signal.addEventListener('abort', () =>
-                    options.my_abort.abort())
-
             var params = {
                 method: 'PUT',
-                signal: options.my_abort.signal,
+                signal: options.signal,
                 retry: () => true,
             }
             for (var x of ['headers', 'parents', 'version', 'peer', 'body', 'patches'])

@@ -50,13 +50,14 @@ runTest(
             method: 'PUT',
             body: `void (async () => {
                 var count = 0
-                var ops
-                braid_text.sync('/${key}', new URL('http://localhost:8889/have_error'), ops = {
+                var ac = new AbortController()
+                braid_text.sync('/${key}', new URL('http://localhost:8889/have_error'), {
+                    signal: ac.signal,
                     on_connect: () => {
                         count++
                         if (count === 2) {
                             res.end('it reconnected!')
-                            ops.my_unsync()
+                            ac.abort()
                         }
                     }
                 })
@@ -201,13 +202,14 @@ runTest(
             method: 'PUT',
             body: `void (async () => {
                 var count = 0
-                var ops
-                braid_text.sync('/${key_a}', new URL('http://localhost:8889/have_error'), ops = {
+                var ac = new AbortController()
+                braid_text.sync('/${key_a}', new URL('http://localhost:8889/have_error'), {
+                    signal: ac.signal,
                     on_connect: () => {
                         count++
                         if (count === 2) {
                             res.end('it reconnected!')
-                            ops.my_unsync()
+                            ac.abort()
                         }
                     }
                 })
@@ -265,10 +267,10 @@ runTest(
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
-                var ops = {}
-                braid_text.sync('/${key_a}', '/${key_b}', ops)
+                var ac = new AbortController()
+                braid_text.sync('/${key_a}', '/${key_b}', {signal: ac.signal})
                 await new Promise(done => setTimeout(done, 100))
-                ops.my_unsync()
+                ac.abort()
                 res.end('')
             })()`
         })
@@ -283,10 +285,10 @@ runTest(
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
-                var ops = {}
-                braid_text.sync('/${key_a}', new URL('http://localhost:8889/${key_b}'), ops)
+                var ac = new AbortController()
+                braid_text.sync('/${key_a}', new URL('http://localhost:8889/${key_b}'), {signal: ac.signal})
                 await new Promise(done => setTimeout(done, 100))
-                ops.my_unsync()
+                ac.abort()
                 res.end('')
             })()`
         })
@@ -456,14 +458,15 @@ runTest(
             method: 'PUT',
             body: `void (async () => {
                 var url = new URL('http://localhost:8889/${key}')
+                var ac = new AbortController()
                 var update = await new Promise(done => {
-                    var o = {
+                    braid_text.get(url, {
+                        signal: ac.signal,
                         subscribe: update => {
-                            braid_text.forget(url, o)
+                            ac.abort()
                             done(update)
                         }
-                    }
-                    braid_text.get(url, o)
+                    })
                 })
                 res.end(update.body)
             })()`
@@ -1927,6 +1930,62 @@ runTest(
         return 'got: ' + (await r2.text())
     },
     'got: '
+)
+
+runTest(
+    "test braid_text.get(url) returns null for 404",
+    async () => {
+        // Use the /404 endpoint that always returns 404
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var result = await braid_text.get(new URL('http://localhost:8889/404'))
+                res.end(result === null ? 'null' : 'not null: ' + result)
+            })()`
+        })
+        return await r.text()
+    },
+    'null'
+)
+
+runTest(
+    "test braid_text.sync handles remote not existing yet",
+    async () => {
+        var local_key = 'test-local-' + Math.random().toString(36).slice(2)
+        var remote_key = 'test-remote-' + Math.random().toString(36).slice(2)
+
+        // Start sync between a local key and a remote URL that doesn't exist yet
+        // The sync should wait for local to create something, then push to remote
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var ac = new AbortController()
+
+                // Start sync - remote doesn't exist yet
+                braid_text.sync('/${local_key}', new URL('http://localhost:8889/${remote_key}'), {
+                    signal: ac.signal
+                })
+
+                // Wait a bit then put something locally
+                await new Promise(done => setTimeout(done, 100))
+                await braid_text.put('/${local_key}', { body: 'created locally' })
+
+                // Wait for sync to propagate
+                await new Promise(done => setTimeout(done, 200))
+
+                // Stop sync
+                ac.abort()
+
+                res.end('done')
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        // Check that remote now has the content
+        var r2 = await braid_fetch(`/${remote_key}`)
+        return await r2.text()
+    },
+    'created locally'
 )
 
 runTest(
