@@ -464,7 +464,9 @@ function create_braid_text() {
     }
 
     braid_text.delete = async (key) => {
-        await braid_text.put(key, {body: ''})
+        // Accept either a key string or a resource object
+        let resource = (typeof key == 'string') ? await get_resource(key) : key
+        await resource.delete()
     }
 
     braid_text.get = async (key, options) => {
@@ -1028,6 +1030,42 @@ function create_braid_text() {
             resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
             resource.length_cache = createSimpleCache(braid_text.length_cache_size)
+
+            // Add delete method to resource
+            resource.delete = async () => {
+                // Free the diamond-types document
+                if (resource.doc) resource.doc.free()
+
+                // Remove from in-memory cache
+                delete braid_text.cache[key]
+
+                // Remove all files for this key from db_folder
+                if (braid_text.db_folder) {
+                    var files = await get_files_for_key(key)
+                    for (var file of files) {
+                        try {
+                            await fs.promises.unlink(file)
+                        } catch (e) {
+                            // File might not exist, that's ok
+                        }
+                    }
+
+                    // Remove meta file if it exists
+                    try {
+                        var encoded = encode_filename(key)
+                        await fs.promises.unlink(`${braid_text.db_folder}/.meta/${encoded}`)
+                    } catch (e) {
+                        // Meta file might not exist, that's ok
+                    }
+                }
+
+                // Remove from filename mapping
+                if (key_to_filename.has(key)) {
+                    var encoded = key_to_filename.get(key)
+                    ifilenames.delete(encoded.toLowerCase())
+                    key_to_filename.delete(key)
+                }
+            }
 
             done(resource)
         })

@@ -1841,6 +1841,62 @@ runTest(
 )
 
 runTest(
+    "test deleting a resource completely removes all traces",
+    async () => {
+        let key = 'test-delete-complete-' + Math.random().toString(36).slice(2)
+
+        // Create a resource with some content
+        // "hello world" is 11 characters, so version should be alice-10 (positions 0-10 inclusive)
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['alice-10'],
+            parents: [],
+            body: 'hello world'
+        })
+
+        // Verify it exists in cache using eval endpoint
+        let r1 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `res.end(braid_text.cache['/${key}'] ? 'exists' : 'missing')`
+        })
+        if ((await r1.text()) !== 'exists') return 'Resource not in cache after creation'
+
+        // Delete the resource
+        await braid_fetch(`/${key}`, {method: 'DELETE'})
+
+        // Verify it's removed from cache
+        let r2 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `res.end(braid_text.cache['/${key}'] ? 'exists' : 'missing')`
+        })
+        if ((await r2.text()) !== 'missing') return 'Resource still in cache after deletion'
+
+        // Verify we can create it again from scratch with same key
+        // "new content" is 11 characters, so version should be bob-10 (positions 0-10 inclusive)
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['bob-10'],
+            parents: [],
+            body: 'new content'
+        })
+
+        // Get the new resource and verify it's fresh (not the old one)
+        let r = await braid_fetch(`/${key}`)
+        let body = await r.text()
+
+        if (body !== 'new content') return `Expected 'new content', got '${body}'`
+
+        // Verify the version is from scratch (bob-10, not alice-10)
+        let version = r.headers.get('version')
+        if (!version.includes('bob-10')) return `Expected version to include bob-10, got: ${version}`
+        if (version.includes('alice-')) return `Old version alice-10 should not be present, got: ${version}`
+
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
     "test getting a binary update from a subscription",
     async () => {
         return await new Promise(async (done, fail) => {
