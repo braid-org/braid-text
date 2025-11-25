@@ -463,7 +463,27 @@ function create_braid_text() {
         throw new Error("unknown")
     }
 
-    braid_text.delete = async (key) => {
+    braid_text.delete = async (key, options) => {
+        if (!options) options = {}
+
+        // Handle URL - make a DELETE request
+        if (key instanceof URL) {
+            options.my_abort = new AbortController()
+            if (options.signal)
+                options.signal.addEventListener('abort', () =>
+                    options.my_abort.abort())
+
+            var params = {
+                method: 'DELETE',
+                signal: options.my_abort.signal,
+                retry: () => true,
+            }
+            for (var x of ['headers', 'peer'])
+                if (options[x] != null) params[x] = options[x]
+
+            return await braid_fetch(key.href, params)
+        }
+
         // Accept either a key string or a resource object
         let resource = (typeof key == 'string') ? await get_resource(key) : key
         await resource.delete()

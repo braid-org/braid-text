@@ -1897,6 +1897,39 @@ runTest(
 )
 
 runTest(
+    "test braid_text.delete(url)",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        // Create a resource first
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'hello there'
+        })
+
+        // Verify it exists
+        let r1 = await braid_fetch(`/${key}`)
+        if ((await r1.text()) !== 'hello there') return 'Resource not created properly'
+
+        // Delete using braid_text.delete(url)
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                await braid_text.delete(new URL('http://localhost:8889/${key}'))
+                res.end('deleted')
+            })()`
+        })
+        if (!r.ok) return 'delete failed: ' + r.status
+        if ((await r.text()) !== 'deleted') return 'delete did not complete'
+
+        // Verify it's deleted (should be empty)
+        let r2 = await braid_fetch(`/${key}`)
+        return 'got: ' + (await r2.text())
+    },
+    'got: '
+)
+
+runTest(
     "test getting a binary update from a subscription",
     async () => {
         return await new Promise(async (done, fail) => {
