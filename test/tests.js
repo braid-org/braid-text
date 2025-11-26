@@ -1982,6 +1982,47 @@ runTest(
 )
 
 runTest(
+    "test braid_text.sync on_res callback",
+    async () => {
+        var local_key = 'test-local-' + Math.random().toString(36).slice(2)
+        var remote_key = 'test-remote-' + Math.random().toString(36).slice(2)
+
+        // Create the remote resource first
+        var r = await braid_fetch(`/${remote_key}`, {
+            method: 'PUT',
+            body: 'remote content'
+        })
+        if (!r.ok) return 'put failed: ' + r.status
+
+        // Start sync with on_res callback and verify it gets called
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var ac = new AbortController()
+                var got_res = false
+
+                braid_text.sync('/${local_key}', new URL('http://localhost:8889/${remote_key}'), {
+                    signal: ac.signal,
+                    on_res: (response) => {
+                        got_res = response && typeof response.headers !== 'undefined'
+                    }
+                })
+
+                // Wait for sync to establish and on_res to be called
+                await new Promise(done => setTimeout(done, 200))
+
+                ac.abort()
+                res.end(got_res ? 'on_res called' : 'on_res not called')
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        return await r.text()
+    },
+    'on_res called'
+)
+
+runTest(
     "test getting a binary update from a subscription",
     async () => {
         return await new Promise(async (done, fail) => {

@@ -197,6 +197,7 @@ function create_braid_text() {
                         disconnect()
                         connect()
                     }
+                    options.on_res?.(remote_result)
                     // on_error will call handle_error when connection drops
                 } catch (e) {
                     handle_error(e)
