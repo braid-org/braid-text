@@ -14,31 +14,24 @@ runTest(
         })
         if (!r.ok) return 'got: ' + r.status
 
-        var r1p = braid_fetch(`/eval`, {
+        var r1 = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
                 var x = await new Promise(done => {
                     braid_text.get(new URL('http://localhost:8889/${key}'), {
                         subscribe: update => {
-                            if (update.body_text === 'yo') done(update.body_text)
+                            if (update.body_text === 'hi') done(update.body_text)
                         }
                     })
                 })
                 res.end(x)
             })()`
         })
-
-        var r2 = await braid_fetch(`/${key}`, {
-            method: 'PUT',
-            body: 'yo'
-        })
-
-        var r1 = await r1p
         if (!r1.ok) return 'got: ' + r.status
 
         return await r1.text()
     },
-    'yo'
+    'hi'
 )
 
 runTest(

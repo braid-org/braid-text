@@ -99,6 +99,13 @@ function create_braid_text() {
             var local_first_put
             var local_first_put_promise = new Promise(done => local_first_put = done)
 
+            function handle_error(_e) {
+                if (closed) return
+                disconnect()
+                console.log(`disconnected, retrying in 1 second`)
+                setTimeout(connect, 1000)
+            }
+
             connect()
             async function connect() {
                 if (options.on_connect) options.on_connect()
@@ -180,6 +187,7 @@ function create_braid_text() {
                             await braid_text.put(a, update)
                             extend_fork_point(update)
                         },
+                        on_error: handle_error
                     }
                     // Handle case where remote doesn't exist yet - wait for local to create it
                     var remote_result = await braid_text.get(b, b_ops)
@@ -189,13 +197,9 @@ function create_braid_text() {
                         disconnect()
                         connect()
                     }
-                    // NOTE: if remote exists, this should not return, but it might throw
+                    // on_error will call handle_error when connection drops
                 } catch (e) {
-                    if (closed) return
-
-                    disconnect()
-                    console.log(`disconnected, retrying in 1 second`)
-                    setTimeout(connect, 1000)
+                    handle_error(e)
                 }
             }
         }
@@ -533,19 +537,13 @@ function create_braid_text() {
             if (res.status === 404) return null
 
             if (options.subscribe) {
-                if (options.dont_retry) {
-                    var error_happened
-                    var error_promise = new Promise((_, fail) => error_happened = fail)
-                }
-
                 res.subscribe(async update => {
                     update.body = update.body_text
                     if (update.patches)
                         for (var p of update.patches) p.content = p.content_text
                     await options.subscribe(update)
-                }, e => options.dont_retry && error_happened(e))
+                }, e => options.on_error?.(e))
 
-                if (options.dont_retry) return await error_promise
                 return res
             } else return await res.text()
         }
