@@ -997,7 +997,7 @@ function create_braid_text() {
 
             await resource.db_delta(resource.doc.getPatchSince(v_before))
 
-            for (var [client, x] of post_commit_updates) client.my_subscribe(x)
+            await Promise.all(post_commit_updates.map(([client, x]) => client.my_subscribe(x)))
 
             return { change_count }
         })

@@ -1145,6 +1145,50 @@ runTest(
 )
 
 runTest(
+    "test put awaits subscriber callbacks",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var order = []
+
+                // Subscribe with an async callback that takes some time
+                braid_text.get('/${key}', {
+                    subscribe: async (update) => {
+                        if (update.version?.[0]?.startsWith('test-v')) {
+                            order.push('subscriber-start')
+                            await new Promise(done => setTimeout(done, 50))
+                            order.push('subscriber-end')
+                        }
+                    }
+                })
+
+                // Wait for subscription to be established
+                await new Promise(done => setTimeout(done, 50))
+
+                // Put should await the subscriber callback
+                await braid_text.put('/${key}', {
+                    version: ['test-v-0'],
+                    parents: [],
+                    body: 'hello'
+                })
+                order.push('put-done')
+
+                // If put properly awaited, order should be: subscriber-start, subscriber-end, put-done
+                // If put didn't await, order would be: subscriber-start, put-done, subscriber-end
+                res.end(order.join(','))
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        return await r.text()
+    },
+    'subscriber-start,subscriber-end,put-done'
+)
+
+runTest(
     "test out-of-order PUTs",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)
