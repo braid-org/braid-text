@@ -674,6 +674,20 @@ function create_braid_text() {
         }
     }
 
+    // Deprecated: Use signal-based abort instead (pass signal in options to get())
+    braid_text.forget = async (key, options) => {
+        console.warn('braid_text.forget() is deprecated. Use signal-based abort instead.')
+        if (!options) throw new Error('options is required')
+
+        if (key instanceof URL) throw new Error('forget() does not support URLs. Use signal-based abort instead.')
+
+        let resource = (typeof key == 'string') ? await get_resource(key) : key
+
+        if (options.merge_type != "dt")
+            resource.simpleton_clients.delete(options)
+        else resource.clients.delete(options)
+    }
+
     braid_text.put = async (key, options) => {
         if (options.version) {
             validate_version_array(options.version)
