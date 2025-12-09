@@ -69,6 +69,21 @@ function createTestServer(options = {}) {
             return res.end('error')
         }
 
+        if (req.url.startsWith('/unauthorized') && req.method === 'PUT') {
+            res.statusCode = 401
+            return res.end('Unauthorized')
+        }
+
+        if (req.url.startsWith('/forbidden') && req.method === 'PUT') {
+            res.statusCode = 403
+            return res.end('Forbidden')
+        }
+
+        if (req.url.startsWith('/server_error') && req.method === 'PUT') {
+            res.statusCode = 500
+            return res.end('Internal Server Error')
+        }
+
         if (req.url.startsWith('/404')) {
             res.statusCode = 404
             return res.end('Not Found')

@@ -2067,6 +2067,140 @@ runTest(
 )
 
 runTest(
+    "test braid_text.sync reconnects when inner put fails with non-200 status",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        // Create a local resource with content
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'initial'
+        })
+        if (!r.ok) return 'initial put failed: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var connect_count = 0
+                var ac = new AbortController()
+
+                braid_text.sync('/${key}', new URL('http://localhost:8889/server_error'), {
+                    signal: ac.signal,
+                    on_pre_connect: () => {
+                        connect_count++
+                        if (connect_count >= 2) {
+                            ac.abort()
+                            res.end('reconnected after put failure')
+                        }
+                    }
+                })
+
+                // Trigger a local put which will fail when synced to the error endpoint
+                await new Promise(done => setTimeout(done, 100))
+                await braid_text.put('/${key}', { body: 'trigger sync' })
+
+                // Wait for reconnect attempt
+                await new Promise(done => setTimeout(done, 2000))
+                ac.abort()
+                res.end('did not reconnect')
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        return await r.text()
+    },
+    'reconnected after put failure'
+)
+
+runTest(
+    "test braid_text.sync on_unauthorized callback for 401",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        // Create a local resource with content
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'initial'
+        })
+        if (!r.ok) return 'initial put failed: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var unauthorized_called = false
+                var ac = new AbortController()
+
+                braid_text.sync('/${key}', new URL('http://localhost:8889/unauthorized'), {
+                    signal: ac.signal,
+                    on_unauthorized: () => {
+                        unauthorized_called = true
+                        ac.abort()
+                        res.end('on_unauthorized called')
+                    }
+                })
+
+                // Trigger a local put which will get 401 when synced
+                await new Promise(done => setTimeout(done, 100))
+                await braid_text.put('/${key}', { body: 'trigger sync' })
+
+                // Wait for callback
+                await new Promise(done => setTimeout(done, 2000))
+                ac.abort()
+                res.end('on_unauthorized not called')
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        return await r.text()
+    },
+    'on_unauthorized called'
+)
+
+runTest(
+    "test braid_text.sync on_unauthorized callback for 403",
+    async () => {
+        var key = 'test-' + Math.random().toString(36).slice(2)
+
+        // Create a local resource with content
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'initial'
+        })
+        if (!r.ok) return 'initial put failed: ' + r.status
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var unauthorized_called = false
+                var ac = new AbortController()
+
+                braid_text.sync('/${key}', new URL('http://localhost:8889/forbidden'), {
+                    signal: ac.signal,
+                    on_unauthorized: () => {
+                        unauthorized_called = true
+                        ac.abort()
+                        res.end('on_unauthorized called')
+                    }
+                })
+
+                // Trigger a local put which will get 403 when synced
+                await new Promise(done => setTimeout(done, 100))
+                await braid_text.put('/${key}', { body: 'trigger sync' })
+
+                // Wait for callback
+                await new Promise(done => setTimeout(done, 2000))
+                ac.abort()
+                res.end('on_unauthorized not called')
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        return await r.text()
+    },
+    'on_unauthorized called'
+)
+
+runTest(
     "test getting a binary update from a subscription",
     async () => {
         return await new Promise(async (done, fail) => {

@@ -165,13 +165,18 @@ function create_braid_text() {
                         signal: ac.signal,
                         subscribe: update => {
                             update.signal = ac.signal
+                            update.dont_retry = true
                             braid_text.put(b, update).then((x) => {
-                                local_first_put()
-                                extend_fork_point(update)
+                                if (x.ok) {
+                                    local_first_put()
+                                    extend_fork_point(update)
+                                } else if (x.status === 401 || x.status === 403) {
+                                    options.on_unauthorized?.()
+                                } else throw new Error('failed to PUT: ' + x.status)
                             }).catch(e => {
                                 if (e.name === 'AbortError') {
                                     // ignore
-                                } else throw e
+                                } else handle_error(e)
                             })
                         }
                     }
@@ -199,6 +204,7 @@ function create_braid_text() {
                         await local_first_put_promise
                         disconnect()
                         connect()
+                        return
                     }
                     options.on_res?.(remote_result)
                     // on_error will call handle_error when connection drops
@@ -705,8 +711,9 @@ function create_braid_text() {
             var params = {
                 method: 'PUT',
                 signal: options.signal,
-                retry: () => true,
             }
+            if (!options.dont_retry)
+                params.retry = () => true
             for (var x of ['headers', 'parents', 'version', 'peer', 'body', 'patches'])
                 if (options[x] != null) params[x] = options[x]
 
