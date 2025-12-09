@@ -46,7 +46,7 @@ runTest(
                 var ac = new AbortController()
                 braid_text.sync('/${key}', new URL('http://localhost:8889/have_error'), {
                     signal: ac.signal,
-                    on_connect: () => {
+                    on_pre_connect: () => {
                         count++
                         if (count === 2) {
                             res.end('it reconnected!')
@@ -198,7 +198,7 @@ runTest(
                 var ac = new AbortController()
                 braid_text.sync('/${key_a}', new URL('http://localhost:8889/have_error'), {
                     signal: ac.signal,
-                    on_connect: () => {
+                    on_pre_connect: () => {
                         count++
                         if (count === 2) {
                             res.end('it reconnected!')

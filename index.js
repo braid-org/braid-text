@@ -108,7 +108,7 @@ function create_braid_text() {
 
             connect()
             async function connect() {
-                if (options.on_connect) options.on_connect()
+                if (options.on_pre_connect) await options.on_pre_connect()
 
                 if (closed) return
 
@@ -187,7 +187,10 @@ function create_braid_text() {
                             await braid_text.put(a, update)
                             extend_fork_point(update)
                         },
-                        on_error: handle_error
+                        on_error: e => {
+                            options.on_disconnect?.()
+                            handle_error(e)
+                        }
                     }
                     // Handle case where remote doesn't exist yet - wait for local to create it
                     var remote_result = await braid_text.get(b, b_ops)
