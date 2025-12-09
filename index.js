@@ -160,24 +160,86 @@ function create_braid_text() {
                         }
                     }
 
-                    // local -> remote
+                    // local -> remote (with in_flight queue for concurrency control)
+                    var q = []
+                    var in_flight = new Map()
+                    var max_in_flight = 10
+                    var send_pump_lock = 0
+                    var temp_acs = new Set()
+                    ac.signal.addEventListener('abort', () => {
+                        for (var t of temp_acs) t.abort()
+                    })
+
+                    async function send_out(update) {
+                        update.signal = ac.signal
+                        update.dont_retry = true
+                        var x = await braid_text.put(b, update)
+                        if (x.ok) {
+                            local_first_put()
+                            extend_fork_point(update)
+                        } else if (x.status === 401 || x.status === 403) {
+                            options.on_unauthorized?.()
+                        } else throw new Error('failed to PUT: ' + x.status)
+                    }
+
+                    async function send_pump() {
+                        send_pump_lock++
+                        if (send_pump_lock > 1) return
+                        try {
+                            if (closed) return
+                            if (in_flight.size >= max_in_flight) return
+                            if (!q.length) {
+                                // Extend frontier based on in-flight updates
+                                var frontier = resource.meta.fork_point || []
+                                for (var u of in_flight.values())
+                                    frontier = extend_frontier(frontier, u.version, u.parents)
+
+                                var temp_ac = new AbortController()
+                                temp_acs.add(temp_ac)
+                                var temp_ops = {
+                                    signal: temp_ac.signal,
+                                    parents: frontier,
+                                    merge_type: 'dt',
+                                    subscribe: u => u.version?.length && q.push(u)
+                                }
+                                await braid_text.get(a, temp_ops)
+                                temp_ac.abort()
+                                temp_acs.delete(temp_ac)
+                            }
+                            while (q.length && in_flight.size < max_in_flight) {
+                                let u = q.shift()
+                                if (!u.version?.length) continue
+                                in_flight.set(u.version[0], u);
+                                (async () => {
+                                    try {
+                                        if (closed) return
+                                        await send_out(u)
+                                        if (closed) return
+                                        in_flight.delete(u.version[0])
+                                        setTimeout(send_pump, 0)
+                                    } catch (e) {
+                                        if (e.name === 'AbortError') {
+                                            // ignore
+                                        } else handle_error(e)
+                                    }
+                                })()
+                            }
+                        } finally {
+                            var retry = send_pump_lock > 1
+                            send_pump_lock = 0
+                            if (retry) setTimeout(send_pump, 0)
+                        }
+                    }
+
                     var a_ops = {
                         signal: ac.signal,
+                        merge_type: 'dt',
                         subscribe: update => {
-                            update.signal = ac.signal
-                            update.dont_retry = true
-                            braid_text.put(b, update).then((x) => {
-                                if (x.ok) {
-                                    local_first_put()
-                                    extend_fork_point(update)
-                                } else if (x.status === 401 || x.status === 403) {
-                                    options.on_unauthorized?.()
-                                } else throw new Error('failed to PUT: ' + x.status)
-                            }).catch(e => {
-                                if (e.name === 'AbortError') {
-                                    // ignore
-                                } else handle_error(e)
-                            })
+                            if (closed) return
+                            if (update.version?.length) {
+                                q.push(update)
+                                send_pump()
+                            }
                         }
                     }
                     if (resource.meta.fork_point)
