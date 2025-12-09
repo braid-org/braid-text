@@ -185,12 +185,30 @@ function create_braid_text() {
                     braid_text.get(a, a_ops)
 
                     // remote -> local
+                    var remote_res_done
+                    var remote_res_promise = new Promise(done => remote_res_done = done)
+                    var remote_res = null
+
                     var b_ops = {
                         signal: ac.signal,
                         dont_retry: true,
+                        headers: { 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
                         subscribe: async update => {
-                            await braid_text.put(a, update)
-                            extend_fork_point(update)
+                            // Wait for remote_res to be available
+                            await remote_res_promise
+
+                            // Check if this is a dt-encoded update (initial body without status)
+                            if (!update.status) {
+                                var cv = remote_res.headers.get('current-version')
+                                await braid_text.put(a, {
+                                    body: update.body,
+                                    transfer_encoding: 'dt'
+                                })
+                                if (cv) extend_fork_point({ version: JSON.parse(`[${cv}]`), parents: resource.meta.fork_point || [] })
+                            } else {
+                                await braid_text.put(a, update)
+                                if (update.version) extend_fork_point(update)
+                            }
                         },
                         on_error: e => {
                             options.on_disconnect?.()
@@ -198,15 +216,16 @@ function create_braid_text() {
                         }
                     }
                     // Handle case where remote doesn't exist yet - wait for local to create it
-                    var remote_result = await braid_text.get(b, b_ops)
-                    if (remote_result === null) {
+                    remote_res = await braid_text.get(b, b_ops)
+                    remote_res_done()
+                    if (remote_res === null) {
                         // Remote doesn't exist yet, wait for local to put something
                         await local_first_put_promise
                         disconnect()
                         connect()
                         return
                     }
-                    options.on_res?.(remote_result)
+                    options.on_res?.(remote_res)
                     // on_error will call handle_error when connection drops
                 } catch (e) {
                     handle_error(e)
@@ -548,9 +567,12 @@ function create_braid_text() {
 
             if (options.subscribe) {
                 res.subscribe(async update => {
-                    update.body = update.body_text
-                    if (update.patches)
-                        for (var p of update.patches) p.content = p.content_text
+                    // Don't convert to text for initial dt-encoded body (no status)
+                    if (update.status) {
+                        update.body = update.body_text
+                        if (update.patches)
+                            for (var p of update.patches) p.content = p.content_text
+                    }
                     await options.subscribe(update)
                 }, e => options.on_error?.(e))
 

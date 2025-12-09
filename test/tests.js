@@ -2067,6 +2067,39 @@ runTest(
 )
 
 runTest(
+    "test braid_text.sync uses accept-encoding updates(dt)",
+    async () => {
+        var remote_key = 'test-remote-' + Math.random().toString(36).slice(2)
+        var local_key = 'test-local-' + Math.random().toString(36).slice(2)
+
+        // Create the remote resource with some content
+        var r = await braid_fetch(`/${remote_key}`, {
+            method: 'PUT',
+            body: 'remote content here'
+        })
+        if (!r.ok) return 'put failed: ' + r.status
+
+        // Start sync with URL first (like the passing "url to key" test)
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                braid_text.sync(new URL('http://localhost:8889/${remote_key}'), '/${local_key}')
+                res.end('')
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        // Wait for sync to complete
+        await new Promise(done => setTimeout(done, 100))
+
+        // Check local has remote content
+        var r = await braid_fetch(`/${local_key}`)
+        return await r.text()
+    },
+    'remote content here'
+)
+
+runTest(
     "test braid_text.sync reconnects when inner put fails with non-200 status",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)
