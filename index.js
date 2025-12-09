@@ -99,11 +99,14 @@ function create_braid_text() {
             var local_first_put
             var local_first_put_promise = new Promise(done => local_first_put = done)
 
+            var waitTime = 1
             function handle_error(_e) {
                 if (closed) return
                 disconnect()
-                console.log(`disconnected, retrying in 1 second`)
-                setTimeout(connect, 1000)
+                var delay = waitTime * 1000
+                console.log(`disconnected, retrying in ${waitTime} second${waitTime > 1 ? 's' : ''}`)
+                setTimeout(connect, delay)
+                waitTime = Math.min(waitTime + 1, 3)
             }
 
             connect()
@@ -173,6 +176,7 @@ function create_braid_text() {
                     async function send_out(update) {
                         update.signal = ac.signal
                         update.dont_retry = true
+                        if (options.peer) update.peer = options.peer
                         var x = await braid_text.put(b, update)
                         if (x.ok) {
                             local_first_put()
@@ -200,6 +204,7 @@ function create_braid_text() {
                                     signal: temp_ac.signal,
                                     parents: frontier,
                                     merge_type: 'dt',
+                                    peer: options.peer,
                                     subscribe: u => u.version?.length && q.push(u)
                                 }
                                 await braid_text.get(a, temp_ops)
@@ -234,6 +239,7 @@ function create_braid_text() {
                     var a_ops = {
                         signal: ac.signal,
                         merge_type: 'dt',
+                        peer: options.peer,
                         subscribe: update => {
                             if (closed) return
                             if (update.version?.length) {
@@ -255,6 +261,9 @@ function create_braid_text() {
                         signal: ac.signal,
                         dont_retry: true,
                         headers: { 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
+                        parents: resource.meta.fork_point,
+                        peer: options.peer,
+                        heartbeats: 120,
                         subscribe: async update => {
                             // Wait for remote_res to be available
                             await remote_res_promise
