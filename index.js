@@ -268,8 +268,8 @@ function create_braid_text() {
                             // Wait for remote_res to be available
                             await remote_res_promise
 
-                            // Check if this is a dt-encoded update (initial body without status)
-                            if (!update.status) {
+                            // Check if this is a dt-encoded update
+                            if (update.extra_headers?.encoding === 'dt') {
                                 var cv = remote_res.headers.get('current-version')
                                 await braid_text.put(a, {
                                     body: update.body,
@@ -829,7 +829,7 @@ function create_braid_text() {
 
             if (options.transfer_encoding === 'dt') {
                 var start_i = 1 + resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
-                
+
                 resource.doc.mergeBytes(body)
 
                 var end_i = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
@@ -842,6 +842,11 @@ function create_braid_text() {
                 resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
                 await resource.db_delta(body)
+
+                // Notify non-simpleton clients with the dt-encoded update
+                var dt_update = { body, encoding: 'dt' }
+                await Promise.all([...resource.clients].map(client => client.my_subscribe(dt_update)))
+
                 return { change_count: end_i - start_i + 1 }
             }
 
