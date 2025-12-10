@@ -204,7 +204,7 @@ function create_braid_text() {
                             local_first_put()
                             extend_fork_point(update)
                         } else if (x.status === 401 || x.status === 403) {
-                            options.on_unauthorized?.()
+                            await options.on_unauthorized?.()
                         } else throw new Error('failed to PUT: ' + x.status)
                     }
 
