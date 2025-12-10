@@ -124,7 +124,8 @@ function create_braid_text() {
                         var r = await braid_fetch(b.href, {
                             signal: ac.signal,
                             method: "HEAD",
-                            version
+                            version,
+                            headers: options.headers
                         })
                         if (!r.ok && r.status !== 309 && r.status !== 500)
                             throw new Error(`unexpected HEAD status: ${r.status}`)
@@ -177,6 +178,7 @@ function create_braid_text() {
                         update.signal = ac.signal
                         update.dont_retry = true
                         if (options.peer) update.peer = options.peer
+                        if (options.headers) update.headers = options.headers
                         var x = await braid_text.put(b, update)
                         if (x.ok) {
                             local_first_put()
@@ -260,7 +262,7 @@ function create_braid_text() {
                     var b_ops = {
                         signal: ac.signal,
                         dont_retry: true,
-                        headers: { 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
+                        headers: { ...options.headers, 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
                         parents: resource.meta.fork_point,
                         peer: options.peer,
                         heartbeats: 120,
