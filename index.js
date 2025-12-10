@@ -52,6 +52,26 @@ function create_braid_text() {
             // make a=local and b=remote (swap if not)
             if (a instanceof URL) { let swap = a; a = b; b = swap }
 
+            // Extract content type for proper Accept (GET) vs Content-Type (PUT) usage
+            var content_type
+            var get_headers = {}
+            var put_headers = {}
+            if (options.headers) {
+                for (var [k, v] of Object.entries(options.headers)) {
+                    var lk = k.toLowerCase()
+                    if (lk === 'accept' || lk === 'content-type') {
+                        content_type = v
+                    } else {
+                        get_headers[k] = v
+                        put_headers[k] = v
+                    }
+                }
+            }
+            if (content_type) {
+                get_headers['Accept'] = content_type
+                put_headers['Content-Type'] = content_type
+            }
+
             var resource = (typeof a == 'string') ? await get_resource(a) : a
 
             function extend_frontier(frontier, version, parents) {
@@ -125,7 +145,7 @@ function create_braid_text() {
                             signal: ac.signal,
                             method: "HEAD",
                             version,
-                            headers: options.headers
+                            headers: get_headers
                         })
                         if (!r.ok && r.status !== 309 && r.status !== 500)
                             throw new Error(`unexpected HEAD status: ${r.status}`)
@@ -178,7 +198,7 @@ function create_braid_text() {
                         update.signal = ac.signal
                         update.dont_retry = true
                         if (options.peer) update.peer = options.peer
-                        if (options.headers) update.headers = options.headers
+                        update.headers = put_headers
                         var x = await braid_text.put(b, update)
                         if (x.ok) {
                             local_first_put()
@@ -262,7 +282,7 @@ function create_braid_text() {
                     var b_ops = {
                         signal: ac.signal,
                         dont_retry: true,
-                        headers: { ...options.headers, 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
+                        headers: { ...get_headers, 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
                         parents: resource.meta.fork_point,
                         peer: options.peer,
                         heartbeats: 120,
