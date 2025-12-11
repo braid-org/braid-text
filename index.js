@@ -74,6 +74,11 @@ function create_braid_text() {
 
             var resource = (typeof a == 'string') ? await get_resource(a) : a
 
+            if (!resource.meta.fork_point && options.fork_point_hint) {
+                resource.meta.fork_point = options.fork_point_hint
+                resource.change_meta()
+            }
+
             function extend_frontier(frontier, version, parents) {
                 // special case:
                 // if current frontier has all parents,
@@ -1245,42 +1250,6 @@ function create_braid_text() {
             await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
             await fs.promises.mkdir(`${braid_text.db_folder}/.meta`, { recursive: true })
 
-            // 0.0.13 -> 0.0.14
-            // look for files with key-encodings over max_encoded_key_size,
-            // and convert them using the new method
-            // for (let x of await fs.promises.readdir(braid_text.db_folder)) {
-            //     let k = x.replace(/(_[0-9a-f]{64})?\.\w+$/, '')
-            //     if (k.length > max_encoded_key_size) {
-            //         k = decode_filename(k)
-
-            //         await fs.promises.rename(`${braid_text.db_folder}/${x}`, `${braid_text.db_folder}/${encode_filename(k)}${x.match(/\.\w+$/)[0]}`)
-            //         await fs.promises.writeFile(`${braid_text.db_folder}/${encode_filename(k)}.name`, k)
-            //     }
-            // }
-
-            // 0.0.14 -> 0.0.15
-            // basically convert the 0.0.14 files back
-            let convert_us = {}
-            for (let x of await fs.promises.readdir(braid_text.db_folder)) {
-                if (x.endsWith('.name')) {
-                    let encoded = convert_us[x.slice(0, -'.name'.length)] = encode_filename(await fs.promises.readFile(`${braid_text.db_folder}/${x}`, { encoding: 'utf8' }))
-                    if (encoded.length > max_encoded_key_size) {
-                        console.log(`trying to convert file to new format, but the key is too big: ${braid_text.db_folder}/${x}`)
-                        process.exit()
-                    }
-                    if (braid_text.verbose) console.log(`deleting: ${braid_text.db_folder}/${x}`)
-                    await fs.promises.unlink(`${braid_text.db_folder}/${x}`)
-                }
-            }
-            if (Object.keys(convert_us).length) {
-                for (let x of await fs.promises.readdir(braid_text.db_folder)) {
-                    let [_, k, num] = x.match(/^(.*)\.(\d+)$/s)
-                    if (!convert_us[k]) continue
-                    if (braid_text.verbose) console.log(`renaming: ${braid_text.db_folder}/${x} -> ${braid_text.db_folder}/${convert_us[k]}.${num}`)
-                    if (convert_us[k]) await fs.promises.rename(`${braid_text.db_folder}/${x}`, `${braid_text.db_folder}/${convert_us[k]}.${num}`)
-                }
-            }
-
             // Populate key_to_filename mapping from existing files
             var files = (await fs.promises.readdir(braid_text.db_folder))
                 .filter(x => /\.\d+$/.test(x))
@@ -1302,6 +1271,7 @@ function create_braid_text() {
     }
 
     async function file_sync(key, process_delta, get_init, set_meta, get_meta) {
+        await db_folder_init()
         let encoded = encode_filename(key)
 
         if (encoded.length > max_encoded_key_size) throw new Error(`invalid key: too long (max ${max_encoded_key_size})`)
@@ -2726,9 +2696,9 @@ function create_braid_text() {
 
     braid_text.get_resource = get_resource
 
+    braid_text.db_folder_init = db_folder_init
     braid_text.encode_filename = encode_filename
     braid_text.decode_filename = decode_filename
-    braid_text.get_files_for_key = get_files_for_key
 
     braid_text.dt_get = dt_get
     braid_text.dt_get_patches = dt_get_patches
