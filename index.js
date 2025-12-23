@@ -52,6 +52,9 @@ function create_braid_text() {
             // make a=local and b=remote (swap if not)
             if (a instanceof URL) { let swap = a; a = b; b = swap }
 
+            // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text sync start')
+
             // Extract content type for proper Accept (GET) vs Content-Type (PUT) usage
             var content_type
             var get_headers = {}
@@ -117,6 +120,10 @@ function create_braid_text() {
             var closed
             var disconnect = () => {}
             options.signal?.addEventListener('abort', () => {
+
+                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text sync abort')
+
                 closed = true
                 disconnect()
             })
@@ -126,6 +133,10 @@ function create_braid_text() {
 
             var waitTime = 1
             function handle_error(_e) {
+
+                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text handle_error: ' + _e)
+
                 if (closed) return
                 disconnect()
                 var delay = waitTime * 1000
@@ -136,12 +147,18 @@ function create_braid_text() {
 
             connect()
             async function connect() {
+                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before on_pre_connect')
+
                 if (options.on_pre_connect) await options.on_pre_connect()
 
                 if (closed) return
 
                 var ac = new AbortController()
                 disconnect = () => ac.abort()
+
+                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before fork-point stuff')
 
                 try {
                     // fork-point
@@ -173,6 +190,10 @@ function create_braid_text() {
 
                     // otherwise let's binary search for new fork point..
                     if (!resource.meta.fork_point) {
+
+                        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text fork-point binary search')
+
                         var bytes = resource.doc.toBytes()
                         var [_, events, __] = braid_text.dt_parse([...bytes])
                         events = events.map(x => x.join('-'))
@@ -200,11 +221,19 @@ function create_braid_text() {
                     })
 
                     async function send_out(update) {
+
+                        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out')
+
                         update.signal = ac.signal
                         update.dont_retry = true
                         if (options.peer) update.peer = options.peer
                         update.headers = put_headers
                         var x = await braid_text.put(b, update)
+
+                        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out result: ' + x.ok)
+
                         if (x.ok) {
                             local_first_put()
                             extend_fork_point(update)
@@ -284,6 +313,9 @@ function create_braid_text() {
                     var remote_res_promise = new Promise(done => remote_res_done = done)
                     var remote_res = null
 
+                    // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                    options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text before GET/sub')
+
                     var b_ops = {
                         signal: ac.signal,
                         dont_retry: true,
@@ -291,7 +323,17 @@ function create_braid_text() {
                         parents: resource.meta.fork_point,
                         peer: options.peer,
                         heartbeats: 120,
+
+                        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                        heartbeat_cb: () => {
+                            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'got heartbeat')
+                        },
+
                         subscribe: async update => {
+
+                            // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text got update')
+
                             // Wait for remote_res to be available
                             await remote_res_promise
 
@@ -315,6 +357,10 @@ function create_braid_text() {
                     }
                     // Handle case where remote doesn't exist yet - wait for local to create it
                     remote_res = await braid_text.get(b, b_ops)
+
+                    // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                    options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text after GET/sub: ' + remote_res?.status)
+
                     remote_res_done()
                     if (remote_res === null) {
                         // Remote doesn't exist yet, wait for local to put something
