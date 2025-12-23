@@ -697,7 +697,8 @@ function create_braid_text() {
             var params = {
                 signal: options.signal,
                 subscribe: !!options.subscribe,
-                heartbeats: 120,
+                heartbeats: options.heartbeats ?? 120,
+                heartbeat_cb: options.heartbeat_cb
             }
             if (!options.dont_retry) {
                 params.retry = (res) => res.status !== 404
