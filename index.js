@@ -140,7 +140,7 @@ function create_braid_text() {
                 if (closed) return
                 disconnect()
                 var delay = waitTime * 1000
-                console.log(`disconnected, retrying in ${waitTime} second${waitTime > 1 ? 's' : ''}`)
+                console.log(`disconnected from ${b}, retrying in ${waitTime} second${waitTime > 1 ? 's' : ''}`)
                 setTimeout(connect, delay)
                 waitTime = Math.min(waitTime + 1, 3)
             }
