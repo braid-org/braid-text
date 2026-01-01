@@ -2755,6 +2755,7 @@ function create_braid_text() {
 
     braid_text.decode_version = decode_version
     braid_text.RangeSet = RangeSet
+    braid_text.braid_fetch = braid_fetch
 
     braid_text.create_braid_text = create_braid_text
 
