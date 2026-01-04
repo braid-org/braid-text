@@ -2473,10 +2473,6 @@ function create_braid_text() {
         return i
     }
 
-    var {
-        encode_file_path_component, encode_to_avoid_icase_collision
-    } = require('url-file-db/canonical_path')
-
     // Mapping between keys and their encoded filenames
     // Populated at init time, used to avoid re-encoding and handle case collisions
     var key_to_filename = new Map()
@@ -2733,6 +2729,75 @@ function create_braid_text() {
             }
             return result
         }
+    }
+
+    // -----------------------------------------------------------------------------
+    // File Path Encoding Utilities (from url-file-db/canonical_path)
+    // -----------------------------------------------------------------------------
+
+    function encode_file_path_component(component) {
+        // Encode characters that are unsafe on various filesystems:
+        //   < > : " / \ | ? *  - Windows restrictions
+        //   %                  - Reserved for encoding
+        //   \x00-\x1f, \x7f    - Control characters
+        var encoded = component.replace(/[<>:"|\\?*%\x00-\x1f\x7f/]/g, encode_char)
+
+        // Encode Windows reserved filenames (con, prn, aux, nul, com1-9, lpt1-9)
+        var windows_reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i
+        var match = component.match(windows_reserved)
+        if (match) {
+            var reserved_word = match[1]
+            var last_char = reserved_word[reserved_word.length - 1]
+            var encoded_reserved = reserved_word.slice(0, -1) + encode_char(last_char)
+            var encoded_extension = encoded.slice(reserved_word.length)
+            encoded = encoded_reserved + encoded_extension
+        }
+
+        // Encode trailing dots and spaces (stripped by Windows)
+        if (encoded.endsWith('.') || encoded.endsWith(' ')) {
+            var last_char = encoded[encoded.length - 1]
+            encoded = encoded.slice(0, -1) + encode_char(last_char)
+        }
+
+        return encoded
+    }
+
+    function encode_to_avoid_icase_collision(component, existing_icomponents) {
+        var icomponent = component.toLowerCase()
+
+        while (existing_icomponents.has(icomponent)) {
+            var found_letter = false
+
+            // Find the last letter (a-zA-Z) that isn't part of a %XX encoding
+            for (var i = component.length - 1; i >= 0; i--) {
+                if (i >= 2 && component[i - 2] === '%') {
+                    i -= 2
+                    continue
+                }
+
+                var char = component[i]
+
+                // Only encode letters - encoding non-letters doesn't help resolve case collisions
+                if (!/[a-zA-Z]/.test(char)) {
+                    continue
+                }
+
+                component = component.slice(0, i) + encode_char(char) + component.slice(i + 1)
+                icomponent = component.toLowerCase()
+                found_letter = true
+                break
+            }
+
+            if (!found_letter) {
+                throw new Error('Should never happen - safety check')
+            }
+        }
+
+        return component
+    }
+
+    function encode_char(char) {
+        return '%' + char.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')
     }
 
     function ascii_ify(s) {
