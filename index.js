@@ -1296,6 +1296,12 @@ function create_braid_text() {
         if (!db_folder_init.p) db_folder_init.p = new Promise(async done => {
             await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
             await fs.promises.mkdir(`${braid_text.db_folder}/.meta`, { recursive: true })
+            await fs.promises.mkdir(`${braid_text.db_folder}/.temp`, { recursive: true })
+
+            // Clean out .temp directory on startup
+            var temp_files = await fs.promises.readdir(`${braid_text.db_folder}/.temp`)
+            for (var f of temp_files)
+                await fs.promises.unlink(`${braid_text.db_folder}/.temp/${f}`)
 
             // Populate key_to_filename mapping from existing files
             var files = (await fs.promises.readdir(braid_text.db_folder))
@@ -1401,8 +1407,8 @@ function create_braid_text() {
                         buffer.writeUInt32LE(init.length, 0)
 
                         const newFilename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
-                        await fs.promises.writeFile(newFilename, buffer)
-                        await fs.promises.appendFile(newFilename, init)
+                        await atomic_write(newFilename, Buffer.concat([buffer, init]),
+                            `${braid_text.db_folder}/.temp`)
 
                         if (braid_text.verbose) console.log("wrote to : " + newFilename)
 
@@ -1423,8 +1429,8 @@ function create_braid_text() {
 
                 while (meta_dirty) {
                     meta_dirty = false
-                    await fs.promises.writeFile(meta_filename,
-                        JSON.stringify(get_meta()))
+                    await atomic_write(meta_filename, JSON.stringify(get_meta()),
+                        `${braid_text.db_folder}/.temp`)
                     await new Promise(done => setTimeout(done,
                         braid_text.meta_file_save_period_ms))
                 }
@@ -2725,6 +2731,12 @@ function create_braid_text() {
     function get_digest(s) {
         if (typeof s === 'string') s = Buffer.from(s, "utf8")
         return `sha-256=:${require('crypto').createHash('sha256').update(s).digest('base64')}:`
+    }
+
+    async function atomic_write(final_destination, data, temp_folder) {
+        var temp = `${temp_folder}/${Math.random().toString(36).slice(2)}`
+        await fs.promises.writeFile(temp, data)
+        await fs.promises.rename(temp, final_destination)
     }
 
     function within_fiber(id, func) {
