@@ -1293,23 +1293,43 @@ function create_braid_text() {
 
     async function db_folder_init() {
         if (braid_text.verbose) console.log('__!')
-        if (!db_folder_init.p) db_folder_init.p = new Promise(async done => {
+        if (!db_folder_init.p) db_folder_init.p = (async () => {
             await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
             await fs.promises.mkdir(`${braid_text.db_folder}/.meta`, { recursive: true })
             await fs.promises.mkdir(`${braid_text.db_folder}/.temp`, { recursive: true })
+            await fs.promises.mkdir(`${braid_text.db_folder}/.wal-intent`, { recursive: true })
 
             // Clean out .temp directory on startup
             var temp_files = await fs.promises.readdir(`${braid_text.db_folder}/.temp`)
             for (var f of temp_files)
                 await fs.promises.unlink(`${braid_text.db_folder}/.temp/${f}`)
 
+            // Replay any pending .wal-intent files
+            var intent_files = await fs.promises.readdir(`${braid_text.db_folder}/.wal-intent`)
+            for (var intent_name of intent_files) {
+                var intent_path = `${braid_text.db_folder}/.wal-intent/${intent_name}`
+                var target_path = `${braid_text.db_folder}/${intent_name}`
+
+                var intent_data = await fs.promises.readFile(intent_path)
+                var expected_size = Number(intent_data.readBigUInt64LE(0))
+                var append_data = intent_data.subarray(8)
+
+                var stat = await fs.promises.stat(target_path)
+                if (stat.size < expected_size || stat.size > expected_size + append_data.length)
+                    throw new Error(`wal-intent replay failed: ${target_path} size ${stat.size}, expected ${expected_size} to ${expected_size + append_data.length}`)
+
+                // Append whatever portion hasn't been written yet
+                var already_written = stat.size - expected_size
+                if (already_written < append_data.length)
+                    await fs.promises.appendFile(target_path, append_data.subarray(already_written))
+                await fs.promises.unlink(intent_path)
+            }
+
             // Populate key_to_filename mapping from existing files
             var files = (await fs.promises.readdir(braid_text.db_folder))
                 .filter(x => /\.\d+$/.test(x))
             init_filename_mapping(files)
-
-            done()
-        })
+        })()
         await db_folder_init.p
     }
 
@@ -1391,10 +1411,20 @@ function create_braid_text() {
                 if (currentSize < threshold) {
                     if (braid_text.verbose) console.log(`appending to db..`)
 
-                    let buffer = Buffer.allocUnsafe(4)
-                    buffer.writeUInt32LE(bytes.length, 0)
-                    await fs.promises.appendFile(filename, buffer)
-                    await fs.promises.appendFile(filename, bytes)
+                    let len_buf = Buffer.allocUnsafe(4)
+                    len_buf.writeUInt32LE(bytes.length, 0)
+                    let append_data = Buffer.concat([len_buf, bytes])
+
+                    let basename = require('path').basename(filename)
+                    let intent_path = `${braid_text.db_folder}/.wal-intent/${basename}`
+                    let stat = await fs.promises.stat(filename)
+                    let size_buf = Buffer.allocUnsafe(8)
+                    size_buf.writeBigUInt64LE(BigInt(stat.size), 0)
+
+                    await atomic_write(intent_path, Buffer.concat([size_buf, append_data]),
+                        `${braid_text.db_folder}/.temp`)
+                    await fs.promises.appendFile(filename, append_data)
+                    await fs.promises.unlink(intent_path)
 
                     if (braid_text.verbose) console.log("wrote to : " + filename)
                 } else {

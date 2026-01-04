@@ -2665,6 +2665,197 @@ runTest(
     'filename conflict detected'
 )
 
+runTest(
+    "test wal-intent recovery after simulated crash during append",
+    async () => {
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var fs = require('fs')
+                var test_db = __dirname + '/test_wal_recovery_' + Math.random().toString(36).slice(2)
+                try {
+                    // Create a fresh braid_text instance with its own db_folder
+                    var bt = braid_text.create_braid_text()
+                    bt.db_folder = test_db
+
+                    // Do initial PUT (5 chars = 'hello', version ends at 4)
+                    await bt.put('/test', {
+                        version: ['a-4'],
+                        parents: [],
+                        body: 'hello'
+                    })
+
+                    // Do second PUT to trigger an append (6 more chars = ' world', version ends at 10)
+                    await bt.put('/test', {
+                        version: ['a-10'],
+                        parents: ['a-4'],
+                        body: 'hello world'
+                    })
+
+                    var encoded = bt.encode_filename('/test')
+                    var db_file = test_db + '/' + encoded + '.1'
+                    var intent_file = test_db + '/.wal-intent/' + encoded + '.1'
+
+                    // Read the db file
+                    var data = await fs.promises.readFile(db_file)
+
+                    // Parse chunks to find the last one
+                    var cursor = 0
+                    var chunks = []
+                    while (cursor < data.length) {
+                        var chunk_start = cursor
+                        var chunk_size = data.readUInt32LE(cursor)
+                        cursor += 4 + chunk_size
+                        chunks.push({ start: chunk_start, size: chunk_size, end: cursor })
+                    }
+
+                    if (chunks.length < 2) {
+                        res.end('expected at least 2 chunks, got ' + chunks.length)
+                        return
+                    }
+
+                    var last_chunk = chunks[chunks.length - 1]
+                    var prev_end = chunks[chunks.length - 2].end
+
+                    // Create the wal-intent file: 8-byte size + the last chunk data
+                    var size_buf = Buffer.allocUnsafe(8)
+                    size_buf.writeBigUInt64LE(BigInt(prev_end), 0)
+                    var last_chunk_data = data.subarray(last_chunk.start, last_chunk.end)
+                    var intent_data = Buffer.concat([size_buf, last_chunk_data])
+                    await fs.promises.writeFile(intent_file, intent_data)
+
+                    // Truncate the db file partway through the last chunk (keep ~half)
+                    var truncate_point = last_chunk.start + Math.floor((last_chunk.end - last_chunk.start) / 2)
+                    await fs.promises.truncate(db_file, truncate_point)
+
+                    // Create a new braid_text instance to simulate restart
+                    var bt2 = braid_text.create_braid_text()
+                    bt2.db_folder = test_db
+
+                    // Get the resource - this should trigger wal-intent replay
+                    var resource = await bt2.get_resource('/test')
+                    var text = resource.doc.get()
+
+                    // Verify intent file was cleaned up
+                    var intent_exists = true
+                    try {
+                        await fs.promises.access(intent_file)
+                    } catch (e) {
+                        intent_exists = false
+                    }
+
+                    await fs.promises.rm(test_db, { recursive: true, force: true })
+
+                    if (intent_exists) {
+                        res.end('intent file still exists')
+                        return
+                    }
+
+                    res.end(text)
+                } catch (e) {
+                    await fs.promises.rm(test_db, { recursive: true, force: true }).catch(() => {})
+                    res.end('error: ' + e.message + ' ' + e.stack)
+                }
+            })()`
+        })
+
+        return await r.text()
+    },
+    'hello world'
+)
+
+runTest(
+    "test wal-intent throws error when db file is too large",
+    async () => {
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var fs = require('fs')
+                var test_db = __dirname + '/test_wal_error_' + Math.random().toString(36).slice(2)
+                try {
+                    // Create a fresh braid_text instance with its own db_folder
+                    var bt = braid_text.create_braid_text()
+                    bt.db_folder = test_db
+
+                    // Do initial PUT (5 chars = 'hello', version ends at 4)
+                    await bt.put('/test', {
+                        version: ['a-4'],
+                        parents: [],
+                        body: 'hello'
+                    })
+
+                    // Do second PUT to trigger an append (6 more chars = ' world', version ends at 10)
+                    await bt.put('/test', {
+                        version: ['a-10'],
+                        parents: ['a-4'],
+                        body: 'hello world'
+                    })
+
+                    var encoded = bt.encode_filename('/test')
+                    var db_file = test_db + '/' + encoded + '.1'
+                    var intent_file = test_db + '/.wal-intent/' + encoded + '.1'
+
+                    // Read the db file
+                    var data = await fs.promises.readFile(db_file)
+
+                    // Parse chunks to find the last one
+                    var cursor = 0
+                    var chunks = []
+                    while (cursor < data.length) {
+                        var chunk_start = cursor
+                        var chunk_size = data.readUInt32LE(cursor)
+                        cursor += 4 + chunk_size
+                        chunks.push({ start: chunk_start, size: chunk_size, end: cursor })
+                    }
+
+                    if (chunks.length < 2) {
+                        res.end('expected at least 2 chunks, got ' + chunks.length)
+                        return
+                    }
+
+                    var last_chunk = chunks[chunks.length - 1]
+                    var prev_end = chunks[chunks.length - 2].end
+
+                    // Create the wal-intent file: 8-byte size + the last chunk data
+                    var size_buf = Buffer.allocUnsafe(8)
+                    size_buf.writeBigUInt64LE(BigInt(prev_end), 0)
+                    var last_chunk_data = data.subarray(last_chunk.start, last_chunk.end)
+                    var intent_data = Buffer.concat([size_buf, last_chunk_data])
+                    await fs.promises.writeFile(intent_file, intent_data)
+
+                    // Append extra garbage to the db file (making it too large)
+                    await fs.promises.appendFile(db_file, Buffer.from('extra garbage data'))
+
+                    // Create a new braid_text instance to simulate restart
+                    var bt2 = braid_text.create_braid_text()
+                    bt2.db_folder = test_db
+
+                    // Now try to init - this should throw an error
+                    var result
+                    try {
+                        await bt2.db_folder_init()
+                        result = 'should have thrown an error'
+                    } catch (e) {
+                        if (e.message.includes('wal-intent replay failed')) {
+                            result = 'correctly threw error'
+                        } else {
+                            result = 'wrong error: ' + e.message
+                        }
+                    }
+                    await fs.promises.rm(test_db, { recursive: true, force: true })
+                    res.end(result)
+                } catch (e) {
+                    await fs.promises.rm(test_db, { recursive: true, force: true }).catch(() => {})
+                    res.end('error: ' + e.message)
+                }
+            })()`
+        })
+
+        return await r.text()
+    },
+    'correctly threw error'
+)
+
 }
 
 // Export for both Node.js and browser environments
