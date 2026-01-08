@@ -2849,6 +2849,48 @@ runTest(
     'correctly threw error'
 )
 
+// Tests for reconnector/sync edge cases
+
+runTest(
+    "test braid_text.sync remote null triggers local_first_put_promise path",
+    async () => {
+        var local_key = 'test-local-' + Math.random().toString(36).slice(2)
+
+        // Use the /404 endpoint which always returns 404 (null from braid_text.get)
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var ac = new AbortController()
+                var reconnect_count = 0
+
+                braid_text.sync('/${local_key}', new URL('http://localhost:8889/404'), {
+                    signal: ac.signal,
+                    on_pre_connect: () => {
+                        reconnect_count++
+                        if (reconnect_count >= 2) {
+                            ac.abort()
+                            res.end('reconnected after local put')
+                        }
+                    }
+                })
+
+                // Wait a bit then put something locally - this should trigger
+                // the local_first_put_promise to resolve and cause reconnect
+                await new Promise(done => setTimeout(done, 100))
+                await braid_text.put('/${local_key}', { body: 'local data' })
+
+                // Wait for reconnect
+                await new Promise(done => setTimeout(done, 2000))
+                res.end('did not reconnect')
+            })()`
+        })
+        if (!r.ok) return 'eval failed: ' + r.status
+
+        return await r.text()
+    },
+    'reconnected after local put'
+)
+
 }
 
 // Export for both Node.js and browser environments

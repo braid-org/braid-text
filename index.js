@@ -93,45 +93,27 @@ function create_braid_text() {
             return frontier.sort()
         }
 
-        var closed
-        var disconnect = () => {}
         options.signal?.addEventListener('abort', () => {
-
             // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
             options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text sync abort')
-
-            closed = true
-            disconnect()
         })
 
         var local_first_put
         var local_first_put_promise = new Promise(done => local_first_put = done)
 
-        var waitTime = 1
-        function handle_error(_e) {
-
+        reconnector(options.signal, (_e, count) => {
             // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
             options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text handle_error: ' + _e)
 
-            if (closed) return
-            disconnect()
-            var delay = waitTime * 1000
-            console.log(`disconnected from ${b}, retrying in ${waitTime} second${waitTime > 1 ? 's' : ''}`)
-            setTimeout(connect, delay)
-            waitTime = Math.min(waitTime + 1, 3)
-        }
-
-        connect()
-        async function connect() {
+            var delay = Math.min(count, 3) * 1000
+            console.log(`disconnected from ${b}, retrying in ${delay}ms`)
+            return delay
+        }, async (signal, handle_error) => {
             // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
             options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before on_pre_connect')
 
             if (options.on_pre_connect) await options.on_pre_connect()
-
-            if (closed) return
-
-            var ac = new AbortController()
-            disconnect = () => ac.abort()
+            if (signal.aborted) return
 
             // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
             options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before fork-point stuff')
@@ -140,11 +122,13 @@ function create_braid_text() {
                 // fork-point
                 async function check_version(version) {
                     var r = await braid_fetch(b.href, {
-                        signal: ac.signal,
+                        signal,
                         method: "HEAD",
                         version,
                         headers: get_headers
                     })
+                    if (signal.aborted) return
+
                     if (!r.ok && r.status !== 309 && r.status !== 500)
                         throw new Error(`unexpected HEAD status: ${r.status}`)
                     return r.ok
@@ -160,9 +144,12 @@ function create_braid_text() {
                 // see if remote has the fork point
                 if (resource.meta.fork_point &&
                     !(await check_version(resource.meta.fork_point))) {
+                    if (signal.aborted) return
+
                     resource.meta.fork_point = null
                     resource.change_meta()
                 }
+                if (signal.aborted) return
 
                 // otherwise let's binary search for new fork point..
                 if (!resource.meta.fork_point) {
@@ -180,6 +167,8 @@ function create_braid_text() {
                         var i = Math.floor((min + max)/2)
                         var version = [events[i]]
                         if (await check_version(version)) {
+                            if (signal.aborted) return
+
                             min = i
                             resource.meta.fork_point = version
                         } else max = i
@@ -192,7 +181,7 @@ function create_braid_text() {
                 var max_in_flight = 10
                 var send_pump_lock = 0
                 var temp_acs = new Set()
-                ac.signal.addEventListener('abort', () => {
+                signal.addEventListener('abort', () => {
                     for (var t of temp_acs) t.abort()
                 })
 
@@ -201,11 +190,12 @@ function create_braid_text() {
                     // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
                     options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out')
 
-                    update.signal = ac.signal
+                    update.signal = signal
                     update.dont_retry = true
                     if (options.peer) update.peer = options.peer
                     update.headers = put_headers
                     var x = await braid_text.put(b, update)
+                    if (signal.aborted) return
 
                     // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
                     options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out result: ' + x.ok)
@@ -219,61 +209,52 @@ function create_braid_text() {
                 }
 
                 async function send_pump() {
+                    if (signal.aborted) return
                     send_pump_lock++
                     if (send_pump_lock > 1) return
-                    try {
-                        if (closed) return
-                        if (in_flight.size >= max_in_flight) return
-                        if (!q.length) {
-                            // Extend frontier based on in-flight updates
-                            var frontier = resource.meta.fork_point || []
-                            for (var u of in_flight.values())
-                                frontier = extend_frontier(frontier, u.version, u.parents)
+                    if (in_flight.size >= max_in_flight) return
+                    if (!q.length) {
+                        // Extend frontier based on in-flight updates
+                        var frontier = resource.meta.fork_point || []
+                        for (var u of in_flight.values())
+                            frontier = extend_frontier(frontier, u.version, u.parents)
 
-                            var temp_ac = new AbortController()
-                            temp_acs.add(temp_ac)
-                            var temp_ops = {
-                                signal: temp_ac.signal,
-                                parents: frontier,
-                                merge_type: 'dt',
-                                peer: options.peer,
-                                subscribe: u => u.version?.length && q.push(u)
-                            }
-                            await braid_text.get(a, temp_ops)
-                            temp_ac.abort()
-                            temp_acs.delete(temp_ac)
-                        }
-                        while (q.length && in_flight.size < max_in_flight) {
-                            let u = q.shift()
-                            if (!u.version?.length) continue
-                            in_flight.set(u.version[0], u);
-                            (async () => {
-                                try {
-                                    if (closed) return
-                                    await send_out(u)
-                                    if (closed) return
-                                    in_flight.delete(u.version[0])
-                                    setTimeout(send_pump, 0)
-                                } catch (e) {
-                                    if (e.name === 'AbortError') {
-                                        // ignore
-                                    } else handle_error(e)
-                                }
-                            })()
-                        }
-                    } finally {
-                        var retry = send_pump_lock > 1
-                        send_pump_lock = 0
-                        if (retry) setTimeout(send_pump, 0)
+                        var temp_ac = new AbortController()
+                        temp_acs.add(temp_ac)
+                        await braid_text.get(a, {
+                            signal: temp_ac.signal,
+                            parents: frontier,
+                            merge_type: 'dt',
+                            peer: options.peer,
+                            subscribe: u => u.version?.length && q.push(u)
+                        })
+                        if (signal.aborted) return
+                        temp_ac.abort()
+                        temp_acs.delete(temp_ac)
                     }
+                    while (q.length && in_flight.size < max_in_flight) {
+                        let u = q.shift()
+                        if (!u.version?.length) continue
+                        in_flight.set(u.version[0], u)
+                        void (async () => {
+                            try {
+                                await send_out(u)
+                                if (signal.aborted) return
+                                in_flight.delete(u.version[0])
+                                setTimeout(send_pump, 0)
+                            } catch (e) { handle_error(e) }
+                        })()
+                    }
+                    if (send_pump_lock > 1) setTimeout(send_pump, 0)
+                    send_pump_lock = 0
                 }
 
                 var a_ops = {
-                    signal: ac.signal,
+                    signal,
                     merge_type: 'dt',
                     peer: options.peer,
                     subscribe: update => {
-                        if (closed) return
+                        if (signal.aborted) return
                         if (update.version?.length) {
                             q.push(update)
                             send_pump()
@@ -293,7 +274,7 @@ function create_braid_text() {
                 options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text before GET/sub')
 
                 var b_ops = {
-                    signal: ac.signal,
+                    signal,
                     dont_retry: true,
                     headers: { ...get_headers, 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
                     parents: resource.meta.fork_point,
@@ -312,6 +293,7 @@ function create_braid_text() {
 
                         // Wait for remote_res to be available
                         await remote_res_promise
+                        if (signal.aborted) return
 
                         // Check if this is a dt-encoded update
                         if (update.extra_headers?.encoding === 'dt') {
@@ -320,9 +302,11 @@ function create_braid_text() {
                                 body: update.body,
                                 transfer_encoding: 'dt'
                             })
+                            if (signal.aborted) return
                             if (cv) extend_fork_point({ version: JSON.parse(`[${cv}]`), parents: resource.meta.fork_point || [] })
                         } else {
                             await braid_text.put(a, update)
+                            if (signal.aborted) return
                             if (update.version) extend_fork_point(update)
                         }
                     },
@@ -333,6 +317,7 @@ function create_braid_text() {
                 }
                 // Handle case where remote doesn't exist yet - wait for local to create it
                 remote_res = await braid_text.get(b, b_ops)
+                if (signal.aborted) return
 
                 // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
                 options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text after GET/sub: ' + remote_res?.status)
@@ -341,16 +326,12 @@ function create_braid_text() {
                 if (remote_res === null) {
                     // Remote doesn't exist yet, wait for local to put something
                     await local_first_put_promise
-                    disconnect()
-                    connect()
-                    return
+                    return handle_error(new Error('try again'))
                 }
                 options.on_res?.(remote_res)
                 // on_error will call handle_error when connection drops
-            } catch (e) {
-                handle_error(e)
-            }
-        }
+            } catch (e) { handle_error(e) }
+        })
     }
 
     braid_text.serve = async (req, res, options = {}) => {
@@ -2821,6 +2802,37 @@ function create_braid_text() {
             }
         })
         return within_fiber.chains[id] = curr
+    }
+
+    // Calls func(inner_signal, reconnect) immediately and handles reconnection.
+    // - inner_signal: AbortSignal that aborts when reconnect() is called or outter_signal aborts
+    // - reconnect(error): call this to trigger a reconnection after get_delay(error, count) ms
+    // - Multiple/rapid reconnect() calls are safe - only one reconnection will be scheduled
+    // - If outter_signal aborts, no further calls to func will occur
+    function reconnector(outter_signal, get_delay, func) {
+        if (outter_signal?.aborted) return
+
+        var current_inner_ac = null
+        outter_signal?.addEventListener('abort', () =>
+            current_inner_ac?.abort())
+
+        var reconnect_count = 0
+        connect()
+        function connect() {
+            if (outter_signal?.aborted) return
+
+            var ac = current_inner_ac = new AbortController()
+            var inner_signal = ac.signal
+
+            func(inner_signal, (e) => {
+                if (outter_signal?.aborted ||
+                    inner_signal.aborted) return
+
+                ac.abort()
+                var delay = get_delay(e, ++reconnect_count)
+                setTimeout(connect, delay)
+            })
+        }
     }
 
     braid_text.get_resource = get_resource
