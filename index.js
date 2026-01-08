@@ -19,361 +19,336 @@ function create_braid_text() {
     braid_text.sync = async (a, b, options = {}) => {
         if (!options.merge_type) options.merge_type = 'dt'
 
-        if ((a instanceof URL) === (b instanceof URL)) {
-            // Both are URLs or both are local keys
-            var a_first_put, b_first_put
-            var a_first_put_promise = new Promise(done => a_first_put = done)
-            var b_first_put_promise = new Promise(done => b_first_put = done)
+        // Support for same-type params removed for now,
+        // since it is unused, unoptimized,
+        // and not as well battle tested
+        if ((a instanceof URL) === (b instanceof URL))
+            throw new Error(`one parameter should be local string key, and the other a remote URL object`)
 
-            var a_ops = {
-                signal: options.signal,
-                subscribe: update => {
-                    update.signal = options.signal
-                    braid_text.put(b, update).then(a_first_put)
-                },
-                merge_type: options.merge_type,
-            }
-            braid_text.get(a, a_ops).then(x =>
-                x || b_first_put_promise.then(() =>
-                    braid_text.get(a, a_ops)))
+        // make a=local and b=remote (swap if not)
+        if (a instanceof URL) { let swap = a; a = b; b = swap }
 
-            var b_ops = {
-                signal: options.signal,
-                subscribe: update => {
-                    update.signal = options.signal
-                    braid_text.put(a, update).then(b_first_put)
-                },
-                merge_type: options.merge_type,
+        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text sync start')
+
+        // Extract content type for proper Accept (GET) vs Content-Type (PUT) usage
+        var content_type
+        var get_headers = {}
+        var put_headers = {}
+        if (options.headers) {
+            for (var [k, v] of Object.entries(options.headers)) {
+                var lk = k.toLowerCase()
+                if (lk === 'accept' || lk === 'content-type') {
+                    content_type = v
+                } else {
+                    get_headers[k] = v
+                    put_headers[k] = v
+                }
             }
-            braid_text.get(b, b_ops).then(x =>
-                x || a_first_put_promise.then(() =>
-                    braid_text.get(b, b_ops)))
-        } else {
-            // make a=local and b=remote (swap if not)
-            if (a instanceof URL) { let swap = a; a = b; b = swap }
+        }
+        if (content_type) {
+            get_headers['Accept'] = content_type
+            put_headers['Content-Type'] = content_type
+        }
+
+        var resource = (typeof a == 'string') ? await get_resource(a) : a
+
+        if (!resource.meta.fork_point && options.fork_point_hint) {
+            resource.meta.fork_point = options.fork_point_hint
+            resource.change_meta()
+        }
+
+        function extend_frontier(frontier, version, parents) {
+            // special case:
+            // if current frontier has all parents,
+            //    then we can just remove those
+            //    and add version
+            var frontier_set = new Set(frontier)
+            if (parents.length &&
+                parents.every(p => frontier_set.has(p))) {
+                parents.forEach(p => frontier_set.delete(p))
+                for (var event of version) frontier_set.add(event)
+                frontier = [...frontier_set.values()]
+            } else {
+                // full-proof approach..
+                var looking_for = frontier_set
+                for (var event of version) looking_for.add(event)
+
+                frontier = []
+                var shadow = new Set()
+
+                var bytes = resource.doc.toBytes()
+                var [_, events, parentss] = braid_text.dt_parse([...bytes])
+                for (var i = events.length - 1; i >= 0 && looking_for.size; i--) {
+                    var e = events[i].join('-')
+                    if (looking_for.has(e)) {
+                        looking_for.delete(e)
+                        if (!shadow.has(e)) frontier.push(e)
+                        shadow.add(e)
+                    }
+                    if (shadow.has(e))
+                        parentss[i].forEach(p => shadow.add(p.join('-')))
+                }
+            }
+            return frontier.sort()
+        }
+
+        var closed
+        var disconnect = () => {}
+        options.signal?.addEventListener('abort', () => {
 
             // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text sync start')
+            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text sync abort')
 
-            // Extract content type for proper Accept (GET) vs Content-Type (PUT) usage
-            var content_type
-            var get_headers = {}
-            var put_headers = {}
-            if (options.headers) {
-                for (var [k, v] of Object.entries(options.headers)) {
-                    var lk = k.toLowerCase()
-                    if (lk === 'accept' || lk === 'content-type') {
-                        content_type = v
-                    } else {
-                        get_headers[k] = v
-                        put_headers[k] = v
-                    }
+            closed = true
+            disconnect()
+        })
+
+        var local_first_put
+        var local_first_put_promise = new Promise(done => local_first_put = done)
+
+        var waitTime = 1
+        function handle_error(_e) {
+
+            // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text handle_error: ' + _e)
+
+            if (closed) return
+            disconnect()
+            var delay = waitTime * 1000
+            console.log(`disconnected from ${b}, retrying in ${waitTime} second${waitTime > 1 ? 's' : ''}`)
+            setTimeout(connect, delay)
+            waitTime = Math.min(waitTime + 1, 3)
+        }
+
+        connect()
+        async function connect() {
+            // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before on_pre_connect')
+
+            if (options.on_pre_connect) await options.on_pre_connect()
+
+            if (closed) return
+
+            var ac = new AbortController()
+            disconnect = () => ac.abort()
+
+            // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before fork-point stuff')
+
+            try {
+                // fork-point
+                async function check_version(version) {
+                    var r = await braid_fetch(b.href, {
+                        signal: ac.signal,
+                        method: "HEAD",
+                        version,
+                        headers: get_headers
+                    })
+                    if (!r.ok && r.status !== 309 && r.status !== 500)
+                        throw new Error(`unexpected HEAD status: ${r.status}`)
+                    return r.ok
                 }
-            }
-            if (content_type) {
-                get_headers['Accept'] = content_type
-                put_headers['Content-Type'] = content_type
-            }
 
-            var resource = (typeof a == 'string') ? await get_resource(a) : a
+                function extend_fork_point(update) {
+                    resource.meta.fork_point =
+                        extend_frontier(resource.meta.fork_point,
+                            update.version, update.parents)
+                    resource.change_meta()
+                }
 
-            if (!resource.meta.fork_point && options.fork_point_hint) {
-                resource.meta.fork_point = options.fork_point_hint
-                resource.change_meta()
-            }
+                // see if remote has the fork point
+                if (resource.meta.fork_point &&
+                    !(await check_version(resource.meta.fork_point))) {
+                    resource.meta.fork_point = null
+                    resource.change_meta()
+                }
 
-            function extend_frontier(frontier, version, parents) {
-                // special case:
-                // if current frontier has all parents,
-                //    then we can just remove those
-                //    and add version
-                var frontier_set = new Set(frontier)
-                if (parents.length &&
-                    parents.every(p => frontier_set.has(p))) {
-                    parents.forEach(p => frontier_set.delete(p))
-                    for (var event of version) frontier_set.add(event)
-                    frontier = [...frontier_set.values()]
-                } else {
-                    // full-proof approach..
-                    var looking_for = frontier_set
-                    for (var event of version) looking_for.add(event)
+                // otherwise let's binary search for new fork point..
+                if (!resource.meta.fork_point) {
 
-                    frontier = []
-                    var shadow = new Set()
+                    // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                    options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text fork-point binary search')
 
                     var bytes = resource.doc.toBytes()
-                    var [_, events, parentss] = braid_text.dt_parse([...bytes])
-                    for (var i = events.length - 1; i >= 0 && looking_for.size; i--) {
-                        var e = events[i].join('-')
-                        if (looking_for.has(e)) {
-                            looking_for.delete(e)
-                            if (!shadow.has(e)) frontier.push(e)
-                            shadow.add(e)
-                        }
-                        if (shadow.has(e))
-                            parentss[i].forEach(p => shadow.add(p.join('-')))
+                    var [_, events, __] = braid_text.dt_parse([...bytes])
+                    events = events.map(x => x.join('-'))
+
+                    var min = -1
+                    var max = events.length
+                    while (min + 1 < max) {
+                        var i = Math.floor((min + max)/2)
+                        var version = [events[i]]
+                        if (await check_version(version)) {
+                            min = i
+                            resource.meta.fork_point = version
+                        } else max = i
                     }
                 }
-                return frontier.sort()
-            }
 
-            var closed
-            var disconnect = () => {}
-            options.signal?.addEventListener('abort', () => {
+                // local -> remote (with in_flight queue for concurrency control)
+                var q = []
+                var in_flight = new Map()
+                var max_in_flight = 10
+                var send_pump_lock = 0
+                var temp_acs = new Set()
+                ac.signal.addEventListener('abort', () => {
+                    for (var t of temp_acs) t.abort()
+                })
 
-                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text sync abort')
+                async function send_out(update) {
 
-                closed = true
-                disconnect()
-            })
+                    // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                    options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out')
 
-            var local_first_put
-            var local_first_put_promise = new Promise(done => local_first_put = done)
+                    update.signal = ac.signal
+                    update.dont_retry = true
+                    if (options.peer) update.peer = options.peer
+                    update.headers = put_headers
+                    var x = await braid_text.put(b, update)
 
-            var waitTime = 1
-            function handle_error(_e) {
+                    // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                    options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out result: ' + x.ok)
 
-                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text handle_error: ' + _e)
+                    if (x.ok) {
+                        local_first_put()
+                        extend_fork_point(update)
+                    } else if (x.status === 401 || x.status === 403) {
+                        await options.on_unauthorized?.()
+                    } else throw new Error('failed to PUT: ' + x.status)
+                }
 
-                if (closed) return
-                disconnect()
-                var delay = waitTime * 1000
-                console.log(`disconnected from ${b}, retrying in ${waitTime} second${waitTime > 1 ? 's' : ''}`)
-                setTimeout(connect, delay)
-                waitTime = Math.min(waitTime + 1, 3)
-            }
+                async function send_pump() {
+                    send_pump_lock++
+                    if (send_pump_lock > 1) return
+                    try {
+                        if (closed) return
+                        if (in_flight.size >= max_in_flight) return
+                        if (!q.length) {
+                            // Extend frontier based on in-flight updates
+                            var frontier = resource.meta.fork_point || []
+                            for (var u of in_flight.values())
+                                frontier = extend_frontier(frontier, u.version, u.parents)
 
-            connect()
-            async function connect() {
-                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before on_pre_connect')
-
-                if (options.on_pre_connect) await options.on_pre_connect()
-
-                if (closed) return
-
-                var ac = new AbortController()
-                disconnect = () => ac.abort()
-
-                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text connect before fork-point stuff')
-
-                try {
-                    // fork-point
-                    async function check_version(version) {
-                        var r = await braid_fetch(b.href, {
-                            signal: ac.signal,
-                            method: "HEAD",
-                            version,
-                            headers: get_headers
-                        })
-                        if (!r.ok && r.status !== 309 && r.status !== 500)
-                            throw new Error(`unexpected HEAD status: ${r.status}`)
-                        return r.ok
-                    }
-
-                    function extend_fork_point(update) {
-                        resource.meta.fork_point =
-                            extend_frontier(resource.meta.fork_point,
-                                update.version, update.parents)
-                        resource.change_meta()
-                    }
-
-                    // see if remote has the fork point
-                    if (resource.meta.fork_point &&
-                        !(await check_version(resource.meta.fork_point))) {
-                        resource.meta.fork_point = null
-                        resource.change_meta()
-                    }
-
-                    // otherwise let's binary search for new fork point..
-                    if (!resource.meta.fork_point) {
-
-                        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text fork-point binary search')
-
-                        var bytes = resource.doc.toBytes()
-                        var [_, events, __] = braid_text.dt_parse([...bytes])
-                        events = events.map(x => x.join('-'))
-
-                        var min = -1
-                        var max = events.length
-                        while (min + 1 < max) {
-                            var i = Math.floor((min + max)/2)
-                            var version = [events[i]]
-                            if (await check_version(version)) {
-                                min = i
-                                resource.meta.fork_point = version
-                            } else max = i
+                            var temp_ac = new AbortController()
+                            temp_acs.add(temp_ac)
+                            var temp_ops = {
+                                signal: temp_ac.signal,
+                                parents: frontier,
+                                merge_type: 'dt',
+                                peer: options.peer,
+                                subscribe: u => u.version?.length && q.push(u)
+                            }
+                            await braid_text.get(a, temp_ops)
+                            temp_ac.abort()
+                            temp_acs.delete(temp_ac)
                         }
-                    }
-
-                    // local -> remote (with in_flight queue for concurrency control)
-                    var q = []
-                    var in_flight = new Map()
-                    var max_in_flight = 10
-                    var send_pump_lock = 0
-                    var temp_acs = new Set()
-                    ac.signal.addEventListener('abort', () => {
-                        for (var t of temp_acs) t.abort()
-                    })
-
-                    async function send_out(update) {
-
-                        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out')
-
-                        update.signal = ac.signal
-                        update.dont_retry = true
-                        if (options.peer) update.peer = options.peer
-                        update.headers = put_headers
-                        var x = await braid_text.put(b, update)
-
-                        // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text send_out result: ' + x.ok)
-
-                        if (x.ok) {
-                            local_first_put()
-                            extend_fork_point(update)
-                        } else if (x.status === 401 || x.status === 403) {
-                            await options.on_unauthorized?.()
-                        } else throw new Error('failed to PUT: ' + x.status)
-                    }
-
-                    async function send_pump() {
-                        send_pump_lock++
-                        if (send_pump_lock > 1) return
-                        try {
-                            if (closed) return
-                            if (in_flight.size >= max_in_flight) return
-                            if (!q.length) {
-                                // Extend frontier based on in-flight updates
-                                var frontier = resource.meta.fork_point || []
-                                for (var u of in_flight.values())
-                                    frontier = extend_frontier(frontier, u.version, u.parents)
-
-                                var temp_ac = new AbortController()
-                                temp_acs.add(temp_ac)
-                                var temp_ops = {
-                                    signal: temp_ac.signal,
-                                    parents: frontier,
-                                    merge_type: 'dt',
-                                    peer: options.peer,
-                                    subscribe: u => u.version?.length && q.push(u)
+                        while (q.length && in_flight.size < max_in_flight) {
+                            let u = q.shift()
+                            if (!u.version?.length) continue
+                            in_flight.set(u.version[0], u);
+                            (async () => {
+                                try {
+                                    if (closed) return
+                                    await send_out(u)
+                                    if (closed) return
+                                    in_flight.delete(u.version[0])
+                                    setTimeout(send_pump, 0)
+                                } catch (e) {
+                                    if (e.name === 'AbortError') {
+                                        // ignore
+                                    } else handle_error(e)
                                 }
-                                await braid_text.get(a, temp_ops)
-                                temp_ac.abort()
-                                temp_acs.delete(temp_ac)
-                            }
-                            while (q.length && in_flight.size < max_in_flight) {
-                                let u = q.shift()
-                                if (!u.version?.length) continue
-                                in_flight.set(u.version[0], u);
-                                (async () => {
-                                    try {
-                                        if (closed) return
-                                        await send_out(u)
-                                        if (closed) return
-                                        in_flight.delete(u.version[0])
-                                        setTimeout(send_pump, 0)
-                                    } catch (e) {
-                                        if (e.name === 'AbortError') {
-                                            // ignore
-                                        } else handle_error(e)
-                                    }
-                                })()
-                            }
-                        } finally {
-                            var retry = send_pump_lock > 1
-                            send_pump_lock = 0
-                            if (retry) setTimeout(send_pump, 0)
+                            })()
+                        }
+                    } finally {
+                        var retry = send_pump_lock > 1
+                        send_pump_lock = 0
+                        if (retry) setTimeout(send_pump, 0)
+                    }
+                }
+
+                var a_ops = {
+                    signal: ac.signal,
+                    merge_type: 'dt',
+                    peer: options.peer,
+                    subscribe: update => {
+                        if (closed) return
+                        if (update.version?.length) {
+                            q.push(update)
+                            send_pump()
                         }
                     }
+                }
+                if (resource.meta.fork_point)
+                    a_ops.parents = resource.meta.fork_point
+                braid_text.get(a, a_ops)
 
-                    var a_ops = {
-                        signal: ac.signal,
-                        merge_type: 'dt',
-                        peer: options.peer,
-                        subscribe: update => {
-                            if (closed) return
-                            if (update.version?.length) {
-                                q.push(update)
-                                send_pump()
-                            }
-                        }
-                    }
-                    if (resource.meta.fork_point)
-                        a_ops.parents = resource.meta.fork_point
-                    braid_text.get(a, a_ops)
+                // remote -> local
+                var remote_res_done
+                var remote_res_promise = new Promise(done => remote_res_done = done)
+                var remote_res = null
 
-                    // remote -> local
-                    var remote_res_done
-                    var remote_res_promise = new Promise(done => remote_res_done = done)
-                    var remote_res = null
+                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text before GET/sub')
+
+                var b_ops = {
+                    signal: ac.signal,
+                    dont_retry: true,
+                    headers: { ...get_headers, 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
+                    parents: resource.meta.fork_point,
+                    peer: options.peer,
+                    heartbeats: 120,
 
                     // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                    options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text before GET/sub')
+                    heartbeat_cb: () => {
+                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'got heartbeat')
+                    },
 
-                    var b_ops = {
-                        signal: ac.signal,
-                        dont_retry: true,
-                        headers: { ...get_headers, 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
-                        parents: resource.meta.fork_point,
-                        peer: options.peer,
-                        heartbeats: 120,
+                    subscribe: async update => {
 
                         // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                        heartbeat_cb: () => {
-                            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'got heartbeat')
-                        },
+                        options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text got update')
 
-                        subscribe: async update => {
+                        // Wait for remote_res to be available
+                        await remote_res_promise
 
-                            // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                            options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text got update')
-
-                            // Wait for remote_res to be available
-                            await remote_res_promise
-
-                            // Check if this is a dt-encoded update
-                            if (update.extra_headers?.encoding === 'dt') {
-                                var cv = remote_res.headers.get('current-version')
-                                await braid_text.put(a, {
-                                    body: update.body,
-                                    transfer_encoding: 'dt'
-                                })
-                                if (cv) extend_fork_point({ version: JSON.parse(`[${cv}]`), parents: resource.meta.fork_point || [] })
-                            } else {
-                                await braid_text.put(a, update)
-                                if (update.version) extend_fork_point(update)
-                            }
-                        },
-                        on_error: e => {
-                            options.on_disconnect?.()
-                            handle_error(e)
+                        // Check if this is a dt-encoded update
+                        if (update.extra_headers?.encoding === 'dt') {
+                            var cv = remote_res.headers.get('current-version')
+                            await braid_text.put(a, {
+                                body: update.body,
+                                transfer_encoding: 'dt'
+                            })
+                            if (cv) extend_fork_point({ version: JSON.parse(`[${cv}]`), parents: resource.meta.fork_point || [] })
+                        } else {
+                            await braid_text.put(a, update)
+                            if (update.version) extend_fork_point(update)
                         }
+                    },
+                    on_error: e => {
+                        options.on_disconnect?.()
+                        handle_error(e)
                     }
-                    // Handle case where remote doesn't exist yet - wait for local to create it
-                    remote_res = await braid_text.get(b, b_ops)
-
-                    // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
-                    options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text after GET/sub: ' + remote_res?.status)
-
-                    remote_res_done()
-                    if (remote_res === null) {
-                        // Remote doesn't exist yet, wait for local to put something
-                        await local_first_put_promise
-                        disconnect()
-                        connect()
-                        return
-                    }
-                    options.on_res?.(remote_res)
-                    // on_error will call handle_error when connection drops
-                } catch (e) {
-                    handle_error(e)
                 }
+                // Handle case where remote doesn't exist yet - wait for local to create it
+                remote_res = await braid_text.get(b, b_ops)
+
+                // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
+                options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text after GET/sub: ' + remote_res?.status)
+
+                remote_res_done()
+                if (remote_res === null) {
+                    // Remote doesn't exist yet, wait for local to put something
+                    await local_first_put_promise
+                    disconnect()
+                    connect()
+                    return
+                }
+                options.on_res?.(remote_res)
+                // on_error will call handle_error when connection drops
+            } catch (e) {
+                handle_error(e)
             }
         }
     }

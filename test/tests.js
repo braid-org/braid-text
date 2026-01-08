@@ -127,28 +127,23 @@ runTest(
         var key_a = 'test-a-' + Math.random().toString(36).slice(2)
         var key_b = 'test-b-' + Math.random().toString(36).slice(2)
 
-        var r = await braid_fetch(`/${key_a}`, {
-            method: 'PUT',
-            body: 'hi'
-        })
-        if (!r.ok) return 'got: ' + r.status
-
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
-                braid_text.sync(new URL('http://localhost:8889/${key_a}'),
-                    new URL('http://localhost:8889/${key_b}'))
-                res.end('')
+                try {
+                    await braid_text.sync(new URL('http://localhost:8889/${key_a}'),
+                        new URL('http://localhost:8889/${key_b}'))
+                    res.end('no error')
+                } catch (e) {
+                    res.end('' + e)
+                }
             })()`
         })
         if (!r.ok) return 'got: ' + r.status
 
-        await new Promise(done => setTimeout(done, 100))
-
-        var r = await braid_fetch(`/${key_b}`)
         return 'got: ' + (await r.text())
     },
-    'got: hi'
+    'got: Error: one parameter should be local string key, and the other a remote URL object'
 )
 
 runTest(
@@ -261,7 +256,10 @@ runTest(
             method: 'PUT',
             body: `void (async () => {
                 var ac = new AbortController()
-                braid_text.sync('/${key_a}', '/${key_b}', {signal: ac.signal})
+                braid_text.get('/${key_a}', {
+                    signal: ac.signal,
+                    subscribe: update => braid_text.put('/${key_b}', update)
+                })
                 await new Promise(done => setTimeout(done, 100))
                 ac.abort()
                 res.end('')
@@ -298,27 +296,22 @@ runTest(
         var key_a = 'test-a-' + Math.random().toString(36).slice(2)
         var key_b = 'test-b-' + Math.random().toString(36).slice(2)
 
-        var r = await braid_fetch(`/${key_a}`, {
-            method: 'PUT',
-            body: 'hi'
-        })
-        if (!r.ok) return 'got: ' + r.status
-
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
-                braid_text.sync('/${key_a}', '/${key_b}')
-                res.end('')
+                try {
+                    await braid_text.sync('/${key_a}', '/${key_b}')
+                    res.end('no error')
+                } catch (e) {
+                    res.end('' + e)
+                }
             })()`
         })
         if (!r.ok) return 'got: ' + r.status
 
-        await new Promise(done => setTimeout(done, 100))
-
-        var r = await braid_fetch(`/${key_b}`)
         return 'got: ' + (await r.text())
     },
-    'got: hi'
+    'got: Error: one parameter should be local string key, and the other a remote URL object'
 )
 
 runTest(
