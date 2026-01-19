@@ -209,46 +209,49 @@ function create_braid_text() {
                 }
 
                 async function send_pump() {
-                    if (signal.aborted) return
                     send_pump_lock++
                     if (send_pump_lock > 1) return
-                    if (in_flight.size >= max_in_flight) return
-                    if (!q.length) {
-                        // Extend frontier based on in-flight updates
-                        var frontier = resource.meta.fork_point || []
-                        for (var u of in_flight.values())
-                            frontier = extend_frontier(frontier, u.version, u.parents)
-
-                        var temp_ac = new AbortController()
-                        temp_acs.add(temp_ac)
-                        var get_options = {
-                            signal: temp_ac.signal,
-                            parents: frontier,
-                            merge_type: 'dt',
-                            peer: options.peer,
-                            subscribe: u => u.version?.length && q.push(u)
-                        }
-                        await braid_text.get(a, get_options)
-                        await get_options.my_subscribe_chain
+                    try {
                         if (signal.aborted) return
-                        temp_ac.abort()
-                        temp_acs.delete(temp_ac)
+                        if (in_flight.size >= max_in_flight) return
+                        if (!q.length) {
+                            // Extend frontier based on in-flight updates
+                            var frontier = resource.meta.fork_point || []
+                            for (var u of in_flight.values())
+                                frontier = extend_frontier(frontier, u.version, u.parents)
+
+                            var temp_ac = new AbortController()
+                            temp_acs.add(temp_ac)
+                            var get_options = {
+                                signal: temp_ac.signal,
+                                parents: frontier,
+                                merge_type: 'dt',
+                                peer: options.peer,
+                                subscribe: u => u.version?.length && q.push(u)
+                            }
+                            await braid_text.get(a, get_options)
+                            await get_options.my_subscribe_chain
+                            if (signal.aborted) return
+                            temp_ac.abort()
+                            temp_acs.delete(temp_ac)
+                        }
+                        while (q.length && in_flight.size < max_in_flight) {
+                            let u = q.shift()
+                            if (!u.version?.length) continue
+                            in_flight.set(u.version[0], u)
+                            void (async () => {
+                                try {
+                                    await send_out(u)
+                                    if (signal.aborted) return
+                                    in_flight.delete(u.version[0])
+                                    setTimeout(send_pump, 0)
+                                } catch (e) { handle_error(e) }
+                            })()
+                        }
+                    } finally {
+                        if (send_pump_lock > 1) setTimeout(send_pump, 0)
+                        send_pump_lock = 0
                     }
-                    while (q.length && in_flight.size < max_in_flight) {
-                        let u = q.shift()
-                        if (!u.version?.length) continue
-                        in_flight.set(u.version[0], u)
-                        void (async () => {
-                            try {
-                                await send_out(u)
-                                if (signal.aborted) return
-                                in_flight.delete(u.version[0])
-                                setTimeout(send_pump, 0)
-                            } catch (e) { handle_error(e) }
-                        })()
-                    }
-                    if (send_pump_lock > 1) setTimeout(send_pump, 0)
-                    send_pump_lock = 0
                 }
 
                 var a_ops = {
