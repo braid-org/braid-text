@@ -221,13 +221,15 @@ function create_braid_text() {
 
                         var temp_ac = new AbortController()
                         temp_acs.add(temp_ac)
-                        await braid_text.get(a, {
+                        var get_options = {
                             signal: temp_ac.signal,
                             parents: frontier,
                             merge_type: 'dt',
                             peer: options.peer,
                             subscribe: u => u.version?.length && q.push(u)
-                        })
+                        }
+                        await braid_text.get(a, get_options)
+                        await get_options.my_subscribe_chain
                         if (signal.aborted) return
                         temp_ac.abort()
                         temp_acs.delete(temp_ac)
