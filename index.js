@@ -927,7 +927,12 @@ function create_braid_text() {
             let og_patches = patches
             patches = patches.map((p) => ({
                 ...p,
-                range: p.range.match(/\d+/g).map((x) => parseInt(x)),
+                range: p.range.match(/-?\d+/g).map((x) => {
+                    let n = parseInt(x)
+                    // Handle negative indices (including -0) as offsets from max_pos
+                    if (Object.is(n, -0) || n < 0) return max_pos + n
+                    return n
+                }),
                 content_codepoints: [...p.content],
             })).sort((a, b) => a.range[0] - b.range[0])
 
@@ -2530,7 +2535,7 @@ function create_braid_text() {
         if (typeof x != 'object') throw new Error(`invalid patch: not an object`)
         if (x.unit && x.unit !== 'text') throw new Error(`invalid patch unit '${x.unit}': only 'text' supported`)
         if (typeof x.range !== 'string') throw new Error(`invalid patch range: must be a string`)
-        if (!x.range.match(/^\s*\[\s*\d+\s*:\s*\d+\s*\]\s*$/)) throw new Error(`invalid patch range: ${x.range}`)
+        if (!x.range.match(/^\s*\[\s*-?\d+\s*:\s*-?\d+\s*\]\s*$/)) throw new Error(`invalid patch range: ${x.range}`)
         if (typeof x.content !== 'string') throw new Error(`invalid patch content: must be a string`)
     }
 
