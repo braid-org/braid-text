@@ -305,11 +305,13 @@ function create_braid_text() {
                             var cv = remote_res.headers.get('current-version')
                             await braid_text.put(a, {
                                 body: update.body,
-                                transfer_encoding: 'dt'
+                                transfer_encoding: 'dt',
+                                peer: options.peer
                             })
                             if (signal.aborted) return
                             if (cv) extend_fork_point({ version: JSON.parse(`[${cv}]`), parents: resource.meta.fork_point || [] })
                         } else {
+                            if (options.peer) update.peer = options.peer
                             await braid_text.put(a, update)
                             if (signal.aborted) return
                             if (update.version) extend_fork_point(update)
@@ -880,7 +882,9 @@ function create_braid_text() {
 
                 // Notify non-simpleton clients with the dt-encoded update
                 var dt_update = { body, encoding: 'dt' }
-                await Promise.all([...resource.clients].map(client => client.my_subscribe(dt_update)))
+                await Promise.all([...resource.clients].
+                    filter(client => !peer || client.peer !== peer).
+                    map(client => client.my_subscribe(dt_update)))
 
                 return { change_count: end_i - start_i + 1 }
             }
