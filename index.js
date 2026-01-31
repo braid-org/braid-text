@@ -1313,7 +1313,7 @@ function create_braid_text() {
         if (backup_init.started) return
         backup_init.started = true
 
-        setInterval(async function backup_braid_text_db() {
+        async function backup_braid_text_db() {
             var path = require('path')
             var src_dir = braid_text.db_folder
             var backup_dir = braid_text.backups_folder
@@ -1382,7 +1382,10 @@ function create_braid_text() {
                         '/bin/cp', [src_path, backup_path])
                 }
             }
-        }, braid_text.backups_interval)
+        }
+
+        backup_braid_text_db()
+        setInterval(backup_braid_text_db, braid_text.backups_interval)
     }
 
     async function get_files_for_key(key) {
