@@ -2914,7 +2914,7 @@ runTest(
                 var backup_folder = braid_text.db_folder + '-backups-test'
                 braid_text.backups = true
                 braid_text.backups_folder = backup_folder
-                braid_text.backups_interval = 100  // 100ms for testing
+                braid_text.backups_interval = 200  // 100ms for testing
 
                 // Clean up any previous test backups
                 try {
@@ -2927,8 +2927,8 @@ runTest(
                 // Start the backup interval
                 braid_text.backup_init()
 
-                // Wait for backup to run (interval is 100ms, wait a bit longer)
-                await new Promise(done => setTimeout(done, 300))
+                // Wait for backup to run
+                await new Promise(done => setTimeout(done, 100))
 
                 // Get current date string to find the backup
                 var d = new Date()
@@ -2961,6 +2961,28 @@ runTest(
                         res.end('backup contents do not match source')
                         return
                     }
+                } catch (e) {
+                    res.end('backup not found: ' + e.message)
+                }
+
+                // try writing something new..
+                await braid_text.put('/${key}', {body: 'something new'})
+                await new Promise(done => setTimeout(done, 200))
+
+                // Verify backup exists and contents match source
+                try {
+                    var src_contents2 = await fs.promises.readFile(src_path)
+                    var backup_contents2 = await fs.promises.readFile(backup_path)
+
+                    if (!src_contents2.equals(backup_contents2)) {
+                        res.end('backup contents do not match source')
+                        return
+                    }
+
+                    if (src_contents2.equals(backup_contents)) {
+                        res.end('not new contents')
+                        return
+                    }
 
                     // Clean up
                     fs.rmSync(backup_folder, { recursive: true, force: true })
@@ -2968,6 +2990,7 @@ runTest(
                 } catch (e) {
                     res.end('backup not found: ' + e.message)
                 }
+
             })()`
         })
         if (!r.ok) return 'eval failed: ' + r.status
