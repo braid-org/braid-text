@@ -9,7 +9,10 @@ function create_braid_text() {
         db_folder: './braid-text-db',
         length_cache_size: 10,
         meta_file_save_period_ms: 1000,
-        cache: {}
+        cache: {},
+        backups: false,
+        backups_folder: './braid-text-backups',
+        backups_interval: 60 * 1000
     }
 
     let waiting_puts = 0
@@ -1299,8 +1302,87 @@ function create_braid_text() {
             var files = (await fs.promises.readdir(braid_text.db_folder))
                 .filter(x => /\.\d+$/.test(x))
             init_filename_mapping(files)
+
+            // Start backups if enabled
+            if (braid_text.backups) backup_init()
         })()
         await db_folder_init.p
+    }
+
+    function backup_init() {
+        if (backup_init.started) return
+        backup_init.started = true
+
+        setInterval(async function backup_braid_text_db() {
+            var path = require('path')
+            var src_dir = braid_text.db_folder
+            var backup_dir = braid_text.backups_folder
+
+            // Create backup dir if it doesn't exist
+            await fs.promises.mkdir(backup_dir, { recursive: true })
+
+            // Get current date string
+            var d = new Date()
+            var y = d.getYear() + 1900
+            var m = d.getMonth() + 1
+            if (m < 10) m = '0' + m
+            var day = d.getDate()
+            if (day < 10) day = '0' + day
+            var date = y + '-' + m + '-' + day
+
+            // Read files in src_dir (non-recursive)
+            var files
+            try {
+                files = await fs.promises.readdir(src_dir)
+            } catch (e) { return }
+
+            for (var file of files) {
+                // Only process files ending with .N where N is an integer
+                var match = file.match(/^(.+)\.(\d+)$/)
+                if (!match) continue
+
+                var base_name = match[1]
+                var src_path = path.join(src_dir, file)
+
+                // Get source file stats
+                var src_stat
+                try {
+                    src_stat = await fs.promises.stat(src_path)
+                } catch (e) { continue }
+
+                // Skip directories
+                if (!src_stat.isFile()) continue
+
+                // Create backup subdir for this base_name if needed
+                var file_backup_dir = path.join(backup_dir, base_name)
+                await fs.promises.mkdir(file_backup_dir, { recursive: true })
+
+                // Check if we need to backup (compare mtime with most recent backup)
+                var backup_path = path.join(file_backup_dir, date)
+                var needs_backup = true
+
+                try {
+                    // Find the latest backup file (sorted by date name)
+                    var backups = await fs.promises.readdir(file_backup_dir)
+                    if (backups.length > 0) {
+                        backups.sort()
+                        var latest_backup = backups[backups.length - 1]
+                        var latest_backup_path = path.join(file_backup_dir, latest_backup)
+                        var backup_stat = await fs.promises.stat(latest_backup_path)
+                        // Only backup if source is newer than latest backup
+                        if (src_stat.mtimeMs <= backup_stat.mtimeMs)
+                            needs_backup = false
+                    }
+                } catch (e) {
+                    // Backup dir empty or doesn't exist, so we need to create backup
+                }
+
+                if (needs_backup) {
+                    require('child_process').execFile(
+                        '/bin/cp', [src_path, backup_path])
+                }
+            }
+        }, braid_text.backups_interval)
     }
 
     async function get_files_for_key(key) {
@@ -2852,6 +2934,7 @@ function create_braid_text() {
     braid_text.get_resource = get_resource
 
     braid_text.db_folder_init = db_folder_init
+    braid_text.backup_init = backup_init
     braid_text.encode_filename = encode_filename
     braid_text.decode_filename = decode_filename
 

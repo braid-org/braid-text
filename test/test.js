@@ -267,6 +267,16 @@ async function runConsoleTests() {
         console.log(`Warning: Could not remove test database folder: ${err.message}`)
     }
 
+    const testBackupsPath = path.join(__dirname, 'test_db_folder-backups-test')
+    try {
+        if (fs.existsSync(testBackupsPath)) {
+            fs.rmSync(testBackupsPath, { recursive: true, force: true })
+            console.log('Test backups folder removed')
+        }
+    } catch (err) {
+        console.log(`Warning: Could not remove test backups folder: ${err.message}`)
+    }
+
     // Force close the server and all connections
     console.log('Closing server...')
     testServer.server.close(() => {
