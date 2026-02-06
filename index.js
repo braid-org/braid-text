@@ -850,8 +850,9 @@ function create_braid_text() {
             return await braid_fetch(key.href, params)
         }
 
-        return await within_fiber('put:' + key, async () => {
-            let resource = (typeof key == 'string') ? await get_resource(key) : key
+        let resource = (typeof key == 'string') ? await get_resource(key) : key
+
+        return await within_fiber('put:' + resource.key, async () => {
 
             // support for json patch puts..
             if (options.patches && options.patches.length &&
@@ -862,7 +863,7 @@ function create_braid_text() {
                 options = { body: JSON.stringify(x, null, 4) }
             }
 
-            let { version, patches, body, peer } = options
+            let { version, parents, patches, body, peer } = options
 
             if (options.transfer_encoding === 'dt') {
                 var start_i = 1 + resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
@@ -896,30 +897,24 @@ function create_braid_text() {
             if (version && version.length > 1)
                 throw new Error(`cannot put a version with multiple ids`)
 
-            // translate a single parent of "root" to the empty array (same meaning)
-            let options_parents = options.parents
-            if (options_parents?.length === 1 && options_parents[0] === 'root')
-                options_parents = []
-
             if (body != null && patches) throw new Error(`cannot have a body and patches`)
             if (body != null && (typeof body !== 'string')) throw new Error(`body must be a string`)
             if (patches) validate_patches(patches)
 
-            if (options_parents) {
+            if (parents) {
                 // make sure we have all these parents
-                for (let p of options_parents) {
+                for (let p of parents) {
                     let P = decode_version(p)
                     if (!resource.actor_seqs[P[0]]?.has(P[1]))
                         throw new Error(`missing parent version: ${p}`)
                 }
             }
 
-            let parents = resource.version
-            let og_parents = options_parents || parents
+            if (!parents) parents = resource.version
 
-            let max_pos = resource.length_cache.get('' + og_parents) ??
-                (v_eq(parents, og_parents) ? resource.doc.len() : dt_len(resource.doc, og_parents))
-            
+            let max_pos = resource.length_cache.get('' + parents) ??
+                (v_eq(resource.version, parents) ? resource.doc.len() : dt_len(resource.doc, parents))
+
             if (body != null) {
                 patches = [{
                     unit: 'text',
@@ -928,7 +923,6 @@ function create_braid_text() {
                 }]
             }
 
-            let og_patches = patches
             patches = patches.map((p) => ({
                 ...p,
                 range: p.range.match(/-?\d+/g).map((x) => {
@@ -940,94 +934,66 @@ function create_braid_text() {
                 content_codepoints: [...p.content],
             })).sort((a, b) => a.range[0] - b.range[0])
 
+            let change_count = patches.reduce((a, b) => a + b.content_codepoints.length + (b.range[1] - b.range[0]), 0)
+
+            version = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
+
+            let v = decode_version(version)
+            var low_seq = v[1] + 1 - change_count
+
+            // make sure we haven't seen this already
+            var intersects_range = resource.actor_seqs[v[0]]?.has(low_seq, v[1])
+            if (intersects_range) {
+                // if low_seq is below the range min,
+                // then the intersection has gaps,
+                // which is bad, meaning the prior versions must be different,
+                // because what we're inserting is contiguous
+                if (low_seq < intersects_range[0])
+                    throw new Error('invalid update: different from previous update with same version')
+
+                // see if we only have *some* of the versions
+                var new_count = v[1] - intersects_range[1]
+                if (new_count > 0) {
+                    // divide the patches between old and new..
+                    var new_patches = split_patches(patches, change_count - new_count)
+                }
+
+                if (options.validate_already_seen_versions)
+                    validate_old_patches(resource, `${v[0]}-${low_seq}`, parents, patches)
+
+                if (new_count <= 0) return { change_count }
+
+                change_count = new_count
+                low_seq = v[1] + 1 - change_count
+                parents = [`${v[0]}-${low_seq - 1}`]
+                max_pos = resource.length_cache.get('' + parents) ??
+                    (v_eq(resource.version, parents) ? resource.doc.len() : dt_len(resource.doc, parents))
+                patches = new_patches
+            }
+
             // validate patch positions
             let must_be_at_least = 0
             for (let p of patches) {
-                if (p.range[0] < must_be_at_least || p.range[0] > max_pos) throw new Error(`invalid patch range position: ${p.range[0]}`)
-                if (p.range[1] < p.range[0] || p.range[1] > max_pos) throw new Error(`invalid patch range position: ${p.range[1]}`)
+                if (p.range[0] < must_be_at_least || p.range[0] > max_pos)
+                    throw new Error(`invalid patch range position: ${p.range[0]}`)
+                if (p.range[1] < p.range[0] || p.range[1] > max_pos)
+                    throw new Error(`invalid patch range position: ${p.range[1]}`)
                 must_be_at_least = p.range[1]
             }
-
-            let change_count = patches.reduce((a, b) => a + b.content_codepoints.length + (b.range[1] - b.range[0]), 0)
-
-            let og_v = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
-
-            let v = decode_version(og_v)
 
             resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
                 a + (b.content_codepoints?.length ?? 0) - (b.range[1] - b.range[0]),
                 max_pos))
 
-            // validate version: make sure we haven't seen it already
-            if (resource.actor_seqs[v[0]]?.has(v[1])) {
-
-                if (!options.validate_already_seen_versions) return { change_count }
-
-                // if we have seen it already, make sure it's the same as before
-                let updates = dt_get_patches(resource.doc, og_parents)
-
-                let seen = {}
-                for (let u of updates) {
-                    u.version = decode_version(u.version)
-
-                    if (!u.content) {
-                        // delete
-                        let v = u.version
-                        for (let i = 0; i < u.end - u.start; i++) {
-                            let ps = (i < u.end - u.start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
-                            seen[JSON.stringify([v[0], v[1] - i, ps, u.start + i])] = true
-                        }
-                    } else {
-                        // insert
-                        let v = u.version
-                        let content = [...u.content]
-                        for (let i = 0; i < content.length; i++) {
-                            let ps = (i > 0) ? [`${v[0]}-${v[1] - content.length + i}`] : u.parents
-                            seen[JSON.stringify([v[0], v[1] + 1 - content.length + i, ps, u.start + i, content[i]])] = true
-                        }
-                    }
-                }
-
-                v = `${v[0]}-${v[1] + 1 - change_count}`
-                let ps = og_parents
-                let offset = 0
-                for (let p of patches) {
-                    // delete
-                    for (let i = p.range[0]; i < p.range[1]; i++) {
-                        let vv = decode_version(v)
-
-                        if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] - 1 + offset])]) throw new Error('invalid update: different from previous update with same version')
-
-                        offset--
-                        ps = [v]
-                        v = vv
-                        v = `${v[0]}-${v[1] + 1}`
-                    }
-                    // insert
-                    for (let i = 0; i < p.content_codepoints?.length ?? 0; i++) {
-                        let vv = decode_version(v)
-                        let c = p.content_codepoints[i]
-
-                        if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] + offset, c])]) throw new Error('invalid update: different from previous update with same version')
-
-                        offset++
-                        ps = [v]
-                        v = vv
-                        v = `${v[0]}-${v[1] + 1}`
-                    }
-                }
-
-                // we already have this version, so nothing left to do
-                return { change_count: change_count }
-            }
             if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
-            resource.actor_seqs[v[0]].add_range(v[1] + 1 - change_count, v[1])
+            resource.actor_seqs[v[0]].add_range(low_seq, v[1])
 
-            // reduce the version sequence by the number of char-edits
-            v = `${v[0]}-${v[1] + 1 - change_count}`
+            // get the version of the first character-wise edit
+            v = `${v[0]}-${low_seq}`
 
-            let ps = og_parents
+            let ps = parents
 
+            let version_before = resource.version
             let v_before = resource.doc.getLocalVersion()
 
             let bytes = []
@@ -1060,14 +1026,12 @@ function create_braid_text() {
             var post_commit_updates = []
 
             if (options.merge_type != "dt") {
-                patches = get_xf_patches(resource.doc, v_before)
+                let patches = get_xf_patches(resource.doc, v_before)
                 if (braid_text.verbose) console.log(JSON.stringify({ patches }))
-
-                let version = resource.version
 
                 for (let client of resource.simpleton_clients) {
                     if (peer && client.peer === peer) {
-                        client.my_last_seen_version = [og_v]
+                        client.my_last_seen_version = [version]
                     }
 
                     function set_timeout(time_override) {
@@ -1076,10 +1040,10 @@ function create_braid_text() {
                             // if the doc has been freed, exit early
                             if (resource.doc.__wbg_ptr === 0) return
 
-                            let version = resource.version
-                            let x = { version }
-                            x.parents = client.my_last_seen_version
-
+                            let x = {
+                                version: resource.version,
+                                parents: client.my_last_seen_version
+                            }
                             if (braid_text.verbose) console.log("rebasing after timeout.. ")
                             if (braid_text.verbose) console.log("    client.my_unused_version_count = " + client.my_unused_version_count)
                             x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, client.my_last_seen_version))
@@ -1094,7 +1058,7 @@ function create_braid_text() {
 
                     if (client.my_timeout) {
                         if (peer && client.peer === peer) {
-                            if (!v_eq(client.my_last_sent_version, og_parents)) {
+                            if (!v_eq(client.my_last_sent_version, parents)) {
                                 // note: we don't add to client.my_unused_version_count,
                                 // because we're already in a timeout;
                                 // we'll just extend it here..
@@ -1108,9 +1072,9 @@ function create_braid_text() {
                         continue
                     }
 
-                    let x = { version }
+                    let x = { version: resource.version }
                     if (peer && client.peer === peer) {
-                        if (!v_eq(client.my_last_sent_version, og_parents)) {
+                        if (!v_eq(client.my_last_sent_version, parents)) {
                             client.my_unused_version_count = (client.my_unused_version_count ?? 0) + 1
                             set_timeout()
                             continue
@@ -1118,10 +1082,10 @@ function create_braid_text() {
                             delete client.my_unused_version_count
                         }
 
-                        x.parents = options.version
-                        if (!v_eq(version, options.version)) {
+                        x.parents = [version]
+                        if (!v_eq(x.version, x.parents)) {
                             if (braid_text.verbose) console.log("rebasing..")
-                            x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, [og_v]))
+                            x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, x.parents))
                         } else {
                             // this client already has this version,
                             // so let's pretend to send it back, but not
@@ -1130,7 +1094,7 @@ function create_braid_text() {
                             continue
                         }
                     } else {
-                        x.parents = parents
+                        x.parents = version_before
                         x.patches = patches
                     }
                     if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
@@ -1139,9 +1103,11 @@ function create_braid_text() {
                 }
             } else {
                 if (resource.simpleton_clients.size) {
-                    let version = resource.version
-                    patches = get_xf_patches(resource.doc, v_before)
-                    let x = { version, parents, patches }
+                    let x = {
+                        version: resource.version,
+                        parents: version_before,
+                        patches: get_xf_patches(resource.doc, v_before)
+                    }
                     if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
                     for (let client of resource.simpleton_clients) {
                         if (client.my_timeout) continue
@@ -1152,9 +1118,13 @@ function create_braid_text() {
             }
 
             var x = {
-                version: [og_v],
-                parents: og_parents,
-                patches: og_patches,
+                version: [version],
+                parents,
+                patches: patches.map(p => ({
+                    unit: p.unit,
+                    range: `[${p.range.join(':')}]`,
+                    content: p.content
+                })),
             }
             for (let client of resource.clients) {
                 if (!peer || client.peer !== peer)
@@ -1538,6 +1508,62 @@ function create_braid_text() {
 
         seqs.splice(start, i - start)
         if (!seqs.length) delete ns.actor_seqs[actor]
+    }
+
+    function validate_old_patches(resource, base_v, parents, patches) {
+        // if we have seen it already, make sure it's the same as before
+        let updates = dt_get_patches(resource.doc, parents)
+
+        let seen = {}
+        for (let u of updates) {
+            u.version = decode_version(u.version)
+
+            if (!u.content) {
+                // delete
+                let v = u.version
+                for (let i = 0; i < u.end - u.start; i++) {
+                    let ps = (i < u.end - u.start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
+                    seen[JSON.stringify([v[0], v[1] - i, ps, u.start + i])] = true
+                }
+            } else {
+                // insert
+                let v = u.version
+                let content = [...u.content]
+                for (let i = 0; i < content.length; i++) {
+                    let ps = (i > 0) ? [`${v[0]}-${v[1] - content.length + i}`] : u.parents
+                    seen[JSON.stringify([v[0], v[1] + 1 - content.length + i, ps, u.start + i, content[i]])] = true
+                }
+            }
+        }
+
+        let v = base_v
+        let ps = parents
+        let offset = 0
+        for (let p of patches) {
+            // delete
+            for (let i = p.range[0]; i < p.range[1]; i++) {
+                let vv = decode_version(v)
+
+                if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] - 1 + offset])]) throw new Error('invalid update: different from previous update with same version')
+
+                offset--
+                ps = [v]
+                v = vv
+                v = `${v[0]}-${v[1] + 1}`
+            }
+            // insert
+            for (let i = 0; i < p.content_codepoints?.length ?? 0; i++) {
+                let vv = decode_version(v)
+                let c = p.content_codepoints[i]
+
+                if (!seen[JSON.stringify([vv[0], vv[1], ps, p.range[1] + offset, c])]) throw new Error('invalid update: different from previous update with same version')
+
+                offset++
+                ps = [v]
+                v = vv
+                v = `${v[0]}-${v[1] + 1}`
+            }
+        }
     }
 
     //////////////////////////////////////////////////////////////////
@@ -2543,6 +2569,120 @@ function create_braid_text() {
         if (typeof x.content !== 'string') throw new Error(`invalid patch content: must be a string`)
     }
 
+    // Splits an array of patches at a given character position within the
+    // combined delete+insert sequence.
+    //
+    // Patches are objects with:
+    //   - unit: string (e.g., 'text')
+    //   - range: [start, end] - character positions for deletion
+    //   - content: string - the content to insert
+    //   - content_codepoints: array of single characters
+    //
+    // Each patch represents a "replace" operation: delete then insert.
+    // The combined sequence for patches is:
+    //   del(patch1), ins(patch1), del(patch2), ins(patch2), ...
+    //
+    // The split_point is an index into this combined sequence.
+    //
+    // Example: patches with del(3),ins(4),del(2),ins(5)
+    //   - split_point 1 falls in first del(3)
+    //   - split_point 5 falls in first ins(4) (positions 3-6)
+    //   - split_point 7 falls in second del(2) (positions 7-8)
+    //
+    // First patches: operations up to split_point
+    // Second patches: operations from split_point onward (ranges adjusted)
+    function split_patches(patches, split_point) {
+        let second_patches = []
+
+        let position = 0  // current position in the combined sequence
+        let adjustment = 0  // how much to adjust second patches' ranges
+        let first_len = 0  // how many patches stay in first (modified in place)
+
+        for (let i = 0; i < patches.length; i++) {
+            let p = patches[i]
+            let delete_length = p.range[1] - p.range[0]
+            let insert_length = p.content_codepoints.length
+
+            let del_start = position
+            let del_end = position + delete_length
+            let ins_start = del_end
+            let ins_end = ins_start + insert_length
+
+            if (split_point >= ins_end) {
+                // Entire patch is before split point - stays in first (unchanged)
+                first_len++
+                // Adjustment: this patch removes delete_length and adds insert_length
+                adjustment += insert_length - delete_length
+            } else if (split_point <= del_start) {
+                // Entire patch is after split point - goes to second (adjusted)
+                second_patches.push({
+                    unit: p.unit,
+                    range: [p.range[0] + adjustment, p.range[1] + adjustment],
+                    content: p.content,
+                    content_codepoints: p.content_codepoints
+                })
+            } else if (split_point <= del_end) {
+                // Split point is within the delete portion
+                let del_chars_before = split_point - del_start
+
+                // Save original values before modifying
+                let original_range_end = p.range[1]
+                let original_content = p.content
+                let original_content_codepoints = p.content_codepoints
+
+                // First patches: partial delete, no insert (modify in place)
+                p.range[1] = p.range[0] + del_chars_before
+                p.content = ''
+                p.content_codepoints = []
+                first_len++
+
+                // Adjustment from partial delete
+                adjustment -= del_chars_before
+
+                // Second patches: remaining delete + full insert (adjusted)
+                second_patches.push({
+                    unit: p.unit,
+                    range: [p.range[1] + adjustment, original_range_end + adjustment],
+                    content: original_content,
+                    content_codepoints: original_content_codepoints
+                })
+            } else {
+                // Split point is within the insert portion (split_point > del_end && split_point < ins_end)
+                let ins_chars_before = split_point - ins_start
+                let original_content_codepoints = p.content_codepoints
+
+                // First patches: full delete + partial insert (modify in place)
+                p.content_codepoints = p.content_codepoints.slice(0, ins_chars_before)
+                p.content = p.content_codepoints.join('')
+                first_len++
+
+                // After first patches applied, the position for remaining insert is:
+                // p.range[0] (original position)
+                // + adjustment (net change from all prior first_patches)
+                // + ins_chars_before (what this patch's first part inserted)
+                let adjusted_pos = p.range[0] + adjustment + ins_chars_before
+
+                let content_codepoints = original_content_codepoints.slice(ins_chars_before)
+                second_patches.push({
+                    unit: p.unit,
+                    range: [adjusted_pos, adjusted_pos],
+                    content: content_codepoints.join(''),
+                    content_codepoints
+                })
+
+                // Update adjustment: full delete removed, partial insert added
+                adjustment += ins_chars_before - delete_length
+            }
+
+            position = ins_end
+        }
+
+        // Truncate patches array to only contain first_patches
+        patches.length = first_len
+
+        return second_patches
+    }
+
     function createSimpleCache(size) {
         const maxSize = size
         const cache = new Map()
@@ -2661,7 +2801,7 @@ function create_braid_text() {
         }
 
         add_range(low_inclusive, high_inclusive) {
-            if (low_inclusive > high_inclusive) return
+            if (low_inclusive > high_inclusive) throw new Error('invalid range')
 
             const startIndex = this._bs(mid => this.ranges[mid][1] >= low_inclusive - 1, this.ranges.length, true)
             const endIndex = this._bs(mid => this.ranges[mid][0] <= high_inclusive + 1, -1, false)
@@ -2676,9 +2816,10 @@ function create_braid_text() {
             }
         }
 
-        has(x) {
-            var index = this._bs(mid => this.ranges[mid][0] <= x, -1, false)
-            return index !== -1 && x <= this.ranges[index][1]
+        has(x, high) {
+            if (high === undefined) high = x
+            var index = this._bs(mid => this.ranges[mid][0] <= high, -1, false)
+            return index !== -1 && x <= this.ranges[index][1] && this.ranges[index]
         }
 
         _bs(condition, defaultR, moveLeft) {

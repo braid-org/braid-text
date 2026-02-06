@@ -1,10 +1,13 @@
 {
   "name": "braid-text",
-  "version": "0.2.114",
+  "version": "0.2.115",
   "description": "Library for collaborative text over http using braid.",
   "author": "Braid Working Group",
   "repository": "braid-org/braid-text",
   "homepage": "https://braid.org",
+  "scripts": {
+    "test": "node test/test.js"
+  },
   "files": [
     "index.js",
     "simpleton-client.js",
