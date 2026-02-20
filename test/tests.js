@@ -3739,6 +3739,42 @@ runTest(
     'correct'
 )
 
+runTest(
+    "test list() ignores files without numeric extensions",
+    async () => {
+        var key = 'listtest' + Math.random().toString(36).slice(2)
+
+        // Create a real resource so the key shows up in list()
+        var r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            body: 'hello'
+        })
+        if (!r.ok) return 'put failed: ' + r.status
+
+        // list() should contain our key but NOT things like .meta, .temp, .wal-intent
+        var r2 = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                try {
+                    var list = await braid_text.list()
+                    var bad = list.filter(x => x.startsWith('.'))
+                    if (bad.length > 0) {
+                        res.end('FAIL: list includes ' + JSON.stringify(bad))
+                    } else {
+                        res.end('ok')
+                    }
+                } catch (e) {
+                    res.end('error: ' + e.message)
+                }
+            })()`
+        })
+        if (!r2.ok) return 'eval failed: ' + r2.status
+
+        return await r2.text()
+    },
+    'ok'
+)
+
 }
 
 // Export for both Node.js and browser environments

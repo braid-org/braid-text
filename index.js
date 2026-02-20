@@ -1144,7 +1144,7 @@ function create_braid_text() {
             if (braid_text.db_folder) {
                 await db_folder_init()
                 var pages = new Set()
-                for (let x of await require('fs').promises.readdir(braid_text.db_folder)) pages.add(decode_filename(x.replace(/\.\w+$/, '')))
+                for (let x of await require('fs').promises.readdir(braid_text.db_folder)) if (/\.\d+$/.test(x)) pages.add(decode_filename(x.replace(/\.\d+$/, '')))
                 return [...pages.keys()]
             } else return Object.keys(braid_text.cache)
         } catch (e) { return [] }

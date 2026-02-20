@@ -1,6 +1,6 @@
 {
   "name": "braid-text",
-  "version": "0.2.116",
+  "version": "0.2.117",
   "description": "Library for collaborative text over http using braid.",
   "author": "Braid Working Group",
   "repository": "braid-org/braid-text",
@@ -13,7 +13,6 @@
     "simpleton-client.js",
     "web-utils.js",
     "README.md",
-    "AI-README.md",
     "editor.html",
     "markdown-editor.html",
     "server-demo.js"
