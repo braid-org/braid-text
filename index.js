@@ -982,6 +982,9 @@ function create_braid_text() {
             resource.val = resource.doc.get()
             resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
+            // Transform stored cursor positions through the applied patches
+            if (resource.cursor_state) resource.cursor_state.transform(patches)
+
             var post_commit_updates = []
 
             if (options.merge_type != "dt") {
@@ -2982,6 +2985,21 @@ function create_braid_text() {
 //
 // This is factored out so that the same logic could conceptually run
 // on a client as well (e.g. for client-side filtering of stale cursors).
+// Transform a single position through a delete+insert operation.
+// Positions before the edit are unchanged; positions inside the deleted
+// range collapse to the edit point; positions after shift by the net change.
+// Pure inserts (del_len=0) push positions at the insert point forward.
+function transform_pos(pos, del_start, del_len, ins_len) {
+    if (del_len === 0) {
+        // Pure insert: push positions at or after the insert point
+        if (pos < del_start) return pos
+        return pos + ins_len
+    }
+    if (pos <= del_start) return pos
+    if (pos <= del_start + del_len) return del_start + ins_len
+    return pos - del_len + ins_len
+}
+
 class cursor_state {
     constructor(expiry_ms) {
         this.expiry_ms = expiry_ms || 12 * 60 * 60 * 1000  // 12 hours
@@ -3040,6 +3058,36 @@ class cursor_state {
         }
     }
 
+    // Transform all stored cursor positions through text patches.
+    // Each patch has { range: [start, end], content_codepoints: [...] }.
+    // Patches must be sorted by range[0] ascending (original coordinates).
+    transform(patches) {
+        if (!patches || !patches.length) return
+
+        for (var cursor of Object.values(this.cursors)) {
+            cursor.data = cursor.data.map(sel => {
+                var from = sel.from
+                var to = sel.to
+
+                // Apply each patch's effect on positions, accumulating offset
+                var offset = 0
+                for (var p of patches) {
+                    var del_start = p.range[0] + offset
+                    var del_end = p.range[1] + offset
+                    var del_len = del_end - del_start
+                    var ins_len = p.content_codepoints.length
+
+                    from = transform_pos(from, del_start, del_len, ins_len)
+                    to = transform_pos(to, del_start, del_len, ins_len)
+
+                    offset += ins_len - del_len
+                }
+
+                return {from, to}
+            })
+        }
+    }
+
     put(peer_id, cursor_data) {
         if (peer_id && cursor_data) {
             this.cursors[peer_id] = {
@@ -3057,11 +3105,11 @@ async function handle_cursors(resource, req, res) {
     var accept = req.headers['accept'] || ''
     var content_type = req.headers['content-type'] || ''
 
-    if (!accept.includes('application/cursors+json')
-        && !content_type.includes('application/cursors+json'))
+    if (!accept.includes('application/text-cursors+json')
+        && !content_type.includes('application/text-cursors+json'))
         return false
 
-    res.setHeader('Content-Type', 'application/cursors+json')
+    res.setHeader('Content-Type', 'application/text-cursors+json')
 
     if (!resource.cursor_state) resource.cursor_state = new cursor_state()
     var cs = resource.cursor_state
