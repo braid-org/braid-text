@@ -1,0 +1,108 @@
+<meta name="viewport" content="width=device-width,initial-scale=.62"/>
+<script src="https://invisible.college/js/marked.min.js"></script>
+<script src="https://braid.org/code/myers-diff1.js"></script>
+<script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
+<script src="/web-utils.js"></script>
+<script src="/simpleton-sync.js"></script>
+<script src="/cursor-highlights.js"></script>
+<script src="/cursor-sync.js"></script>
+<body>
+  <div id="markdown_container" style="max-width: 750px; padding: 10px 60px"></div>
+  <div id="bottom_spacer" style="height: 50vh; display: none;"></div>
+  <div id="editor_wrap" style="
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      width: 45vw;
+      height: 100%;
+    ">
+    <textarea
+      id="the_editor"
+      style="
+        width: 100%;
+        height: 100%;
+        font-size: 15px;
+        font-family: helvetica, arial, avenir, lucida grande;
+        hyphens: none;
+      "></textarea>
+  </div>
+  <div 
+    id="edit-button"
+    style="
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      padding: 30px;
+      cursor: pointer;
+      text-decoration: none;
+      background-color: rgba(250, 250, 250, .5);
+    " onclick="toggle_editor()">edit</div>
+</body>
+<script>
+
+var editing = false
+var first_time = true
+var render_timer = null
+var render_delay = 100
+
+var cursors = cursor_highlights(the_editor, location.pathname)
+
+var simpleton = simpleton_client(location.pathname, {
+  on_patches: (patches) => {
+    apply_patches_and_update_selection(the_editor, patches)
+    cursors.on_patches(patches)
+    update_markdown_later()
+  },
+  get_patches: (prev_state) => diff(prev_state, the_editor.value),
+  get_state: () => the_editor.value,
+  on_error: (e) => set_error_state(the_editor),
+  on_ack: () => set_acked_state(the_editor)
+})
+
+the_editor.oninput = (e) => {
+  set_acked_state(the_editor, false)
+  cursors.on_edit(simpleton.changed())
+  update_markdown_later()
+}
+
+document.body.onkeydown = (e) => {
+  if (e.keyCode === 27) { // Escape key
+    e.stopPropagation()
+    toggle_editor()
+  }
+}
+
+window.onresize = update_layout
+
+update_layout()
+
+function update_layout() {
+  var vert = window.innerWidth < 1200
+  markdown_container.style.width = editing && !vert ? '55vw' : ''
+  bottom_spacer.style.display = !editing || !vert ? 'none' : ''
+  editor_wrap.style.width = vert ? '100%' : '45vw'
+  editor_wrap.style.height = vert ? '50vh' : '100%'
+  editor_wrap.style.display = !editing ? 'none' : ''
+}
+
+function toggle_editor() {
+  editing = !editing
+  update_layout()
+  if (editing) the_editor.focus()
+  if (editing && first_time) {
+    first_time = false
+    the_editor.setSelectionRange(0, 0)
+    the_editor.scrollTop = 0
+  }
+}
+
+function update_markdown_later() {
+  if (render_timer) clearTimeout(render_timer)
+  render_timer = setTimeout(update_markdown, render_delay)
+}
+
+function update_markdown() {
+  markdown_container.innerHTML = marked(the_editor.value, { sanitize: false })
+}
+
+</script>

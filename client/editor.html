@@ -1,0 +1,30 @@
+<body style="margin: 0px; padding: 0px; box-sizing: border-box">
+  <textarea id="the_editor" style="width: 100%; height: 100%;"></textarea>
+</body>
+<script src="https://braid.org/code/myers-diff1.js"></script>
+<script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
+<script src="/web-utils.js"></script>
+<script src="/simpleton-sync.js"></script>
+<script src="/cursor-highlights.js"></script>
+<script src="/cursor-sync.js"></script>
+<script>
+
+  var cursors = cursor_highlights(the_editor, location.pathname)
+
+  var simpleton = simpleton_client(location.pathname, {
+    on_patches: (patches) => {
+      apply_patches_and_update_selection(the_editor, patches)
+      cursors.on_patches(patches)
+    },
+    get_patches: (prev_state) => diff(prev_state, the_editor.value),
+    get_state: () => the_editor.value,
+    on_error: (e) => set_error_state(the_editor),
+    on_ack: () => set_acked_state(the_editor)
+  })
+
+  the_editor.oninput = (e) => {
+    set_acked_state(the_editor, false)
+    cursors.on_edit(simpleton.changed())
+  }
+
+</script>

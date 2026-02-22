@@ -14,11 +14,11 @@
     "simpleton-client.js",
     "client/simpleton-sync.js",
     "client/cursor-sync.js",
-    "client/textarea-highlights.js",
+    "client/cursor-highlights.js",
     "client/web-utils.js",
     "README.md",
-    "editor.html",
-    "markdown-editor.html",
+    "client/editor.html",
+    "client/markdown-editor.html",
     "server-demo.js"
   ],
   "dependencies": {

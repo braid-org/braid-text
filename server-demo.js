@@ -16,11 +16,12 @@ var server = require("http").createServer(async (req, res) => {
     var q = req.url.split('?').slice(-1)[0]
     if (q === 'editor' || q === 'markdown-editor') {
         res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
-        require("fs").createReadStream(`./${q}.html`).pipe(res)
+        require("fs").createReadStream(`./client/${q}.html`).pipe(res)
         return
     }
 
-    if (req.url === '/simpleton-sync.js' || req.url === '/web-utils.js') {
+    if (req.url === '/simpleton-sync.js' || req.url === '/web-utils.js'
+        || req.url === '/cursor-highlights.js' || req.url === '/cursor-sync.js') {
         res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-cache" })
         require("fs").createReadStream("./client" + req.url).pipe(res)
         return

@@ -173,7 +173,38 @@ var simpleton = simpleton_client(url, {
 })
 ```
 
-See [editor.html](https://github.com/braid-org/braid-text/blob/master/editor.html) for a complete example.
+See [editor.html](https://github.com/braid-org/braid-text/blob/master/client/editor.html) for a complete example.
+
+### Cursor & Selection Sync
+
+Show each peer's cursor and selection with colored highlights. Add three lines to any textarea editor:
+
+```html
+<script src="https://unpkg.com/braid-text@~0.3/client/cursor-highlights.js"></script>
+<script src="https://unpkg.com/braid-text@~0.3/client/cursor-sync.js"></script>
+<script>
+  var cursors = cursor_highlights(my_textarea, location.pathname)
+
+  var simpleton = simpleton_client(location.pathname, {
+    on_patches: (patches) => {
+      apply_patches_and_update_selection(my_textarea, patches)
+      cursors.on_patches(patches)        // <-- update remote cursors
+    },
+    get_state: () => my_textarea.value
+  })
+
+  my_textarea.oninput = () => {
+    cursors.on_edit(simpleton.changed())  // <-- send local cursor
+  }
+</script>
+```
+
+`cursor_highlights(textarea, url)` returns an object with:
+- `cursors.on_patches(patches)` — call after applying remote patches to transform and re-render remote cursors
+- `cursors.on_edit(patches)` — call after local edits; pass the patches from `simpleton.changed()` to update cursor positions and broadcast your selection
+- `cursors.destroy()` — tear down listeners and DOM elements
+
+Colors are auto-assigned per peer ID. See `?editor` and `?markdown-editor` in the demo server for working examples.
 
 ## Client API
 
@@ -229,7 +260,7 @@ Creates a new Simpleton client that synchronizes with a Braid-Text server.
 
 ### Methods
 
-- `simpleton.changed()`: Notify the client that local changes have occurred. Call this in your editor's change event handler. The client will call `get_patches` and `get_state` when it's ready to send updates.
+- `simpleton.changed()`: Notify the client that local changes have occurred. Call this in your editor's change event handler. The client will call `get_patches` and `get_state` when it's ready to send updates. Returns the array of JS-index patches (or `undefined` if there was no change), which can be passed to `cursors.on_edit()`.
 
 ### Deprecated Options
 

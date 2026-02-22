@@ -138,71 +138,91 @@ function simpleton_client(url, {
       stop: async () => {
         ac.abort()
       },
-      changed: async () => {
+      changed: () => {
         if (outstanding_changes >= max_outstanding_changes) return
-        while (true) {
-            if (generate_local_diff_update) {
-                // DEPRECATED
-                var update = generate_local_diff_update(prev_state)
-                if (!update) return   // Stop if there wasn't a change!
-                var {patches, new_state} = update
-            } else {
-                var new_state = get_state()
-                if (new_state === prev_state) return // Stop if there wasn't a change!
-                var patches = get_patches ? get_patches(prev_state) :
-                    [simple_diff(prev_state, new_state)]
-            }
 
-            // convert from js-indicies to code-points
-            let c = 0
-            let i = 0
-            for (let p of patches) {
-                while (i < p.range[0]) {
-                    i += get_char_size(prev_state, i)
-                    c++
-                }
-                p.range[0] = c
-
-                while (i < p.range[1]) {
-                    i += get_char_size(prev_state, i)
-                    c++
-                }
-                p.range[1] = c
-
-                char_counter += p.range[1] - p.range[0]
-                char_counter += count_code_points(p.content)
-
-                p.unit = "text"
-                p.range = `[${p.range[0]}:${p.range[1]}]`
-            }
-
-            var version = [peer + "-" + char_counter]
-
-            var parents = current_version
-            current_version = version
-            prev_state = new_state
-
-            outstanding_changes++
-            try {
-                var r = await braid_fetch(url, {
-                    headers: {
-                        "Merge-Type": "simpleton",
-                        ...send_digests && {"Repr-Digest": await get_digest(prev_state)},
-                        ...content_type && {"Content-Type": content_type}
-                    },
-                    method: "PUT",
-                    retry: (res) => res.status !== 550,
-                    version, parents, patches,
-                    peer
-                })
-                if (!r.ok) throw new Error(`bad http status: ${r.status}${(r.status === 401 || r.status === 403) ? ` (access denied)` : ''}`)
-            } catch (e) {
-                on_error(e)
-                throw e
-            }
-            outstanding_changes--
-            if (on_ack && !outstanding_changes) on_ack()
+        if (generate_local_diff_update) {
+            // DEPRECATED
+            var update = generate_local_diff_update(prev_state)
+            if (!update) return   // Stop if there wasn't a change!
+            var {patches, new_state} = update
+        } else {
+            var new_state = get_state()
+            if (new_state === prev_state) return // Stop if there wasn't a change!
+            var patches = get_patches ? get_patches(prev_state) :
+                [simple_diff(prev_state, new_state)]
         }
+
+        // Save JS-index patches before code-point conversion mutates them
+        var js_patches = patches.map(p => ({range: [...p.range], content: p.content}))
+
+        ;(async () => {
+            while (true) {
+                // convert from js-indicies to code-points
+                let c = 0
+                let i = 0
+                for (let p of patches) {
+                    while (i < p.range[0]) {
+                        i += get_char_size(prev_state, i)
+                        c++
+                    }
+                    p.range[0] = c
+
+                    while (i < p.range[1]) {
+                        i += get_char_size(prev_state, i)
+                        c++
+                    }
+                    p.range[1] = c
+
+                    char_counter += p.range[1] - p.range[0]
+                    char_counter += count_code_points(p.content)
+
+                    p.unit = "text"
+                    p.range = `[${p.range[0]}:${p.range[1]}]`
+                }
+
+                var version = [peer + "-" + char_counter]
+
+                var parents = current_version
+                current_version = version
+                prev_state = new_state
+
+                outstanding_changes++
+                try {
+                    var r = await braid_fetch(url, {
+                        headers: {
+                            "Merge-Type": "simpleton",
+                            ...send_digests && {"Repr-Digest": await get_digest(prev_state)},
+                            ...content_type && {"Content-Type": content_type}
+                        },
+                        method: "PUT",
+                        retry: (res) => res.status !== 550,
+                        version, parents, patches,
+                        peer
+                    })
+                    if (!r.ok) throw new Error(`bad http status: ${r.status}${(r.status === 401 || r.status === 403) ? ` (access denied)` : ''}`)
+                } catch (e) {
+                    on_error(e)
+                    throw e
+                }
+                outstanding_changes--
+                if (on_ack && !outstanding_changes) on_ack()
+
+                // Check for more changes that accumulated while we were sending
+                if (generate_local_diff_update) {
+                    update = generate_local_diff_update(prev_state)
+                    if (!update) return
+                    ;({patches, new_state} = update)
+                } else {
+                    new_state = get_state()
+                    if (new_state === prev_state) return
+                    patches = get_patches ? get_patches(prev_state) :
+                        [simple_diff(prev_state, new_state)]
+                }
+            }
+        })()
+
+        return js_patches
       }
     }
 
