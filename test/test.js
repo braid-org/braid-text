@@ -4,6 +4,7 @@
 const http = require('http')
 const {fetch: braid_fetch} = require('braid-http')
 const defineTests = require('./tests.js')
+const defineCursorTests = require('./cursor-tests.js')
 
 // Parse command line arguments
 const args = process.argv.slice(2)
@@ -227,6 +228,7 @@ async function runConsoleTests() {
 
     // Run all tests
     defineTests(runTest, testBraidFetch)
+    defineCursorTests(runTest, testBraidFetch)
 
     // Run tests sequentially (not in parallel) to avoid conflicts
     for (const { testName, testFunction, expectedResult } of testsToRun) {

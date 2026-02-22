@@ -3,6 +3,7 @@ let { Doc, OpLog, Branch } = require("@braid.org/diamond-types-node")
 let {http_server: braidify, fetch: braid_fetch} = require("braid-http")
 let fs = require("fs")
 
+
 function create_braid_text() {
     let braid_text = {
         verbose: false,
@@ -371,51 +372,9 @@ function create_braid_text() {
 
         let peer = req.headers["peer"]
 
-        // selection sharing prototype
-        if (req.headers['selection-sharing-prototype']) {
-            res.setHeader('Content-Type', 'application/json')
-
-            if (!resource.selections) resource.selections = {}
-            if (!resource.selection_clients) resource.selection_clients = new Set()
-
-            if (req.method === "GET" || req.method === "HEAD") {
-                if (!req.subscribe) {
-                    return my_end(200, JSON.stringify(resource.selections))
-                } else {
-                    var client = {peer, res}
-                    resource.selection_clients.add(client)
-                    res.startSubscription({
-                        onClose: () => resource.selection_clients.delete(client)
-                    })
-                    res.sendUpdate({ body: JSON.stringify(resource.selections) })
-                    return
-                }
-            } else if (req.method == "PUT" || req.method == "POST" || req.method == "PATCH") {
-                var body = (await req.patches())[0].content_text
-                var json = JSON.parse(body)
-
-                // only keep new selections if they are newer
-                for (var [user, selection] of Object.entries(json)) {
-                    if (resource.selections[user] && resource.selections[user].time > selection.time) delete json[user]
-                    else resource.selections[user] = selection
-                }
-
-                // remove old selections that are too old
-                var long_ago = Date.now() - 1000 * 60 * 5
-                for (var [user, selection] of Object.entries(resource.selections))
-                    if (selection.time < long_ago) {
-                        delete resource.selections[user]
-                        delete json[user]
-                    }
-
-                body = JSON.stringify(json)
-                if (body.length > 2)
-                    for (let client of resource.selection_clients)
-                        if (client.peer !== peer) client.res.sendUpdate({ body })
-                
-                return my_end(200)
-            }
-        }
+        // Implement Multiplayer Text Cursors
+        if (await handle_cursors(resource, req, res))
+            return
 
         let merge_type = req.headers["merge-type"]
         if (!merge_type) merge_type = 'simpleton'
@@ -3009,6 +2968,130 @@ function create_braid_text() {
     braid_text.create_braid_text = create_braid_text
 
     return braid_text
+}
+
+
+// Cursor lifecycle state for a single resource.
+//
+// Each peer's cursor is stored as:
+//   cursors[peer_id] = { data: [{from, to}, ...], last_connected: timestamp }
+//
+// A cursor is "live" if the peer has an active subscription, OR if
+// last_connected is within expiry_ms.  Expired entries are lazily
+// cleaned on each snapshot.
+//
+// This is factored out so that the same logic could conceptually run
+// on a client as well (e.g. for client-side filtering of stale cursors).
+class cursor_state {
+    constructor(expiry_ms) {
+        this.expiry_ms = expiry_ms || 12 * 60 * 60 * 1000  // 12 hours
+        this.cursors = {}
+        this.subscribers = new Set()
+    }
+
+    subscribed_peers() {
+        var peers = new Set()
+        for (var sub of this.subscribers)
+            if (sub.peer) peers.add(sub.peer)
+        return peers
+    }
+
+    is_live(peer_id) {
+        var cursor = this.cursors[peer_id]
+        if (!cursor) return false
+        if (this.subscribed_peers().has(peer_id)) return true
+        return (Date.now() - cursor.last_connected) < this.expiry_ms
+    }
+
+    gc() {
+        var connected = this.subscribed_peers()
+        var now = Date.now()
+        for (var peer_id of Object.keys(this.cursors))
+            if (!connected.has(peer_id)
+                && (now - this.cursors[peer_id].last_connected) >= this.expiry_ms)
+                delete this.cursors[peer_id]
+    }
+
+    broadcast(msg, exclude_peer) {
+        for (var sub of this.subscribers)
+            if (sub.peer !== exclude_peer)
+                try { sub.res.sendUpdate({ body: msg }) } catch (e) {}
+    }
+
+    snapshot() {
+        this.gc()
+        var result = {}
+        for (var [peer_id, cursor] of Object.entries(this.cursors))
+            if (this.is_live(peer_id)) result[peer_id] = cursor.data
+        return result
+    }
+
+    subscribe(subscriber) {
+        this.subscribers.add(subscriber)
+    }
+
+    unsubscribe(subscriber) {
+        this.subscribers.delete(subscriber)
+        var peer_id = subscriber.peer
+        if (peer_id && this.cursors[peer_id]) {
+            this.cursors[peer_id].last_connected = Date.now()
+            if (!this.subscribed_peers().has(peer_id))
+                this.broadcast(JSON.stringify({ [peer_id]: [] }))
+        }
+    }
+
+    put(peer_id, cursor_data) {
+        if (peer_id && cursor_data) {
+            this.cursors[peer_id] = {
+                data: cursor_data,
+                last_connected: this.cursors[peer_id]?.last_connected || Date.now()
+            }
+        }
+        this.broadcast(JSON.stringify({ [peer_id]: cursor_data }), peer_id)
+    }
+}
+
+// Handle cursor requests routed by content negotiation.
+// Returns true if the request was handled, false to fall through.
+async function handle_cursors(resource, req, res) {
+    var accept = req.headers['accept'] || ''
+    var content_type = req.headers['content-type'] || ''
+
+    if (!accept.includes('application/cursors+json')
+        && !content_type.includes('application/cursors+json'))
+        return false
+
+    res.setHeader('Content-Type', 'application/cursors+json')
+
+    if (!resource.cursor_state) resource.cursor_state = new cursor_state()
+    var cs = resource.cursor_state
+    var peer = req.headers['peer']
+
+    if (req.method === 'GET' || req.method === 'HEAD') {
+        if (!req.subscribe) {
+            res.writeHead(200)
+            res.end(JSON.stringify(cs.snapshot()))
+        } else {
+            var subscriber = {peer, res}
+            cs.subscribe(subscriber)
+            res.startSubscription({
+                onClose: () => cs.unsubscribe(subscriber)
+            })
+            res.sendUpdate({ body: JSON.stringify(cs.snapshot()) })
+        }
+    } else if (req.method === 'PUT' || req.method === 'POST' || req.method === 'PATCH') {
+        var raw_body = await new Promise((resolve, reject) => {
+            var chunks = []
+            req.on('data', chunk => chunks.push(chunk))
+            req.on('end', () => resolve(Buffer.concat(chunks).toString()))
+            req.on('error', reject)
+        })
+        cs.put(peer, JSON.parse(raw_body))
+        res.writeHead(200)
+        res.end()
+    }
+
+    return true
 }
 
 module.exports = create_braid_text()
