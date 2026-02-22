@@ -175,13 +175,16 @@ var simpleton = simpleton_client(url, {
 
 See [editor.html](https://github.com/braid-org/braid-text/blob/master/client/editor.html) for a complete example.
 
-### Cursor & Selection Sync
+### Adding Multiplayer Cursor + Selections
 
-Show each peer's cursor and selection with colored highlights. Add three lines to any textarea editor:
+This will render each peer's cursor and selection with colored highlights.  Just add three lines to your simpleton client:
 
 ```html
+<!-- 1. Include these additional script tags -->
 <script src="https://unpkg.com/braid-text@~0.3/client/cursor-highlights.js"></script>
 <script src="https://unpkg.com/braid-text@~0.3/client/cursor-sync.js"></script>
+
+<!-- 2. Add two lines to your simpleton_client() call -->
 <script>
   var cursors = cursor_highlights(my_textarea, location.pathname)
 
@@ -199,12 +202,6 @@ Show each peer's cursor and selection with colored highlights. Add three lines t
 </script>
 ```
 
-`cursor_highlights(textarea, url)` returns an object with:
-- `cursors.on_patches(patches)` — call after applying remote patches to transform and re-render remote cursors
-- `cursors.on_edit(patches)` — call after local edits; pass the patches from `simpleton.changed()` to update cursor positions and broadcast your selection
-- `cursors.destroy()` — tear down listeners and DOM elements
-
-Colors are auto-assigned per peer ID. See `?editor` and `?markdown-editor` in the demo server for working examples.
 
 ## Client API
 
@@ -268,6 +265,17 @@ The following options are deprecated and should be replaced with the new API:
 
 - ~~`apply_remote_update`~~ → Use `on_patches` or `on_state` instead
 - ~~`generate_local_diff_update`~~ → Use `get_patches` and `get_state` instead
+
+### Multiplayer Cursor API
+
+`cursor_highlights(textarea, url)` returns an object with:
+- `cursors.on_patches(patches)` — call after applying remote patches to transform and re-render remote cursors
+- `cursors.on_edit(patches)` — call after local edits; pass the patches from `simpleton.changed()` to update cursor positions and broadcast your selection
+- `cursors.destroy()` — tear down listeners and DOM elements
+
+Colors are auto-assigned per peer ID. See `?editor` and `?markdown-editor` in the demo server for working examples.
+
+
 
 ## Testing
 
