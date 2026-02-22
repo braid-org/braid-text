@@ -1,5 +1,5 @@
 var port = process.argv[2] || 8888
-var braid_text = require("./index.js")
+var braid_text = require("./server.js")
 
 // TODO: set a custom database folder
 // (the default is ./braid-text-db)
@@ -20,9 +20,9 @@ var server = require("http").createServer(async (req, res) => {
         return
     }
 
-    if (req.url === '/simpleton-client.js' || req.url === '/web-utils.js') {
+    if (req.url === '/simpleton-sync.js' || req.url === '/web-utils.js') {
         res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-cache" })
-        require("fs").createReadStream("." + req.url).pipe(res)
+        require("fs").createReadStream("./client" + req.url).pipe(res)
         return
     }
 

@@ -50,7 +50,7 @@ function createTestServer(options = {}) {
         logRequests = false
     } = options
 
-    const braid_text = require(`${__dirname}/../index.js`)
+    const braid_text = require(`${__dirname}/../server.js`)
     braid_text.db_folder = `${__dirname}/test_db_folder`
 
     const braid_text2 = braid_text.create_braid_text()
