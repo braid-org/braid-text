@@ -2979,7 +2979,7 @@ function create_braid_text() {
 // Each peer's cursor is stored as:
 //   cursors[peer_id] = { data: [{from, to}, ...], last_connected: timestamp }
 //
-// A cursor is "live" if the peer has an active subscription, OR if
+// A cursor is "online" if the peer has an active subscription, OR if
 // last_connected is within expiry_ms.  Expired entries are lazily
 // cleaned on each snapshot.
 //
@@ -3014,20 +3014,20 @@ class cursor_state {
         return peers
     }
 
-    is_live(peer_id) {
-        var cursor = this.cursors[peer_id]
-        if (!cursor) return false
-        if (this.subscribed_peers().has(peer_id)) return true
-        return (Date.now() - cursor.last_connected) < this.expiry_ms
+    is_online(peer_id) {
+        return !!this.cursors[peer_id] && this.subscribed_peers().has(peer_id)
     }
 
     gc() {
         var connected = this.subscribed_peers()
         var now = Date.now()
-        for (var peer_id of Object.keys(this.cursors))
-            if (!connected.has(peer_id)
-                && (now - this.cursors[peer_id].last_connected) >= this.expiry_ms)
+        for (var peer_id of Object.keys(this.cursors)) {
+            if (connected.has(peer_id)) continue
+            var cursor = this.cursors[peer_id]
+            if (cursor.last_connected
+                && (now - cursor.last_connected) >= this.expiry_ms)
                 delete this.cursors[peer_id]
+        }
     }
 
     broadcast(msg, exclude_peer) {
@@ -3040,12 +3040,18 @@ class cursor_state {
         this.gc()
         var result = {}
         for (var [peer_id, cursor] of Object.entries(this.cursors))
-            if (this.is_live(peer_id)) result[peer_id] = cursor.data
+            if (this.is_online(peer_id)) result[peer_id] = cursor.data
         return result
     }
 
     subscribe(subscriber) {
         this.subscribers.add(subscriber)
+        // If this peer already has stored cursor data (from a PUT that arrived
+        // before the subscription), broadcast it now so other peers see them
+        // "come online" with their cursor already set.
+        var peer_id = subscriber.peer
+        if (peer_id && this.cursors[peer_id])
+            this.broadcast(JSON.stringify({ [peer_id]: this.cursors[peer_id].data }), peer_id)
     }
 
     unsubscribe(subscriber) {
@@ -3095,7 +3101,11 @@ class cursor_state {
                 last_connected: this.cursors[peer_id]?.last_connected || Date.now()
             }
         }
-        this.broadcast(JSON.stringify({ [peer_id]: cursor_data }), peer_id)
+        // Only broadcast if the peer is subscribed (i.e. "online").
+        // If a PUT arrives before the subscription, the data is stored and
+        // will be broadcast when the subscription establishes.
+        if (this.subscribed_peers().has(peer_id))
+            this.broadcast(JSON.stringify({ [peer_id]: cursor_data }), peer_id)
     }
 }
 
