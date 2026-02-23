@@ -2,9 +2,12 @@
 
 Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is grey
 
-Musaab: Hello!
 
-***This library*** provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol.
+```plain
+Musaab: Hello!
+```
+
+***This library*** provides a simple http route handler, along with client code, enabling fast text synchronization over a standard `protocol`.
 
 - Supports [Braid-HTTP](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) protocol
 - Supports [Simpleton](https://braid.org/meeting-76/simpleton) merge-type
