@@ -253,8 +253,9 @@ function cursor_highlights(textarea, url) {
     var peer = Math.random().toString(36).slice(2)
     var hl = textarea_highlights(textarea)
     var applying_remote = false
+    var client = null
 
-    var client = cursor_client(url, {
+    cursor_client(url, {
         peer,
         get_text: () => textarea.value,
         on_change: (sels) => {
@@ -267,29 +268,31 @@ function cursor_highlights(textarea, url) {
             }
             hl.render()
         }
-    })
+    }).then(function(c) { client = c })
 
     document.addEventListener('selectionchange', function() {
         if (applying_remote) return
         if (document.activeElement !== textarea) return
-        client.set(textarea.selectionStart, textarea.selectionEnd)
+        if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
     })
 
     return {
         on_patches: function(patches) {
             applying_remote = true
-            client.changed(patches)
+            if (client) client.changed(patches)
             hl.render()
             setTimeout(() => { applying_remote = false }, 0)
         },
 
         on_edit: function(patches) {
-            if (patches) client.changed(patches)
-            client.set(textarea.selectionStart, textarea.selectionEnd)
+            if (client) {
+                if (patches) client.changed(patches)
+                client.set(textarea.selectionStart, textarea.selectionEnd)
+            }
         },
 
         destroy: function() {
-            client.destroy()
+            if (client) client.destroy()
             hl.destroy()
         }
     }
