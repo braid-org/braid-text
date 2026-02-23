@@ -2,6 +2,10 @@
 
 Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is grey
 
+&#8203;
+
+&#8203;
+
 ***This library*** provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol.
 
 - Supports [Braid-HTTP](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) protocol
@@ -17,7 +21,7 @@ Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is g
 - Developed in [braid.org](https://braid.org)
 This library makes it safe, easy & efficient to add collaborative text editing to every user-editable string in your web app.  Make your app multiplayer!
 
-Check out the **[demo video](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)** 📺 from the Braid 86 release!
+Check out the **[demo video](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)** 📺 from the Braid 86 release! Test
 
 ### Demo: a Wiki!
 
