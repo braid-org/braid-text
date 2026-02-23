@@ -2,9 +2,7 @@
 
 Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is grey
 
-&#8203;
-
-&#8203;
+Musaab: 
 
 ***This library*** provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol.
 
