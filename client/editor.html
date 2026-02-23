@@ -12,6 +12,7 @@
   var cursors = cursor_highlights(the_editor, location.pathname)
 
   var simpleton = simpleton_client(location.pathname, {
+    on_online: ({online}) => { online ? cursors.online() : cursors.offline() },
     on_patches: (patches) => {
       apply_patches_and_update_selection(the_editor, patches)
       cursors.on_patches(patches)
