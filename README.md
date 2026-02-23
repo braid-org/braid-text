@@ -1,8 +1,9 @@
 # Collaborative text over Braid-HTTP
 
+Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is grey
+
 
 ```plain
-Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is grey
 Musaab: Hello!
 ```
 
