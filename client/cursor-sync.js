@@ -26,8 +26,10 @@ async function cursor_client(url, { peer, get_text, on_change }) {
 
     var selections = {}     // peer_id -> [{ from, to }]  in JS string indices
     var last_sent = null
+    var last_ranges = null  // last cursor ranges (JS indices) for re-PUT on reconnect
     var send_timer = null
     var ac = new AbortController()
+    var put_ac = null       // AbortController for in-flight PUT retry
 
     // --- code-point <-> JS index helpers ---
 
@@ -66,10 +68,36 @@ async function cursor_client(url, { peer, get_text, on_change }) {
         return pos - del_len + ins_len
     }
 
+    // --- PUT helper ---
+
+    function do_put(ranges) {
+        if (put_ac) put_ac.abort()
+        put_ac = new AbortController()
+        var text = get_text()
+        var cp_ranges = ranges.map(function(r) {
+            return {
+                from: js_index_to_code_point(text, r.from),
+                to: js_index_to_code_point(text, r.to),
+            }
+        })
+        braid_fetch(url, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/text-cursors+json',
+                Peer: peer,
+                'Content-Range': 'json [' + JSON.stringify(peer) + ']',
+            },
+            body: JSON.stringify(cp_ranges),
+            retry: function(res) { return res.status === 425 },
+            signal: put_ac.signal,
+        }).catch(function() {})
+    }
+
     // --- subscribe for remote cursors ---
 
     braid_fetch(url, {
         subscribe: true,
+        retry: { onRes: function() { if (last_ranges) do_put(last_ranges) } },
         peer,
         headers: {
             Accept: 'application/text-cursors+json',
@@ -126,28 +154,11 @@ async function cursor_client(url, { peer, get_text, on_change }) {
             var key = JSON.stringify(ranges)
             if (key === last_sent) return
             last_sent = key
+            last_ranges = ranges
 
             // Debounce 50ms
             if (send_timer) clearTimeout(send_timer)
-            send_timer = setTimeout(function() {
-                var text = get_text()
-                var cp_ranges = ranges.map(function(r) {
-                    return {
-                        from: js_index_to_code_point(text, r.from),
-                        to: js_index_to_code_point(text, r.to),
-                    }
-                })
-
-                fetch(url, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/text-cursors+json',
-                        Peer: peer,
-                        'Content-Range': 'json [' + JSON.stringify(peer) + ']',
-                    },
-                    body: JSON.stringify(cp_ranges),
-                })
-            }, 50)
+            send_timer = setTimeout(function() { do_put(ranges) }, 50)
         },
 
         // Transform all stored remote cursor positions through text edits.
@@ -187,6 +198,7 @@ async function cursor_client(url, { peer, get_text, on_change }) {
 
         destroy: function() {
             ac.abort()
+            if (put_ac) put_ac.abort()
             if (send_timer) clearTimeout(send_timer)
         },
     }

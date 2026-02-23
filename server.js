@@ -3001,8 +3001,7 @@ function transform_pos(pos, del_start, del_len, ins_len) {
 }
 
 class cursor_state {
-    constructor(expiry_ms) {
-        this.expiry_ms = expiry_ms || 12 * 60 * 60 * 1000  // 12 hours
+    constructor() {
         this.cursors = {}
         this.subscribers = new Set()
     }
@@ -3012,22 +3011,6 @@ class cursor_state {
         for (var sub of this.subscribers)
             if (sub.peer) peers.add(sub.peer)
         return peers
-    }
-
-    is_online(peer_id) {
-        return !!this.cursors[peer_id] && this.subscribed_peers().has(peer_id)
-    }
-
-    gc() {
-        var connected = this.subscribed_peers()
-        var now = Date.now()
-        for (var peer_id of Object.keys(this.cursors)) {
-            if (connected.has(peer_id)) continue
-            var cursor = this.cursors[peer_id]
-            if (cursor.last_connected
-                && (now - cursor.last_connected) >= this.expiry_ms)
-                delete this.cursors[peer_id]
-        }
     }
 
     broadcast(peer_id, data, exclude_peer) {
@@ -3044,30 +3027,22 @@ class cursor_state {
     }
 
     snapshot() {
-        this.gc()
         var result = {}
         for (var [peer_id, cursor] of Object.entries(this.cursors))
-            if (this.is_online(peer_id)) result[peer_id] = cursor.data
+            result[peer_id] = cursor.data
         return result
     }
 
     subscribe(subscriber) {
         this.subscribers.add(subscriber)
-        // If this peer already has stored cursor data (from a PUT that arrived
-        // before the subscription), broadcast it now so other peers see them
-        // "come online" with their cursor already set.
-        var peer_id = subscriber.peer
-        if (peer_id && this.cursors[peer_id])
-            this.broadcast(peer_id, this.cursors[peer_id].data, peer_id)
     }
 
     unsubscribe(subscriber) {
         this.subscribers.delete(subscriber)
         var peer_id = subscriber.peer
-        if (peer_id && this.cursors[peer_id]) {
-            this.cursors[peer_id].last_connected = Date.now()
-            if (!this.subscribed_peers().has(peer_id))
-                this.broadcast(peer_id, null)
+        if (peer_id && !this.subscribed_peers().has(peer_id)) {
+            delete this.cursors[peer_id]
+            this.broadcast(peer_id, null)
         }
     }
 
@@ -3102,17 +3077,11 @@ class cursor_state {
     }
 
     put(peer_id, cursor_data) {
-        if (peer_id && cursor_data) {
-            this.cursors[peer_id] = {
-                data: cursor_data,
-                last_connected: this.cursors[peer_id]?.last_connected || Date.now()
-            }
-        }
-        // Only broadcast if the peer is subscribed (i.e. "online").
-        // If a PUT arrives before the subscription, the data is stored and
-        // will be broadcast when the subscription establishes.
-        if (this.subscribed_peers().has(peer_id))
-            this.broadcast(peer_id, cursor_data, peer_id)
+        if (!peer_id || !cursor_data) return false
+        if (!this.subscribed_peers().has(peer_id)) return false
+        this.cursors[peer_id] = { data: cursor_data }
+        this.broadcast(peer_id, cursor_data, peer_id)
+        return true
     }
 }
 
@@ -3161,9 +3130,14 @@ async function handle_cursors(resource, req, res) {
             return true
         }
         var cursor_peer = JSON.parse(range.slice(5))[0]
-        cursors.put(cursor_peer, JSON.parse(raw_body))
-        res.writeHead(200)
-        res.end()
+        var accepted = cursors.put(cursor_peer, JSON.parse(raw_body))
+        if (accepted) {
+            res.writeHead(200)
+            res.end()
+        } else {
+            res.writeHead(425)
+            res.end('Peer not subscribed')
+        }
     }
 
     return true
