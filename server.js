@@ -3030,10 +3030,17 @@ class cursor_state {
         }
     }
 
-    broadcast(msg, exclude_peer) {
+    broadcast(peer_id, data, exclude_peer) {
+        var content = data != null ? JSON.stringify(data) : ''
         for (var sub of this.subscribers)
             if (sub.peer !== exclude_peer)
-                try { sub.res.sendUpdate({ body: msg }) } catch (e) {}
+                try { sub.res.sendUpdate({
+                    patches: [{
+                        unit: 'json',
+                        range: '[' + JSON.stringify(peer_id) + ']',
+                        content: content
+                    }]
+                }) } catch (e) {}
     }
 
     snapshot() {
@@ -3051,7 +3058,7 @@ class cursor_state {
         // "come online" with their cursor already set.
         var peer_id = subscriber.peer
         if (peer_id && this.cursors[peer_id])
-            this.broadcast(JSON.stringify({ [peer_id]: this.cursors[peer_id].data }), peer_id)
+            this.broadcast(peer_id, this.cursors[peer_id].data, peer_id)
     }
 
     unsubscribe(subscriber) {
@@ -3060,7 +3067,7 @@ class cursor_state {
         if (peer_id && this.cursors[peer_id]) {
             this.cursors[peer_id].last_connected = Date.now()
             if (!this.subscribed_peers().has(peer_id))
-                this.broadcast(JSON.stringify({ [peer_id]: [] }))
+                this.broadcast(peer_id, null)
         }
     }
 
@@ -3105,7 +3112,7 @@ class cursor_state {
         // If a PUT arrives before the subscription, the data is stored and
         // will be broadcast when the subscription establishes.
         if (this.subscribed_peers().has(peer_id))
-            this.broadcast(JSON.stringify({ [peer_id]: cursor_data }), peer_id)
+            this.broadcast(peer_id, cursor_data, peer_id)
     }
 }
 
@@ -3122,20 +3129,20 @@ async function handle_cursors(resource, req, res) {
     res.setHeader('Content-Type', 'application/text-cursors+json')
 
     if (!resource.cursor_state) resource.cursor_state = new cursor_state()
-    var cs = resource.cursor_state
+    var cursors = resource.cursor_state
     var peer = req.headers['peer']
 
     if (req.method === 'GET' || req.method === 'HEAD') {
         if (!req.subscribe) {
             res.writeHead(200)
-            res.end(JSON.stringify(cs.snapshot()))
+            res.end(JSON.stringify(cursors.snapshot()))
         } else {
             var subscriber = {peer, res}
-            cs.subscribe(subscriber)
+            cursors.subscribe(subscriber)
             res.startSubscription({
-                onClose: () => cs.unsubscribe(subscriber)
+                onClose: () => cursors.unsubscribe(subscriber)
             })
-            res.sendUpdate({ body: JSON.stringify(cs.snapshot()) })
+            res.sendUpdate({ body: JSON.stringify(cursors.snapshot()) })
         }
     } else if (req.method === 'PUT' || req.method === 'POST' || req.method === 'PATCH') {
         var raw_body = await new Promise((resolve, reject) => {
@@ -3144,7 +3151,14 @@ async function handle_cursors(resource, req, res) {
             req.on('end', () => resolve(Buffer.concat(chunks).toString()))
             req.on('error', reject)
         })
-        cs.put(peer, JSON.parse(raw_body))
+        var range = req.headers['content-range']
+        if (!range || !range.startsWith('json ')) {
+            res.writeHead(400)
+            res.end('Missing Content-Range: json [<peer-id>] header')
+            return true
+        }
+        var cursor_peer = JSON.parse(range.slice(5))[0]
+        cursors.put(cursor_peer, JSON.parse(raw_body))
         res.writeHead(200)
         res.end()
     }

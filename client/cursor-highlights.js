@@ -60,7 +60,10 @@ function textarea_highlights(textarea) {
     if (getComputedStyle(wrap).position === 'static')
         wrap.style.position = 'relative'
 
-    // Make textarea transparent so backdrops show through
+    // Move textarea's background to the wrapper so backdrops show through
+    var bg = getComputedStyle(textarea).backgroundColor
+    if (!wrap.style.backgroundColor)
+        wrap.style.backgroundColor = (!bg || bg === 'rgba(0, 0, 0, 0)') ? 'white' : bg
     textarea.style.backgroundColor = 'transparent'
     textarea.style.position = 'relative'
     textarea.style.zIndex = '2'

@@ -67,7 +67,14 @@ function cursor_client(url, { peer, get_text, on_change }) {
         signal: ac.signal,
     }).then(function(r) {
         r.subscribe(function(update) {
-            var data = JSON.parse(update.body_text)
+            var data
+            if (update.body_text != null)
+                data = JSON.parse(update.body_text)
+            else if (update.patches && update.patches.length) {
+                var p = update.patches[0]
+                var ct = p.content_text
+                data = { [JSON.parse(p.range)[0]]: ct ? JSON.parse(ct) : null }
+            } else return
             var text = get_text()
             var m = code_point_to_index_map(text)
 
@@ -75,7 +82,7 @@ function cursor_client(url, { peer, get_text, on_change }) {
             for (var id of Object.keys(data)) {
                 if (id === peer) continue
                 var ranges = data[id]
-                if (!ranges || ranges.length === 0) {
+                if (!ranges) {
                     delete selections[id]
                     changed[id] = []
                 } else {
@@ -125,6 +132,7 @@ function cursor_client(url, { peer, get_text, on_change }) {
                     headers: {
                         'Content-Type': 'application/text-cursors+json',
                         Peer: peer,
+                        'Content-Range': 'json [' + JSON.stringify(peer) + ']',
                     },
                     body: JSON.stringify(cp_ranges),
                 })
