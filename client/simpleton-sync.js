@@ -47,6 +47,7 @@ function simpleton_client(url, {
 
     on_error,
     on_res,
+    on_online,
     on_ack,
     send_digests
 }) {
@@ -66,7 +67,7 @@ function simpleton_client(url, {
         headers: { "Merge-Type": "simpleton",
             ...(content_type ? {Accept: content_type} : {}) },
         subscribe: true,
-        retry: () => true,
+        retry: { retryRes: () => true, onRes: () => { if (on_online) on_online() } },
         parents: () => current_version.length ? current_version : null,
         peer,
         signal: ac.signal

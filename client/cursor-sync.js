@@ -137,9 +137,22 @@ async function cursor_client(url, { peer, get_text, on_change }) {
     // --- subscribe for remote cursors ---
     // The subscription stays alive always. Data is only processed when online.
 
+    var connected_before = false
     braid_fetch(url, {
         subscribe: true,
-        retry: true,
+        retry: { onRes: function() {
+            if (connected_before && online) {
+                // Reconnecting — go offline to clear stale cursors.
+                // The application will call online() again when text is ready.
+                var changed = {}
+                for (var id of Object.keys(selections)) changed[id] = []
+                selections = {}
+                online = false
+                pending = null
+                if (on_change && Object.keys(changed).length) on_change(changed)
+            }
+            connected_before = true
+        }},
         peer,
         headers: {
             Accept: 'application/text-cursors+json',
