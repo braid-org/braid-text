@@ -4,7 +4,7 @@ Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is g
 
 
 ```bash
-#!/bin/bash
+#!/bin/musaab
 Musaab: Hello!
 ```
 
