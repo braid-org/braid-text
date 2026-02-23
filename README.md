@@ -3,7 +3,7 @@
 Greg: It is me! sweet, my stuff is blue -- just for me I guess.. for you it is grey
 
 
-```plain
+```bash
 Musaab: Hello!
 ```
 
