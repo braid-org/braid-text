@@ -107,9 +107,11 @@ async function cursor_client(url, { peer, get_text, on_change }) {
     }).then(function(r) {
         r.subscribe(function(update) {
             var data
-            if (update.body_text != null)
+            var is_snapshot = false
+            if (update.body_text != null) {
                 data = JSON.parse(update.body_text)
-            else if (update.patches && update.patches.length) {
+                is_snapshot = true
+            } else if (update.patches && update.patches.length) {
                 var p = update.patches[0]
                 var ct = p.content_text
                 data = { [JSON.parse(p.range)[0]]: ct ? JSON.parse(ct) : null }
@@ -118,6 +120,17 @@ async function cursor_client(url, { peer, get_text, on_change }) {
             var m = code_point_to_index_map(text)
 
             var changed = {}
+
+            // Full snapshot: remove peers no longer present
+            if (is_snapshot) {
+                for (var id of Object.keys(selections)) {
+                    if (!(id in data)) {
+                        delete selections[id]
+                        changed[id] = []
+                    }
+                }
+            }
+
             for (var id of Object.keys(data)) {
                 if (id === peer) continue
                 var ranges = data[id]
