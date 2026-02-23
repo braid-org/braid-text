@@ -3135,7 +3135,10 @@ async function handle_cursors(resource, req, res) {
     if (req.method === 'GET' || req.method === 'HEAD') {
         if (!req.subscribe) {
             res.writeHead(200)
-            res.end(JSON.stringify(cursors.snapshot()))
+            if (req.method === 'HEAD')
+                res.end()
+            else
+                res.end(JSON.stringify(cursors.snapshot()))
         } else {
             var subscriber = {peer, res}
             cursors.subscribe(subscriber)

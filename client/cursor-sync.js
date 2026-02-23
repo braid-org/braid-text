@@ -3,16 +3,27 @@
 // Requires braid-http-client.js (for braid_fetch)
 //
 // Usage:
-//   var cursors = cursor_client(url, {
+//   var cursors = await cursor_client(url, {
 //       peer: 'my-id',
 //       get_text: () => textarea.value,
 //       on_change: (selections) => { ... },
 //   })
+//   if (!cursors) return  // server doesn't support cursors
 //   cursors.set(selectionStart, selectionEnd)
 //   cursors.changed(patches)
 //   cursors.destroy()
 //
-function cursor_client(url, { peer, get_text, on_change }) {
+async function cursor_client(url, { peer, get_text, on_change }) {
+    // --- feature detection: HEAD probe ---
+    try {
+        var head_res = await fetch(url, {
+            method: 'HEAD',
+            headers: { 'Accept': 'application/text-cursors+json' }
+        })
+        var ct = head_res.headers.get('content-type') || ''
+        if (!ct.includes('application/text-cursors+json')) return null
+    } catch (e) { return null }
+
     var selections = {}     // peer_id -> [{ from, to }]  in JS string indices
     var last_sent = null
     var send_timer = null
