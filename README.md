@@ -1,6 +1,6 @@
 # Collaborative text over Braid-HTTP
 
-&#8203;
+Greg: I
 
 *This library* provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol.
 
