@@ -253,6 +253,7 @@ function cursor_highlights(textarea, url) {
     var peer = Math.random().toString(36).slice(2)
     var hl = textarea_highlights(textarea)
     var applying_remote = false
+    var text_online = false
     var client = null
 
     cursor_client(url, {
@@ -279,7 +280,13 @@ function cursor_highlights(textarea, url) {
     return {
         on_patches: function(patches) {
             applying_remote = true
-            if (client) client.changed(patches)
+            if (client) {
+                if (!text_online) {
+                    text_online = true
+                    client.online()
+                }
+                client.changed(patches)
+            }
             hl.render()
             setTimeout(() => { applying_remote = false }, 0)
         },
