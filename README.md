@@ -1,5 +1,7 @@
 # Collaborative text over Braid-HTTP
 
+&#8203;
+
 *This library* provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol.
 
 - Supports [Braid-HTTP](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) protocol
