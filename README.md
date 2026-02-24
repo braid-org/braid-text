@@ -30,7 +30,7 @@ Check out the **[demo video](https://braid.org/video/https://invisiblecollege.s3
 This will run a collaboratively-editable wiki:
 
 
-```shell
+```plain
 npm install
 node server-demo.js
 ```
@@ -50,7 +50,7 @@ Check out the `server-demo.js` file to see examples for how to add simple access
 Install it in your project:
 
 
-```shell
+```plain
 npm install braid-text
 ```
 
