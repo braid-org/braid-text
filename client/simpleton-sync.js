@@ -1,40 +1,106 @@
+// ************************************************************************
+// ******* Reference Implementation of Simpleton Client Algorithm *********
+// ************************************************************************
+//
+// This is the canonical JS reference for implementing a simpleton client.
+// Other language implementations should mirror this logic exactly, with
+// adaptations only for language-specific details (e.g., string encoding).
+//
 // requires braid-http@~1.3/braid-http-client.js
-// 
+//
+// --- API ---
+//
 // url: resource endpoint
 //
 // on_patches?: (patches) => void
-//     processes incoming patches
+//     processes incoming patches by applying them to the UI/textarea.
+//     IMPORTANT: Patches have ABSOLUTE positions — each patch's range
+//     refers to positions in the original state (before any patches in
+//     this update). When applying multiple patches sequentially, you MUST
+//     track a cumulative offset to adjust positions:
+//
+//       var offset = 0
+//       for (var p of patches) {
+//           apply_at(p.range[0] + offset, p.range[1] + offset, p.content)
+//           offset += p.content.length - (p.range[1] - p.range[0])
+//       }
+//
+//     Without offset tracking, multi-patch updates will corrupt the state.
+//
+//     When provided, simpleton calls this to apply patches externally,
+//     then reads back the state via get_state(). This means any un-flushed
+//     local edits in the UI are absorbed into client_state after each server
+//     update (see "Local Edit Absorption" below).
 //
 // on_state?: (state) => void
-//     processes incoming state
+//     called after each server update with the new state
 //
-// get_patches?: (prev_state) => patches
-//     returns patches representing diff
-//       between prev_state and current state,
-//     which are guaranteed to be different
-//       if this method is being called
-//     (the default does this in a fast/simple way,
-//      finding a common prefix and suffix,
-//      but you can supply something better,
-//      or possibly keep track of patches as they come from your editor)
+// get_patches?: (client_state) => patches
+//     returns patches representing diff between client_state and current state,
+//     which are guaranteed to be different if this method is being called.
+//     (the default does this in a fast/simple way, finding a common prefix
+//      and suffix, but you can supply something better, or possibly keep
+//      track of patches as they come from your editor)
 //
 // get_state: () => current_state
-//     returns the current state
+//     returns the current state (e.g., textarea.value)
 //
 // [DEPRECATED] apply_remote_update: ({patches, state}) => {...}
 //     this is for incoming changes;
 //     one of these will be non-null,
 //     and can be applied to the current state.
 //
-// [DEPRECATED] generate_local_diff_update: (prev_state) => {...}
+// [DEPRECATED] generate_local_diff_update: (client_state) => {...}
 //     this is to generate outgoing changes,
 //     and if there are changes, returns { patches, new_state }
 //
 // content_type: used for Accept and Content-Type headers
 //
-// returns { changed }
-//     call changed whenever there is a local change,
+// returns { changed, abort }
+//     call changed() whenever there is a local change,
 //     and the system will call get_patches when it needs to.
+//     call abort() to abort the subscription.
+//
+// --- Retry and Reconnection Behavior ---
+//
+// Simpleton relies on braid_fetch for retry/reconnection:
+//
+// Subscription (GET):
+//   retry: () => true — always reconnect on any error (network failure,
+//   HTTP error, etc.). Reconnection uses exponential backoff:
+//     delay = Math.min(retry_count + 1, 3) * 1000 ms
+//   i.e., 1s, 2s, 3s, 3s, 3s, ...
+//   On reconnect, sends Parents via the parents callback to resume
+//   from where the client left off.
+//
+// PUT requests:
+//   retry: (res) => res.status !== 550 — retry all errors EXCEPT
+//   HTTP 550 (permanent rejection by the server). This means:
+//     - Connection failure: retried with backoff
+//     - HTTP 408, 429, 500, 502, 503, 504, etc.: retried
+//     - HTTP 550: give up, throw error, outstanding_changes stays
+//       incremented (potential throttle leak — see note below)
+//     - HTTP 401, 403: retried by braid_fetch, but the !r.ok check
+//       throws, which calls on_error and exits the async loop
+//
+// NOTE: When a PUT permanently fails (550 or !r.ok), outstanding_changes
+// is incremented but never decremented. If this happens repeatedly, the
+// client will eventually hit max_outstanding_changes and stop sending.
+// This is arguably a bug in the JS implementation too.
+//
+// --- Local Edit Absorption ---
+//
+// When on_patches is provided, after applying server patches via
+// on_patches(), client_state is set to get_state(). If the UI has
+// un-flushed local edits (typed but changed() not yet called), those
+// edits are silently absorbed into client_state and will never be sent
+// as a diff. In practice, the JS avoids this because changed() is
+// called on every keystroke and the async accumulation loop clears
+// the backlog before a server update arrives.
+//
+// When on_patches is NOT provided (internal mode), client_state is
+// updated by applying patches to the old client_state only — local
+// edits stay in the UI and will be captured by the next changed() diff.
 //
 function simpleton_client(url, {
     on_patches,
@@ -52,11 +118,11 @@ function simpleton_client(url, {
     send_digests
 }) {
     var peer = Math.random().toString(36).substr(2)
-    var current_version = []
-    var prev_state = ""
-    var char_counter = -1
-    var outstanding_changes = 0
-    var max_outstanding_changes = 10
+    var client_version = []       // sorted list of version strings; the version we think is current
+    var client_state = ""            // text content as of client_version (our "client_state")
+    var char_counter = -1          // cumulative char-delta for generating version IDs
+    var outstanding_changes = 0    // PUTs sent but not yet ACKed
+    var max_outstanding_changes = 10  // throttle limit
     var throttled = false
     var throttled_update = null
     var ac = new AbortController()
@@ -65,21 +131,36 @@ function simpleton_client(url, {
     //        and our old code wants to send digests..
     if (apply_remote_update) send_digests = true
 
+    // ── Subscription (GET) ──────────────────────────────────────────────
+    //
+    // Opens a long-lived GET subscription with retry: () => true, meaning
+    // any disconnection (network error, HTTP error) triggers automatic
+    // reconnection with exponential backoff.
+    //
+    // The parents callback sends client_version on reconnect, so the
+    // server knows where we left off and can send patches from there.
+    //
+    // IMPORTANT: No changed() / flush is called on reconnect. The
+    // subscription simply resumes. Any queued PUTs are retried by
+    // braid_fetch independently.
     braid_fetch(url, {
         headers: { "Merge-Type": "simpleton",
             ...(content_type ? {Accept: content_type} : {}) },
         subscribe: true,
         retry: () => true,
         onSubscriptionStatus: (status) => { if (on_online) on_online(status) },
-        parents: () => current_version.length ? current_version : null,
+        parents: () => client_version.length ? client_version : null,
         peer,
         signal: ac.signal
     }).then(res => {
         if (on_res) on_res(res)
         res.subscribe(async update => {
-            // Only accept the update if its parents == our current version
+            // ── Parent check ────────────────────────────────────────
+            // Core simpleton invariant: only accept updates whose
+            // parents match our client_version exactly. This ensures
+            // we stay on a single line of time.
             update.parents.sort()
-            if (v_eq(current_version, update.parents)) {
+            if (v_eq(client_version, update.parents)) {
                 if (throttled) throttled_update = update
                 else await apply_update(update)
             }
@@ -87,77 +168,126 @@ function simpleton_client(url, {
     }).catch(on_error)
 
     async function apply_update(update) {
-        current_version = update.version
+        // ── Advance version BEFORE applying patches ─────────
+        // (Single-threaded; no concurrent code runs between
+        // these steps, so this is safe. Other implementations
+        // may advance after applying — both are equivalent.)
+        client_version = update.version
         update.state = update.body_text
 
+        // ── Parse and convert patches ───────────────────────
         if (update.patches) {
-            for (let p of update.patches) {
-                p.range = p.range.match(/\d+/g).map((x) => 1 * x)
-                p.content = p.content_text
+            for (let patch of update.patches) {
+                patch.range = patch.range.match(/\d+/g).map((x) => 1 * x)
+                patch.content = patch.content_text
             }
             update.patches.sort((a, b) => a.range[0] - b.range[0])
 
-            // convert from code-points to js-indicies
-            let c = 0
-            let i = 0
-            for (let p of update.patches) {
-                while (c < p.range[0]) {
-                    i += get_char_size(prev_state, i)
-                    c++
+            // ── JS-SPECIFIC: Convert code-points to UTF-16 indices ──
+            // The wire protocol uses Unicode code-point offsets.
+            // JS strings are UTF-16, so we must convert. Characters
+            // outside the BMP (emoji, CJK extensions, etc.) take 2
+            // UTF-16 code units (a surrogate pair) but count as 1
+            // code point.
+            //
+            // OTHER LANGUAGES: Skip this conversion if your strings
+            // are natively indexed by code points (e.g., Emacs Lisp,
+            // Python, Rust's char iterator).
+            let codepoint_index = 0
+            let utf16_index = 0
+            for (let patch of update.patches) {
+                while (codepoint_index < patch.range[0]) {
+                    utf16_index += get_char_size(client_state, utf16_index)
+                    codepoint_index++
                 }
-                p.range[0] = i
+                patch.range[0] = utf16_index
 
-                while (c < p.range[1]) {
-                    i += get_char_size(prev_state, i)
-                    c++
+                while (codepoint_index < patch.range[1]) {
+                    utf16_index += get_char_size(client_state, utf16_index)
+                    codepoint_index++
                 }
-                p.range[1] = i
+                patch.range[1] = utf16_index
             }
         }
 
+        // ── Apply the update ────────────────────────────────
         if (apply_remote_update) {
-            // DEPRECATED
-            prev_state = apply_remote_update(update)
+            // DEPRECATED path
+            client_state = apply_remote_update(update)
         } else {
+            // Convert initial snapshot body to a patch replacing
+            // [0,0] — so initial load follows the same code path
+            // as incremental patches.
             var patches = update.patches ||
                 [{range: [0, 0], content: update.state}]
             if (on_patches) {
+                // EXTERNAL MODE: Apply patches to the UI, then
+                // read back the full state. Note: this absorbs
+                // any un-flushed local edits into client_state.
                 on_patches(patches)
-                prev_state = get_state()
-            } else prev_state = apply_patches(prev_state, patches)
+                client_state = get_state()
+            } else {
+                // INTERNAL MODE: Apply patches to our internal
+                // state only. Local edits in the UI are NOT
+                // absorbed — they will be captured by the next
+                // changed() diff.
+                client_state = apply_patches(client_state, patches)
+            }
         }
 
-        // if the server gave us a digest,
-        // go ahead and check it against our new state..
+        // ── Digest verification ─────────────────────────────
+        // If the server sent a repr-digest, verify our state
+        // matches. On mismatch, THROW — this halts the
+        // subscription handler. The document is corrupted and
+        // continuing would compound the problem.
         if (update.extra_headers &&
             update.extra_headers["repr-digest"] &&
             update.extra_headers["repr-digest"].startsWith('sha-256=') &&
-            update.extra_headers["repr-digest"] !== await get_digest(prev_state)) {
+            update.extra_headers["repr-digest"] !== await get_digest(client_state)) {
             console.log('repr-digest mismatch!')
             console.log('repr-digest: ' + update.extra_headers["repr-digest"])
-            console.log('state: ' + prev_state)
+            console.log('state: ' + client_state)
             throw new Error('repr-digest mismatch')
         }
 
-        if (on_state) on_state(prev_state)
+        // ── Notify listener ─────────────────────────────────
+        // IMPORTANT: No changed() / flush is called here.
+        // The JS does NOT send edits after receiving a server
+        // update. The PUT response handler's async accumulation
+        // loop handles flushing accumulated edits.
+        if (on_state) on_state(client_state)
     }
 
+    // ── Public interface ────────────────────────────────────────────────
     return {
-      stop: async () => {
+      abort: async () => {
         ac.abort()
       },
+
+      // ── changed() — call when local edits occur ───────────────────
+      // This is the entry point for sending local edits. It:
+      // 1. Diffs client_state vs current state
+      // 2. Checks the throttle (outstanding_changes >= max)
+      // 3. Sends a PUT with the diff
+      // 4. After the PUT completes, loops to check for MORE accumulated
+      //    edits (the async accumulation loop), sending them too.
+      //
+      // The async accumulation loop (while(true) {...}) is equivalent
+      // to a callback-driven flush: after each PUT ACK, re-diff and
+      // send again if changed. This ensures edits that accumulate
+      // during a PUT round-trip are eventually sent.
       changed: () => {
         function get_change() {
             if (generate_local_diff_update) {
                 // DEPRECATED
-                var update = generate_local_diff_update(prev_state)
+                var update = generate_local_diff_update(client_state)
                 if (!update) return null
                 return update
             } else {
                 var new_state = get_state()
-                if (new_state === prev_state) return null
-                var patches = get_patches ? get_patches(prev_state) :
-                    [simple_diff(prev_state, new_state)]
+                if (new_state === client_state) return null
+                var patches = get_patches ? get_patches(client_state) :
+                    [simple_diff(client_state, new_state)]
                 return {patches, new_state}
             }
         }
@@ -167,7 +297,7 @@ function simpleton_client(url, {
             if (throttled) {
                 throttled = false
                 if (throttled_update &&
-                    v_eq(current_version, throttled_update.parents))
+                    v_eq(client_version, throttled_update.parents))
                     apply_update(throttled_update).catch(on_error)
                 throttled_update = null
             }
@@ -186,41 +316,56 @@ function simpleton_client(url, {
 
         ;(async () => {
             while (true) {
-                // convert from js-indicies to code-points
-                let c = 0
-                let i = 0
-                for (let p of patches) {
-                    while (i < p.range[0]) {
-                        i += get_char_size(prev_state, i)
-                        c++
+                // ── JS-SPECIFIC: Convert JS UTF-16 indices to code-points ──
+                // The wire protocol uses code-point offsets. See the
+                // inverse conversion in the receive path above.
+                //
+                // OTHER LANGUAGES: Skip this if your strings are
+                // natively code-point indexed.
+                let codepoint_index = 0
+                let utf16_index = 0
+                for (let patch of patches) {
+                    while (utf16_index < patch.range[0]) {
+                        utf16_index += get_char_size(client_state, utf16_index)
+                        codepoint_index++
                     }
-                    p.range[0] = c
+                    patch.range[0] = codepoint_index
 
-                    while (i < p.range[1]) {
-                        i += get_char_size(prev_state, i)
-                        c++
+                    while (utf16_index < patch.range[1]) {
+                        utf16_index += get_char_size(client_state, utf16_index)
+                        codepoint_index++
                     }
-                    p.range[1] = c
+                    patch.range[1] = codepoint_index
 
-                    char_counter += p.range[1] - p.range[0]
-                    char_counter += count_code_points(p.content)
+                    // ── Update char_counter ──────────────────────
+                    // Increment by deleted chars + inserted chars
+                    char_counter += patch.range[1] - patch.range[0]
+                    char_counter += count_code_points(patch.content)
 
-                    p.unit = "text"
-                    p.range = `[${p.range[0]}:${p.range[1]}]`
+                    patch.unit = "text"
+                    patch.range = `[${patch.range[0]}:${patch.range[1]}]`
                 }
 
+                // ── Compute version and advance optimistically ──
                 var version = [peer + "-" + char_counter]
 
-                var parents = current_version
-                current_version = version
-                prev_state = new_state
+                var parents = client_version
+                client_version = version   // optimistic advance
+                client_state = new_state      // update client_state
 
+                // ── Send PUT ────────────────────────────────────
+                // Uses braid_fetch with retry: (res) => res.status !== 550
+                // This means:
+                //   - Network failures: retried with backoff
+                //   - HTTP 408, 429, 500, 502, 503, 504: retried
+                //   - HTTP 550 (permanent rejection): give up, throw
+                //   - Other non-ok: throws via !r.ok check below
                 outstanding_changes++
                 try {
                     var r = await braid_fetch(url, {
                         headers: {
                             "Merge-Type": "simpleton",
-                            ...send_digests && {"Repr-Digest": await get_digest(prev_state)},
+                            ...send_digests && {"Repr-Digest": await get_digest(client_state)},
                             ...content_type && {"Content-Type": content_type}
                         },
                         method: "PUT",
@@ -230,6 +375,11 @@ function simpleton_client(url, {
                     })
                     if (!r.ok) throw new Error(`bad http status: ${r.status}${(r.status === 401 || r.status === 403) ? ` (access denied)` : ''}`)
                 } catch (e) {
+                    // On error, notify and exit the loop.
+                    // NOTE: outstanding_changes is NOT decremented here.
+                    // This is arguably a bug — repeated failures will
+                    // eventually hit max_outstanding_changes and stop
+                    // the client from sending any more edits.
                     on_error(e)
                     throw e
                 }
@@ -238,7 +388,9 @@ function simpleton_client(url, {
 
                 throttled = false
 
-                // Check for more changes that accumulated while we were sending
+                // ── Check for accumulated edits ─────────────────
+                // While the PUT was in flight, more local edits may
+                // have occurred. Diff again and loop if changed.
                 var more = get_change()
                 if (!more) return
                 ;({patches, new_state} = more)
@@ -253,9 +405,18 @@ function simpleton_client(url, {
         return a.length === b.length && a.every((v, i) => v === b[i])
     }
 
-    function get_char_size(s, i) {
-        const charCode = s.charCodeAt(i)
-        return (charCode >= 0xd800 && charCode <= 0xdbff) ? 2 : 1
+    // ── JS-SPECIFIC: UTF-16 helpers ─────────────────────────────────────
+    // These handle surrogate pairs in UTF-16 JS strings. Characters
+    // outside the Basic Multilingual Plane (BMP) are encoded as two
+    // 16-bit code units (a surrogate pair: high 0xD800-0xDBFF, low
+    // 0xDC00-0xDFFF). Such a pair represents one Unicode code point.
+    //
+    // OTHER LANGUAGES: You don't need these if your string type is
+    // natively indexed by code points.
+
+    function get_char_size(str, utf16_index) {
+        const char_code = str.charCodeAt(utf16_index)
+        return (char_code >= 0xd800 && char_code <= 0xdbff) ? 2 : 1
     }
 
     function count_code_points(str) {
@@ -267,32 +428,53 @@ function simpleton_client(url, {
         return code_points
     }
 
-    function simple_diff(a, b) {
-        // Find common prefix
-        var p = 0
-        var len = Math.min(a.length, b.length)
-        while (p < len && a[p] === b[p]) p++
+    // ── simple_diff ─────────────────────────────────────────────────────
+    // Finds the longest common prefix and suffix between two strings,
+    // returning the minimal edit that transforms `old_str` into `new_str`.
+    //
+    // Returns: { range: [prefix_len, old_str.length - suffix_len],
+    //            content: new_str.slice(prefix_len, new_str.length - suffix_len) }
+    //
+    // This produces a single contiguous edit. For multi-cursor or
+    // multi-region edits, supply a custom get_patches function instead.
+    function simple_diff(old_str, new_str) {
+        // Find common prefix length
+        var prefix_len = 0
+        var min_len = Math.min(old_str.length, new_str.length)
+        while (prefix_len < min_len && old_str[prefix_len] === new_str[prefix_len]) prefix_len++
 
-        // Find common suffix (from what remains after prefix)
-        var s = 0
-        len -= p
-        while (s < len && a[a.length - s - 1] === b[b.length - s - 1]) s++
+        // Find common suffix length (from what remains after prefix)
+        var suffix_len = 0
+        min_len -= prefix_len
+        while (suffix_len < min_len && old_str[old_str.length - suffix_len - 1] === new_str[new_str.length - suffix_len - 1]) suffix_len++
 
-        return {range: [p, a.length - s], content: b.slice(p, b.length - s)}
+        return {range: [prefix_len, old_str.length - suffix_len], content: new_str.slice(prefix_len, new_str.length - suffix_len)}
     }
 
+    // ── apply_patches ───────────────────────────────────────────────────
+    // Applies patches to a string, tracking cumulative offset.
+    // Used in INTERNAL MODE (no on_patches callback) to update
+    // client_state without touching the UI.
+    //
+    // Patches must have absolute coordinates (relative to the original
+    // string, not to the string after previous patches). The offset
+    // variable tracks the cumulative shift from previous patches.
     function apply_patches(state, patches) {
         var offset = 0
-        for (var p of patches) {
-            state = state.substring(0, p.range[0] + offset) + p.content + 
-                    state.substring(p.range[1] + offset)
-            offset += p.content.length - (p.range[1] - p.range[0])
+        for (var patch of patches) {
+            state = state.substring(0, patch.range[0] + offset) + patch.content +
+                    state.substring(patch.range[1] + offset)
+            offset += patch.content.length - (patch.range[1] - patch.range[0])
         }
         return state
     }
 
-    async function get_digest(s) {
-        var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+    // ── get_digest ──────────────────────────────────────────────────────
+    // Computes SHA-256 of the UTF-8 encoding of the state string,
+    // formatted as the Repr-Digest header value:
+    //   sha-256=:<base64-encoded-hash>:
+    async function get_digest(str) {
+        var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
         return `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(bytes)))}:`
     }
 }
