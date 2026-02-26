@@ -476,16 +476,20 @@ function create_braid_text() {
                     accept_encoding:
                         req.headers['x-accept-encoding'] ??
                         req.headers['accept-encoding'],
-                    subscribe: x => {
+                    subscribe: update => {
 
                         // this is a sanity/rhobustness check..
                         // ..this digest is checked on the client..
-                        if (x.version && v_eq(x.version, resource.version))
-                            x["Repr-Digest"] = get_digest(resource.val)
+                        if (update.version && v_eq(update.version, resource.version))
+                            update["Repr-Digest"] = get_digest(resource.val)
 
-                        res.sendVersion(x)
+                        if (update.patches && update.patches.length === 1) {
+                            update.patch = update.patches[0]
+                            delete update.patches
+                        }
+                        res.sendVersion(update)
                     },
-                    write: (x) => res.write(x)
+                    write: (update) => res.write(update)
                 }
 
                 res.startSubscription({
@@ -3018,11 +3022,11 @@ class cursor_state {
         for (var sub of this.subscribers)
             if (sub.peer !== exclude_peer)
                 try { sub.res.sendUpdate({
-                    patches: [{
+                    patch: {
                         unit: 'json',
                         range: '[' + JSON.stringify(peer_id) + ']',
                         content: content
-                    }]
+                    }
                 }) } catch (e) {}
     }
 
