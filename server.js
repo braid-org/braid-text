@@ -2160,7 +2160,8 @@ function create_braid_text() {
                     }
             )
         }
-        return relative_to_absolute_patches(patches)
+        var result = relative_to_absolute_patches(patches)
+        return result
     }
 
     function relative_to_absolute_patches(patches) {

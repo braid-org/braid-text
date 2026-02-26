@@ -3,7 +3,10 @@
 // url: resource endpoint
 //
 // on_patches?: (patches) => void
-//     processes incoming patches
+//     processes incoming patches.
+//     IMPORTANT: patches have ABSOLUTE positions (relative to the state
+//     before any patches in this update are applied). When applying
+//     multiple patches, use a cumulative offset to adjust positions.
 //
 // on_state?: (state) => void
 //     processes incoming state
@@ -143,7 +146,7 @@ function simpleton_client(url, {
     }
 
     return {
-      stop: async () => {
+      abort: async () => {
         ac.abort()
       },
       changed: () => {
