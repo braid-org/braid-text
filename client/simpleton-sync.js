@@ -57,6 +57,8 @@ function simpleton_client(url, {
     var char_counter = -1
     var outstanding_changes = 0
     var max_outstanding_changes = 10
+    var throttled = false
+    var throttled_update = null
     var ac = new AbortController()
 
     // temporary: our old code uses this deprecated api,
@@ -77,83 +79,107 @@ function simpleton_client(url, {
         res.subscribe(async update => {
             // Only accept the update if its parents == our current version
             update.parents.sort()
-            if (current_version.length === update.parents.length
-                && current_version.every((v, i) => v === update.parents[i])) {
-                current_version = update.version.sort()
-                update.state = update.body_text
-
-                if (update.patches) {
-                    for (let p of update.patches) {
-                        p.range = p.range.match(/\d+/g).map((x) => 1 * x)
-                        p.content = p.content_text
-                    }
-                    update.patches.sort((a, b) => a.range[0] - b.range[0])
-
-                    // convert from code-points to js-indicies
-                    let c = 0
-                    let i = 0
-                    for (let p of update.patches) {
-                        while (c < p.range[0]) {
-                            i += get_char_size(prev_state, i)
-                            c++
-                        }
-                        p.range[0] = i
-
-                        while (c < p.range[1]) {
-                            i += get_char_size(prev_state, i)
-                            c++
-                        }
-                        p.range[1] = i
-                    }
-                }
-
-                if (apply_remote_update) {
-                    // DEPRECATED
-                    prev_state = apply_remote_update(update)
-                } else {
-                    var patches = update.patches ||
-                        [{range: [0, 0], content: update.state}]
-                    if (on_patches) {
-                        on_patches(patches)
-                        prev_state = get_state()
-                    } else prev_state = apply_patches(prev_state, patches)
-                }
-
-                // if the server gave us a digest,
-                // go ahead and check it against our new state..
-                if (update.extra_headers &&
-                    update.extra_headers["repr-digest"] &&
-                    update.extra_headers["repr-digest"].startsWith('sha-256=') &&
-                    update.extra_headers["repr-digest"] !== await get_digest(prev_state)) {
-                    console.log('repr-digest mismatch!')
-                    console.log('repr-digest: ' + update.extra_headers["repr-digest"])
-                    console.log('state: ' + prev_state)
-                    throw new Error('repr-digest mismatch')
-                }
-
-                if (on_state) on_state(prev_state)
+            if (v_eq(current_version, update.parents)) {
+                if (throttled) throttled_update = update
+                else await apply_update(update)
             }
         }, on_error)
     }).catch(on_error)
-    
+
+    async function apply_update(update) {
+        current_version = update.version
+        update.state = update.body_text
+
+        if (update.patches) {
+            for (let p of update.patches) {
+                p.range = p.range.match(/\d+/g).map((x) => 1 * x)
+                p.content = p.content_text
+            }
+            update.patches.sort((a, b) => a.range[0] - b.range[0])
+
+            // convert from code-points to js-indicies
+            let c = 0
+            let i = 0
+            for (let p of update.patches) {
+                while (c < p.range[0]) {
+                    i += get_char_size(prev_state, i)
+                    c++
+                }
+                p.range[0] = i
+
+                while (c < p.range[1]) {
+                    i += get_char_size(prev_state, i)
+                    c++
+                }
+                p.range[1] = i
+            }
+        }
+
+        if (apply_remote_update) {
+            // DEPRECATED
+            prev_state = apply_remote_update(update)
+        } else {
+            var patches = update.patches ||
+                [{range: [0, 0], content: update.state}]
+            if (on_patches) {
+                on_patches(patches)
+                prev_state = get_state()
+            } else prev_state = apply_patches(prev_state, patches)
+        }
+
+        // if the server gave us a digest,
+        // go ahead and check it against our new state..
+        if (update.extra_headers &&
+            update.extra_headers["repr-digest"] &&
+            update.extra_headers["repr-digest"].startsWith('sha-256=') &&
+            update.extra_headers["repr-digest"] !== await get_digest(prev_state)) {
+            console.log('repr-digest mismatch!')
+            console.log('repr-digest: ' + update.extra_headers["repr-digest"])
+            console.log('state: ' + prev_state)
+            throw new Error('repr-digest mismatch')
+        }
+
+        if (on_state) on_state(prev_state)
+    }
+
     return {
       stop: async () => {
         ac.abort()
       },
       changed: () => {
-        if (outstanding_changes >= max_outstanding_changes) return
-
-        if (generate_local_diff_update) {
-            // DEPRECATED
-            var update = generate_local_diff_update(prev_state)
-            if (!update) return   // Stop if there wasn't a change!
-            var {patches, new_state} = update
-        } else {
-            var new_state = get_state()
-            if (new_state === prev_state) return // Stop if there wasn't a change!
-            var patches = get_patches ? get_patches(prev_state) :
-                [simple_diff(prev_state, new_state)]
+        function get_change() {
+            if (generate_local_diff_update) {
+                // DEPRECATED
+                var update = generate_local_diff_update(prev_state)
+                if (!update) return null
+                return update
+            } else {
+                var new_state = get_state()
+                if (new_state === prev_state) return null
+                var patches = get_patches ? get_patches(prev_state) :
+                    [simple_diff(prev_state, new_state)]
+                return {patches, new_state}
+            }
         }
+
+        var change = get_change()
+        if (!change) {
+            if (throttled) {
+                throttled = false
+                if (throttled_update &&
+                    v_eq(current_version, throttled_update.parents))
+                    apply_update(throttled_update).catch(on_error)
+                throttled_update = null
+            }
+            return
+        }
+
+        if (outstanding_changes >= max_outstanding_changes) {
+            throttled = true
+            return
+        }
+
+        var {patches, new_state} = change
 
         // Save JS-index patches before code-point conversion mutates them
         var js_patches = patches.map(p => ({range: [...p.range], content: p.content}))
@@ -210,22 +236,21 @@ function simpleton_client(url, {
                 outstanding_changes--
                 if (on_ack && !outstanding_changes) on_ack()
 
+                throttled = false
+
                 // Check for more changes that accumulated while we were sending
-                if (generate_local_diff_update) {
-                    update = generate_local_diff_update(prev_state)
-                    if (!update) return
-                    ;({patches, new_state} = update)
-                } else {
-                    new_state = get_state()
-                    if (new_state === prev_state) return
-                    patches = get_patches ? get_patches(prev_state) :
-                        [simple_diff(prev_state, new_state)]
-                }
+                var more = get_change()
+                if (!more) return
+                ;({patches, new_state} = more)
             }
         })()
 
         return js_patches
       }
+    }
+
+    function v_eq(a, b) {
+        return a.length === b.length && a.every((v, i) => v === b[i])
     }
 
     function get_char_size(s, i) {
