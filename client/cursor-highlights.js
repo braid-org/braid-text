@@ -62,8 +62,18 @@ function textarea_highlights(textarea) {
 
     // Move textarea's background to the wrapper so backdrops show through
     var bg = getComputedStyle(textarea).backgroundColor
-    if (!wrap.style.backgroundColor)
-        wrap.style.backgroundColor = (!bg || bg === 'rgba(0, 0, 0, 0)') ? 'white' : bg
+    if (!wrap.style.backgroundColor) {
+        if (!bg || bg === 'rgba(0, 0, 0, 0)') {
+            // Walk up the DOM to find the effective background
+            var el = wrap
+            while (el) {
+                var elBg = getComputedStyle(el).backgroundColor
+                if (elBg && elBg !== 'rgba(0, 0, 0, 0)') { bg = elBg; break }
+                el = el.parentElement
+            }
+        }
+        wrap.style.backgroundColor = bg || 'white'
+    }
     textarea.style.backgroundColor = 'transparent'
     textarea.style.position = 'relative'
     textarea.style.zIndex = '2'
@@ -158,6 +168,77 @@ function textarea_highlights(textarea) {
         return result
     }
 
+    // --- render implementation ---
+
+    function do_render() {
+        var text = textarea.value
+        var len = text.length
+        var style_str = backdrop_style()
+
+        // Remove divs for layers that no longer exist
+        for (var id of Object.keys(layer_divs)) {
+            if (!layer_data[id]) {
+                layer_divs[id].remove()
+                delete layer_divs[id]
+            }
+        }
+
+        // Render each layer
+        for (var id of Object.keys(layer_data)) {
+            var highlights = layer_data[id].map(h => ({
+                from: Math.min(h.from, len),
+                to: Math.min(h.to, len),
+                color: h.color
+            }))
+
+            if (!layer_divs[id]) {
+                var div = document.createElement('div')
+                div.className = 'textarea-hl-backdrop'
+                wrap.insertBefore(div, textarea)
+                layer_divs[id] = div
+            }
+
+            // Font/padding/border are set inline to match textarea;
+            // positioning/pointer-events/etc come from the CSS class.
+            layer_divs[id].style.cssText = style_str
+
+            layer_divs[id].innerHTML = build_html(text, highlights)
+            layer_divs[id].scrollTop = textarea.scrollTop
+            layer_divs[id].scrollLeft = textarea.scrollLeft
+        }
+    }
+
+    // --- show local cursor/selection when textarea is not focused ---
+
+    var local_id = '__local__'
+
+    function on_blur() {
+        var from = textarea.selectionStart
+        var to = textarea.selectionEnd
+        var color = getComputedStyle(textarea).caretColor
+        if (!color || color === 'auto') color = getComputedStyle(textarea).color
+        if (from === to) {
+            layer_data[local_id] = [{ from, to, color: color }]
+        } else {
+            var match = color.match(/(\d+),\s*(\d+),\s*(\d+)/)
+            var sel_color = match ? 'rgba(' + match[1] + ', ' + match[2] + ', ' + match[3] + ', 0.3)' : color
+            layer_data[local_id] = [{ from, to, color: sel_color }]
+        }
+        do_render()
+    }
+
+    function on_focus() {
+        delete layer_data[local_id]
+        if (layer_divs[local_id]) {
+            layer_divs[local_id].remove()
+            delete layer_divs[local_id]
+        }
+        do_render()
+    }
+
+    textarea.addEventListener('blur', on_blur)
+    textarea.addEventListener('focus', on_focus)
+
     return {
         set: function(layer_id, highlights) {
             layer_data[layer_id] = highlights
@@ -171,43 +252,7 @@ function textarea_highlights(textarea) {
             }
         },
 
-        render: function() {
-            var text = textarea.value
-            var len = text.length
-            var style_str = backdrop_style()
-
-            // Remove divs for layers that no longer exist
-            for (var id of Object.keys(layer_divs)) {
-                if (!layer_data[id]) {
-                    layer_divs[id].remove()
-                    delete layer_divs[id]
-                }
-            }
-
-            // Render each layer
-            for (var id of Object.keys(layer_data)) {
-                var highlights = layer_data[id].map(h => ({
-                    from: Math.min(h.from, len),
-                    to: Math.min(h.to, len),
-                    color: h.color
-                }))
-
-                if (!layer_divs[id]) {
-                    var div = document.createElement('div')
-                    div.className = 'textarea-hl-backdrop'
-                    wrap.insertBefore(div, textarea)
-                    layer_divs[id] = div
-                }
-
-                // Font/padding/border are set inline to match textarea;
-                // positioning/pointer-events/etc come from the CSS class.
-                layer_divs[id].style.cssText = style_str
-
-                layer_divs[id].innerHTML = build_html(text, highlights)
-                layer_divs[id].scrollTop = textarea.scrollTop
-                layer_divs[id].scrollLeft = textarea.scrollLeft
-            }
-        },
+        render: do_render,
 
         layers: function() {
             return Object.keys(layer_data)
@@ -215,6 +260,8 @@ function textarea_highlights(textarea) {
 
         destroy: function() {
             textarea.removeEventListener('scroll', sync_scroll)
+            textarea.removeEventListener('blur', on_blur)
+            textarea.removeEventListener('focus', on_focus)
             for (var div of Object.values(layer_divs)) div.remove()
             layer_data = {}
             layer_divs = {}
@@ -238,7 +285,8 @@ function peer_bg_color(peer_id) {
     var r = parseInt(c.slice(1, 3), 16)
     var g = parseInt(c.slice(3, 5), 16)
     var b = parseInt(c.slice(5, 7), 16)
-    return `rgba(${r}, ${g}, ${b}, 0.25)`
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    return `rgba(${r}, ${g}, ${b}, ${dark ? 0.4 : 0.25})`
 }
 
 // --- High-level wrapper ---
