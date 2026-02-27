@@ -1,5 +1,5 @@
 <body style="margin: 0px; padding: 0px; box-sizing: border-box">
-  <textarea id="the_editor" style="width: 100%; height: 100%;"></textarea>
+  <textarea id="the_editor" style="width: 100%; height: 100%;" disabled></textarea>
 </body>
 <script src="https://braid.org/code/myers-diff1.js"></script>
 <script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
@@ -14,6 +14,7 @@
   var simpleton = simpleton_client(location.pathname, {
     on_online: ({online}) => { online ? cursors.online() : cursors.offline() },
     on_patches: (patches) => {
+      the_editor.disabled = false
       apply_patches_and_update_selection(the_editor, patches)
       cursors.on_patches(patches)
     },
