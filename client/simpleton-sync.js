@@ -45,15 +45,6 @@
 // get_state: () => current_state
 //     returns the current state (e.g., textarea.value)
 //
-// [DEPRECATED] apply_remote_update: ({patches, state}) => {...}
-//     this is for incoming changes;
-//     one of these will be non-null,
-//     and can be applied to the current state.
-//
-// [DEPRECATED] generate_local_diff_update: (client_state) => {...}
-//     this is to generate outgoing changes,
-//     and if there are changes, returns { patches, new_state }
-//
 // content_type: used for Accept and Content-Type headers
 //
 // returns { changed, abort }
@@ -75,18 +66,12 @@
 //
 // PUT requests:
 //   retry: (res) => res.status !== 550 — retry all errors EXCEPT
-//   HTTP 550 (permanent rejection by the server). This means:
+//   HTTP 550 (Repr-Digest mismatch, meaning client is out of sync).
+//   This means:
 //     - Connection failure: retried with backoff
-//     - HTTP 408, 429, 500, 502, 503, 504, etc.: retried
-//     - HTTP 550: give up, throw error, outstanding_changes stays
-//       incremented (potential throttle leak — see note below)
-//     - HTTP 401, 403: retried by braid_fetch, but the !r.ok check
-//       throws, which calls on_error and exits the async loop
-//
-// NOTE: When a PUT permanently fails (550 or !r.ok), outstanding_changes
-// is incremented but never decremented. If this happens repeatedly, the
-// client will eventually hit max_outstanding_changes and stop sending.
-// This is arguably a bug in the JS implementation too.
+//     - HTTP 401, 403, 408, 429, 500, 502, 503, 504, etc.: retried
+//     - HTTP 550: out of sync — stop retrying, throw error. The
+//       client must be torn down and restarted from scratch.
 //
 // --- Local Edit Absorption ---
 //
@@ -107,8 +92,6 @@ function simpleton_client(url, {
     on_state,
     get_patches,
     get_state,
-    apply_remote_update, // DEPRECATED
-    generate_local_diff_update, // DEPRECATED
     content_type,
 
     on_error,
@@ -126,10 +109,6 @@ function simpleton_client(url, {
     var throttled = false
     var throttled_update = null
     var ac = new AbortController()
-
-    // temporary: our old code uses this deprecated api,
-    //        and our old code wants to send digests..
-    if (apply_remote_update) send_digests = true
 
     // ── Subscription (GET) ──────────────────────────────────────────────
     //
@@ -211,28 +190,23 @@ function simpleton_client(url, {
         }
 
         // ── Apply the update ────────────────────────────────
-        if (apply_remote_update) {
-            // DEPRECATED path
-            client_state = apply_remote_update(update)
+        // Convert initial snapshot body to a patch replacing
+        // [0,0] — so initial load follows the same code path
+        // as incremental patches.
+        var patches = update.patches ||
+            [{range: [0, 0], content: update.state}]
+        if (on_patches) {
+            // EXTERNAL MODE: Apply patches to the UI, then
+            // read back the full state. Note: this absorbs
+            // any un-flushed local edits into client_state.
+            on_patches(patches)
+            client_state = get_state()
         } else {
-            // Convert initial snapshot body to a patch replacing
-            // [0,0] — so initial load follows the same code path
-            // as incremental patches.
-            var patches = update.patches ||
-                [{range: [0, 0], content: update.state}]
-            if (on_patches) {
-                // EXTERNAL MODE: Apply patches to the UI, then
-                // read back the full state. Note: this absorbs
-                // any un-flushed local edits into client_state.
-                on_patches(patches)
-                client_state = get_state()
-            } else {
-                // INTERNAL MODE: Apply patches to our internal
-                // state only. Local edits in the UI are NOT
-                // absorbed — they will be captured by the next
-                // changed() diff.
-                client_state = apply_patches(client_state, patches)
-            }
+            // INTERNAL MODE: Apply patches to our internal
+            // state only. Local edits in the UI are NOT
+            // absorbed — they will be captured by the next
+            // changed() diff.
+            client_state = apply_patches(client_state, patches)
         }
 
         // ── Digest verification ─────────────────────────────
@@ -278,18 +252,11 @@ function simpleton_client(url, {
       // during a PUT round-trip are eventually sent.
       changed: () => {
         function get_change() {
-            if (generate_local_diff_update) {
-                // DEPRECATED
-                var update = generate_local_diff_update(client_state)
-                if (!update) return null
-                return update
-            } else {
-                var new_state = get_state()
-                if (new_state === client_state) return null
-                var patches = get_patches ? get_patches(client_state) :
-                    [simple_diff(client_state, new_state)]
-                return {patches, new_state}
-            }
+            var new_state = get_state()
+            if (new_state === client_state) return null
+            var patches = get_patches ? get_patches(client_state) :
+                [simple_diff(client_state, new_state)]
+            return {patches, new_state}
         }
 
         var change = get_change()
@@ -357,9 +324,9 @@ function simpleton_client(url, {
                 // Uses braid_fetch with retry: (res) => res.status !== 550
                 // This means:
                 //   - Network failures: retried with backoff
-                //   - HTTP 408, 429, 500, 502, 503, 504: retried
-                //   - HTTP 550 (permanent rejection): give up, throw
-                //   - Other non-ok: throws via !r.ok check below
+                //   - HTTP 401, 403, 408, 429, 500, 502, 503, 504: retried
+                //   - HTTP 550 (Repr-Digest mismatch / out of sync):
+                //     give up, throw — client must be re-created
                 outstanding_changes++
                 try {
                     var r = await braid_fetch(url, {
@@ -373,13 +340,11 @@ function simpleton_client(url, {
                         version, parents, patches,
                         peer
                     })
-                    if (!r.ok) throw new Error(`bad http status: ${r.status}${(r.status === 401 || r.status === 403) ? ` (access denied)` : ''}`)
+                    if (!r.ok) throw new Error(`bad http status: ${r.status}`)
                 } catch (e) {
-                    // On error, notify and exit the loop.
-                    // NOTE: outstanding_changes is NOT decremented here.
-                    // This is arguably a bug — repeated failures will
-                    // eventually hit max_outstanding_changes and stop
-                    // the client from sending any more edits.
+                    // A 550 means Repr-Digest check failed — we're out
+                    // of sync. The client must be torn down and
+                    // re-created from scratch.
                     on_error(e)
                     throw e
                 }

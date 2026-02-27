@@ -1,0 +1,118 @@
+<meta charset="utf-8">
+<body style="margin: 0; padding: 0; box-sizing: border-box; height: 100vh; display: flex; flex-direction: column">
+  <div id="status_bar" style="padding: 8px 12px; font-family: monospace; font-size: 13px; background: #f5f5f5; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 8px">
+    <b>Simpleton fuzz test client</b> &mdash; <span id="status_text">connecting...</span>
+    <span style="flex: 1"></span>
+    <span id="conn_dot" style="width: 8px; height: 8px; border-radius: 50%; background: #ccc; flex-shrink: 0"></span>
+    <span id="conn_text" style="font-size: 11px; color: #888">offline</span>
+  </div>
+  <textarea id="editor" style="flex: 1; font-family: monospace; font-size: 14px; padding: 10px; border: none; outline: none; resize: none"></textarea>
+</body>
+<script src="/braid-http-client.js"></script>
+<script src="/simpleton-sync.js"></script>
+<script src="/web-utils.js"></script>
+<script>
+
+  var peer = Math.random().toString(36).substr(2)
+  var simpleton = null
+
+  braid_fetch.enable_multiplex = false
+
+  // ── Fuzz session command channel ──────────────────────────────────────
+  braid_fetch("/fuzz-session", {
+    subscribe: true,
+    headers: { "Peer": peer },
+    retry: () => true
+  }).then(res => {
+    set_status("connected, waiting for session...", "#888")
+    res.subscribe(update => {
+      try {
+        var cmd = JSON.parse(update.body_text)
+
+        if (cmd.type === "start") {
+          // Server assigned us a doc — connect simpleton to it
+          simpleton = simpleton_client(cmd.doc_key, {
+            on_patches: (patches) => apply_patches_and_update_selection(editor, patches),
+            get_state: () => editor.value,
+            on_error: (e) => {
+              console.error("error:", e)
+              set_status("error: " + (e.message || e), "#f44")
+            },
+            on_online: (status) => {
+              if (status.online) {
+                conn_dot.style.background = "#0a0"
+                conn_text.textContent = "connected"
+                conn_text.style.color = "#0a0"
+              } else {
+                conn_dot.style.background = "#f80"
+                conn_text.textContent = "disconnected"
+                conn_text.style.color = "#f80"
+              }
+            }
+          })
+          editor.oninput = () => simpleton.changed()
+          set_status("fuzzing on " + cmd.doc_key, "#0a0")
+          return
+        }
+
+        if (cmd.type === "edit") {
+          // Local edit command: apply to textarea and notify simpleton
+          var val = editor.value
+          var pos = Math.min(cmd.pos, val.length)
+          if (cmd.op === "delete" && pos < val.length) {
+            var del = Math.min(cmd.del_count, val.length - pos)
+            editor.value = val.substring(0, pos) + val.substring(pos + del)
+          } else if (cmd.op === "replace" && pos < val.length) {
+            var del = Math.min(cmd.del_count, val.length - pos)
+            editor.value = val.substring(0, pos) + cmd.content + val.substring(pos + del)
+          } else {
+            // insert (or fallback for legacy commands without op)
+            editor.value = val.substring(0, pos) + (cmd.content || "") + val.substring(pos)
+          }
+          if (simpleton) simpleton.changed()
+          return
+        }
+
+        if (cmd.type === "upload-state") {
+          set_status("uploading state for verification...", "#07f")
+          fetch("/fuzz-session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "state", peer, state: editor.value })
+          })
+          return
+        }
+
+        if (cmd.type === "result") {
+          if (cmd.match) {
+            set_status("PASS — states match!", "#0a0")
+            editor.style.border = "4px solid #0a0"
+            editor.style.background = "#efe"
+          } else {
+            set_status("FAIL — states differ! (check console)", "#f44")
+            editor.style.border = "4px solid #f44"
+            editor.style.background = "#fee"
+            console.log("MISMATCH — server state:", JSON.stringify(cmd.server_state))
+            console.log("MISMATCH — client state:", JSON.stringify(cmd.client_state))
+          }
+          return
+        }
+      } catch (e) {
+        console.error("command parse error:", e)
+      }
+    }, (e) => {
+      console.error("session error:", e)
+      set_status("session disconnected, reconnecting...", "#f80")
+    })
+  }).catch(e => {
+    console.error("session connect error:", e)
+    set_status("failed to connect session: " + (e.message || e), "#f44")
+  })
+
+  function set_status(text, color) {
+    status_text.textContent = text
+    status_bar.style.background = color ? (color + "22") : "#f5f5f5"
+    status_bar.style.borderBottomColor = color || "#ddd"
+  }
+
+</script>

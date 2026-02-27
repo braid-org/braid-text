@@ -1,0 +1,309 @@
+<meta charset="utf-8">
+<style>
+  @keyframes settle-pulse {
+    0%, 100% { opacity: 1 }
+    50% { opacity: 0.4 }
+  }
+</style>
+<body style="margin: 0; padding: 20px; font-family: monospace; box-sizing: border-box; height: 100vh; overflow: hidden; display: flex; flex-direction: column">
+  <div style="margin-bottom: 12px">
+    <div style="display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px">
+      <b style="font-size: 14px">Simpleton Fuzz Tester</b>
+      <span id="tally" style="font-weight: bold"></span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #444">
+      <label><input id="min_delay" type="number" value="500" style="width:55px">–<input id="max_delay" type="number" value="2000" style="width:55px"> ms ACK delay</label>
+      <label><input id="edit_interval" type="number" value="50" style="width:55px"> ms edit interval</label>
+      <label><input id="session_duration" type="number" value="15000" style="width:65px"> ms session duration</label>
+      <label><input id="settle_delay" type="number" value="3000" style="width:55px"> ms settle delay</label>
+      <label><input id="connect_min" type="number" value="2000" style="width:55px">–<input id="connect_max" type="number" value="8000" style="width:55px"> ms connected duration</label>
+      <label><input id="disconnect_min" type="number" value="2000" style="width:55px">–<input id="disconnect_max" type="number" value="8000" style="width:55px"> ms disconnected duration</label>
+    </div>
+  </div>
+  <div id="error_banner" style="display: none; background: #f44; color: white; padding: 6px; margin-bottom: 8px; font-weight: bold; border-radius: 4px"></div>
+  <div id="session_list" style="flex: 1; overflow: auto">
+    <p style="color: #888; margin-top: 0">Waiting for test clients to connect to <a href="/test" target="_blank">/test</a>...</p>
+  </div>
+</body>
+<script src="/braid-http-client.js"></script>
+<script src="/simpleton-sync.js"></script>
+<script src="/web-utils.js"></script>
+<script>
+
+  var error_count = 0
+  var pass_count = 0
+  var fail_count = 0
+  var peer_bars = {}      // peer -> { el, progress, status_dot, status_label, detail, result }
+  var connected_peers = new Set()
+
+  function show_error(msg) {
+    error_count++
+    error_banner.style.display = "block"
+    error_banner.textContent = `ERRORS: ${error_count} -- latest: ${msg}`
+  }
+
+  function update_tally() {
+    if (pass_count + fail_count === 0) { tally.textContent = ""; return }
+    tally.textContent = `${pass_count} pass, ${fail_count} fail`
+    tally.style.color = fail_count > 0 ? "#f44" : "#0a0"
+  }
+
+  // ── Per-session bar management ──────────────────────────────────────────
+
+  function get_or_create_bar(peer_id) {
+    if (peer_bars[peer_id]) return peer_bars[peer_id]
+
+    // Clear the "waiting" message on first bar
+    if (Object.keys(peer_bars).length === 0) session_list.innerHTML = ""
+
+    var bar = document.createElement("div")
+    bar.style.cssText = "margin-bottom: 6px; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; background: #fafafa"
+
+    // Header row: dot + peer ID + status label + result badge
+    var header = document.createElement("div")
+    header.style.cssText = "display: flex; align-items: center; padding: 6px 10px; gap: 8px; font-size: 12px; cursor: pointer"
+
+    var dot = document.createElement("span")
+    dot.style.cssText = "width: 8px; height: 8px; border-radius: 50%; background: #ccc; flex-shrink: 0"
+
+    var name = document.createElement("span")
+    name.style.cssText = "font-weight: bold; flex-shrink: 0"
+    name.textContent = peer_id
+
+    var status_label = document.createElement("span")
+    status_label.style.cssText = "color: #888; font-size: 11px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+
+    var result_badge = document.createElement("span")
+    result_badge.style.cssText = "font-weight: bold; font-size: 11px; padding: 1px 6px; border-radius: 3px; flex-shrink: 0; display: none"
+
+    header.appendChild(dot)
+    header.appendChild(name)
+    header.appendChild(status_label)
+    header.appendChild(result_badge)
+
+    // Progress bar (no transition initially — enabled after first position set)
+    var progress_wrap = document.createElement("div")
+    progress_wrap.style.cssText = "height: 3px; background: #eee"
+    var progress_fill = document.createElement("div")
+    progress_fill.style.cssText = "height: 100%; width: 0%; background: #0a0"
+    progress_wrap.appendChild(progress_fill)
+
+    // Collapsible detail (for results)
+    var detail = document.createElement("div")
+    detail.style.cssText = "display: none; padding: 6px 10px; font-size: 11px; border-top: 1px solid #eee; background: #f5f5f5"
+
+    header.onclick = () => {
+      if (detail.children.length > 0)
+        detail.style.display = detail.style.display === "none" ? "block" : "none"
+    }
+
+    bar.appendChild(header)
+    bar.appendChild(progress_wrap)
+    bar.appendChild(detail)
+
+    // Most recent at top
+    session_list.prepend(bar)
+
+    var entry = { el: bar, progress: progress_fill, progress_wrap, status_dot: dot, status_label, result_badge, detail, result: null, fresh: true }
+    peer_bars[peer_id] = entry
+    return entry
+  }
+
+  function update_bar_connection(peer_id, is_connected) {
+    var b = get_or_create_bar(peer_id)
+    if (is_connected) {
+      b.status_dot.style.background = "#0a0"
+      if (!b.result) b.status_label.textContent = "connected"
+    } else {
+      b.status_dot.style.background = "#ccc"
+      if (!b.result) b.status_label.textContent = "disconnected"
+    }
+  }
+
+  function update_bar_progress(peer_id, sd, cfg) {
+    var b = peer_bars[peer_id]
+    if (!b || b.result) return  // don't update progress after result
+
+    // Show disconnect state in the dot
+    if (sd.disconnected) {
+      b.status_dot.style.background = "#f80"
+    } else {
+      b.status_dot.style.background = "#0a0"
+    }
+
+    if (sd.running && sd.start_time) {
+      var elapsed = Date.now() - sd.start_time
+      var pct = Math.min(100, (elapsed / cfg.session_duration) * 100)
+      b.progress.style.width = pct + "%"
+      b.progress.style.background = "#0a0"
+      b.progress.style.animation = ""
+      var remaining = Math.max(0, Math.ceil((cfg.session_duration - elapsed) / 1000))
+      var status = `fuzzing — ${remaining}s remaining`
+      if (sd.disconnected) status += " (disconnected)"
+      b.status_label.textContent = status
+      // Enable smooth transition after first position is set
+      if (b.fresh) {
+        b.fresh = false
+        requestAnimationFrame(() => { b.progress.style.transition = "width 0.4s linear" })
+      }
+    } else if (sd.settling) {
+      if (b.fresh) { b.fresh = false }
+      b.progress.style.transition = ""
+      b.progress.style.width = "100%"
+      b.progress.style.background = "#07f"
+      b.progress.style.animation = "settle-pulse 1.2s ease-in-out infinite"
+      b.status_label.textContent = sd.disconnected ? "settling... (disconnected)" : "settling..."
+    }
+  }
+
+  function set_bar_result(peer_id, result) {
+    var b = get_or_create_bar(peer_id)
+    b.result = result
+
+    if (result.match) {
+      b.result_badge.textContent = "PASS"
+      b.result_badge.style.background = "#0a0"
+      b.result_badge.style.color = "white"
+      b.el.style.borderColor = "#0a0"
+      b.progress.style.background = "#0a0"
+      b.status_label.textContent = "passed"
+    } else {
+      b.result_badge.textContent = "FAIL"
+      b.result_badge.style.background = "#f44"
+      b.result_badge.style.color = "white"
+      b.el.style.borderColor = "#f44"
+      b.progress.style.background = "#f44"
+      b.status_label.textContent = `failed (server: ${result.server_state.length}, client: ${result.client_state.length} chars)`
+    }
+    b.result_badge.style.display = "inline"
+    b.progress.style.width = "100%"
+    b.progress.style.animation = ""
+
+    // Populate detail
+    b.detail.innerHTML = ""
+
+    var label1 = document.createElement("div")
+    label1.style.cssText = "margin-bottom: 2px; color: #666"
+    label1.textContent = result.match ? "Server state:" : "Server state (expected):"
+    b.detail.appendChild(label1)
+
+    var ta1 = document.createElement("textarea")
+    ta1.readOnly = true
+    ta1.value = result.server_state
+    ta1.style.cssText = "width: 100%; height: 60px; font-family: monospace; font-size: 11px; resize: vertical; box-sizing: border-box; margin-bottom: 4px"
+    b.detail.appendChild(ta1)
+
+    if (!result.match) {
+      var label2 = document.createElement("div")
+      label2.style.cssText = "margin-bottom: 2px; color: #666"
+      label2.textContent = "Client state (actual):"
+      b.detail.appendChild(label2)
+
+      var ta2 = document.createElement("textarea")
+      ta2.readOnly = true
+      ta2.value = result.client_state
+      ta2.style.cssText = "width: 100%; height: 60px; font-family: monospace; font-size: 11px; resize: vertical; box-sizing: border-box"
+      b.detail.appendChild(ta2)
+
+      // Auto-expand on failure
+      b.detail.style.display = "block"
+    }
+
+  }
+
+  // ── Subscribe to fuzz results ─────────────────────────────────────────
+  braid_fetch("/fuzz-results", {
+    subscribe: true,
+    retry: () => true
+  }).then(res => {
+    res.subscribe(update => {
+      try {
+        var result = JSON.parse(update.body_text)
+        if (result.match) pass_count++
+        else fail_count++
+        update_tally()
+        set_bar_result(result.peer, result)
+      } catch (e) {
+        console.error("result parse error:", e)
+      }
+    })
+  })
+
+  // ── Subscribe to config/session state ────────────────────────────────
+  var config_loaded = false
+
+  braid_fetch("/config", {
+    subscribe: true,
+    retry: () => true
+  }).then(res => {
+    res.subscribe(update => {
+      try {
+        var cfg = JSON.parse(update.body_text)
+        // Populate input fields on first update
+        if (!config_loaded) {
+          config_loaded = true
+          min_delay.value = cfg.min_delay
+          max_delay.value = cfg.max_delay
+          edit_interval.value = cfg.edit_interval
+          session_duration.value = cfg.session_duration
+          settle_delay.value = cfg.settle_delay
+          connect_min.value = cfg.connect_min
+          connect_max.value = cfg.connect_max
+          disconnect_min.value = cfg.disconnect_min
+          disconnect_max.value = cfg.disconnect_max
+        }
+        update_from_config(cfg)
+      } catch (e) {
+        console.error("config parse error:", e)
+      }
+    })
+  })
+
+  var config_inputs = [min_delay, max_delay, edit_interval, session_duration, settle_delay, connect_min, connect_max, disconnect_min, disconnect_max]
+  config_inputs.forEach(el => el.onchange = send_config)
+
+  function send_config() {
+    fetch("/config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        min_delay: parseInt(min_delay.value),
+        max_delay: parseInt(max_delay.value),
+        edit_interval: parseInt(edit_interval.value),
+        session_duration: parseInt(session_duration.value),
+        settle_delay: parseInt(settle_delay.value),
+        connect_min: parseInt(connect_min.value),
+        connect_max: parseInt(connect_max.value),
+        disconnect_min: parseInt(disconnect_min.value),
+        disconnect_max: parseInt(disconnect_max.value)
+      })
+    })
+  }
+
+  function update_from_config(cfg) {
+    // Track which peers are currently connected
+    var details = cfg.session_details || []
+    var current_peers = new Set(details.map(s => s.peer))
+
+    // Create/update bars for connected peers
+    for (var sd of details) {
+      update_bar_connection(sd.peer, true)
+      update_bar_progress(sd.peer, sd, cfg)
+    }
+
+    // Mark disconnected peers
+    for (var peer of connected_peers) {
+      if (!current_peers.has(peer)) {
+        update_bar_connection(peer, false)
+      }
+    }
+
+    connected_peers = current_peers
+
+    // Show waiting message if no peers ever connected
+    if (Object.keys(peer_bars).length === 0 && cfg.sessions === 0) {
+      session_list.innerHTML = '<p style="color: #888; margin-top: 0">Waiting for test clients to connect to <a href="/test" target="_blank">/test</a>...</p>'
+    }
+  }
+
+</script>
