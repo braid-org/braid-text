@@ -127,7 +127,7 @@ function simpleton_client(url, {
             ...(content_type ? {Accept: content_type} : {}) },
         subscribe: true,
         retry: () => true,
-        onSubscriptionStatus: (status) => { if (on_online) on_online(status) },
+        onSubscriptionStatus: (status) => { if (on_online) on_online(status.online) },
         parents: () => client_version.length ? client_version : null,
         peer,
         signal: ac.signal

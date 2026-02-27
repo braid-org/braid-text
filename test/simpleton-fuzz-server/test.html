@@ -38,8 +38,8 @@
               console.error("error:", e)
               set_status("error: " + (e.message || e), "#f44")
             },
-            on_online: (status) => {
-              if (status.online) {
+            on_online: (online) => {
+              if (online) {
                 conn_dot.style.background = "#0a0"
                 conn_text.textContent = "connected"
                 conn_text.style.color = "#0a0"
