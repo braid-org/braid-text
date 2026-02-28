@@ -56,19 +56,11 @@
         }
 
         if (cmd.type === "edit") {
-          // Local edit command: apply to textarea and notify simpleton
+          // Local edit command: apply range + content to textarea and notify simpleton
           var val = editor.value
-          var pos = Math.min(cmd.pos, val.length)
-          if (cmd.op === "delete" && pos < val.length) {
-            var del = Math.min(cmd.del_count, val.length - pos)
-            editor.value = val.substring(0, pos) + val.substring(pos + del)
-          } else if (cmd.op === "replace" && pos < val.length) {
-            var del = Math.min(cmd.del_count, val.length - pos)
-            editor.value = val.substring(0, pos) + cmd.content + val.substring(pos + del)
-          } else {
-            // insert (or fallback for legacy commands without op)
-            editor.value = val.substring(0, pos) + (cmd.content || "") + val.substring(pos)
-          }
+          var start = Math.min(cmd.range[0], val.length)
+          var end = Math.min(cmd.range[1], val.length)
+          editor.value = val.substring(0, start) + (cmd.content || "") + val.substring(end)
           if (simpleton) simpleton.changed()
           return
         }

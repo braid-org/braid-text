@@ -1,23 +1,37 @@
 <meta charset="utf-8">
-<style>
-  @keyframes settle-pulse {
-    0%, 100% { opacity: 1 }
-    50% { opacity: 0.4 }
-  }
-</style>
+<style></style>
 <body style="margin: 0; padding: 20px; font-family: monospace; box-sizing: border-box; height: 100vh; overflow: hidden; display: flex; flex-direction: column">
-  <div style="margin-bottom: 12px">
-    <div style="display: flex; align-items: baseline; gap: 6px; margin-bottom: 8px">
-      <b style="font-size: 14px">Simpleton Fuzz Tester</b>
-      <span id="tally" style="font-weight: bold"></span>
+  <div style="margin-bottom: 12px; display: flex; gap: 32px">
+    <div>
+      <div style="margin-bottom: 8px">
+        <b style="font-size: 14px">Simpleton Fuzz Tester</b>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #444">
+        <label><input id="session_duration" type="number" style="width:65px"> ms session duration</label>
+        <label><input id="settle_delay" type="number" style="width:65px"> ms settle delay</label>
+        <label><input id="edit_interval_min" type="number" style="width:65px">–<input id="edit_interval_max" type="number" style="width:65px"> ms edit interval</label>
+        <label><input id="min_delay" type="number" style="width:65px">–<input id="max_delay" type="number" style="width:65px"> ms ACK delay</label>
+        <label><input id="connect_min" type="number" style="width:65px">–<input id="connect_max" type="number" style="width:65px"> ms connected duration</label>
+        <label><input id="disconnect_min" type="number" style="width:65px">–<input id="disconnect_max" type="number" style="width:65px"> ms disconnected duration</label>
+      </div>
     </div>
-    <div style="display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #444">
-      <label><input id="min_delay" type="number" value="500" style="width:55px">–<input id="max_delay" type="number" value="2000" style="width:55px"> ms ACK delay</label>
-      <label><input id="edit_interval" type="number" value="50" style="width:55px"> ms edit interval</label>
-      <label><input id="session_duration" type="number" value="15000" style="width:65px"> ms session duration</label>
-      <label><input id="settle_delay" type="number" value="3000" style="width:55px"> ms settle delay</label>
-      <label><input id="connect_min" type="number" value="2000" style="width:55px">–<input id="connect_max" type="number" value="8000" style="width:55px"> ms connected duration</label>
-      <label><input id="disconnect_min" type="number" value="2000" style="width:55px">–<input id="disconnect_max" type="number" value="8000" style="width:55px"> ms disconnected duration</label>
+    <div style="font-size: 12px; color: #444; border-left: 1px solid #ddd; padding-left: 20px; max-width: 520px">
+      <b style="color: #222">Connecting a Simpleton Client</b>
+      <ol style="margin: 6px 0 0; padding-left: 18px; line-height: 1.8">
+        <li>Subscribe to <code>/fuzz-session</code> (GET with <code>Subscribe</code> header). Optionally set a <code>Peer</code> header to name your client.</li>
+        <li>Server sends <code>{"type":"start", "peer":"…", "doc_key":"/fuzz-doc-…"}</code>. Use <code>doc_key</code> to connect your simpleton-sync client.</li>
+        <li>Server sends edit commands to simulate local user typing. Apply them to your document and call <code>changed()</code>:
+          <div style="margin: 3px 0; line-height: 1.4">
+            <code>{"type":"edit", "range":[5,5], "content":"a"}</code> (insert)<br>
+            <code>{"type":"edit", "range":[3,5], "content":""}</code> (delete)<br>
+            <code>{"type":"edit", "range":[3,5], "content":"x"}</code> (replace)
+          </div>
+          <code>range</code> is <code>[start, end]</code> in the text. Clamp both to your actual text length.
+        </li>
+        <li>Server also makes remote edits (via PUT) which arrive through the normal simpleton-sync subscription.</li>
+        <li>When you receive <code>{"type":"upload-state"}</code>, POST your final document text to <code>/fuzz-session</code> as <code>{"type":"state", "peer":"…", "state":"…"}</code>. Server compares it to expected state.</li>
+      </ol>
+      <p style="margin: 6px 0 0; color: #888"><a href="/test" target="_blank">/test</a> runs this protocol using the JS reference implementation of simpleton-sync.</p>
     </div>
   </div>
   <div id="error_banner" style="display: none; background: #f44; color: white; padding: 6px; margin-bottom: 8px; font-weight: bold; border-radius: 4px"></div>
@@ -31,8 +45,6 @@
 <script>
 
   var error_count = 0
-  var pass_count = 0
-  var fail_count = 0
   var peer_bars = {}      // peer -> { el, progress, status_dot, status_label, detail, result }
   var connected_peers = new Set()
 
@@ -40,12 +52,6 @@
     error_count++
     error_banner.style.display = "block"
     error_banner.textContent = `ERRORS: ${error_count} -- latest: ${msg}`
-  }
-
-  function update_tally() {
-    if (pass_count + fail_count === 0) { tally.textContent = ""; return }
-    tally.textContent = `${pass_count} pass, ${fail_count} fail`
-    tally.style.color = fail_count > 0 ? "#f44" : "#0a0"
   }
 
   // ── Per-session bar management ──────────────────────────────────────────
@@ -148,11 +154,23 @@
       }
     } else if (sd.settling) {
       if (b.fresh) { b.fresh = false }
-      b.progress.style.transition = ""
-      b.progress.style.width = "100%"
+      b.progress.style.animation = ""
       b.progress.style.background = "#07f"
-      b.progress.style.animation = "settle-pulse 1.2s ease-in-out infinite"
-      b.status_label.textContent = sd.disconnected ? "settling... (disconnected)" : "settling..."
+      if (sd.settle_start_time) {
+        var settle_elapsed = Date.now() - sd.settle_start_time
+        var settle_pct = Math.min(100, (settle_elapsed / cfg.settle_delay) * 100)
+        b.progress.style.transition = "width 0.25s linear"
+        b.progress.style.width = settle_pct + "%"
+        var settle_remaining = Math.max(0, Math.ceil((cfg.settle_delay - settle_elapsed) / 1000))
+        b.status_label.textContent = `settling — ${settle_remaining}s remaining`
+      } else {
+        b.progress.style.transition = ""
+        b.progress.style.width = "0%"
+        b.status_label.textContent = sd.pending_acks > 0
+          ? `waiting for ${sd.pending_acks} ACK${sd.pending_acks > 1 ? "s" : ""}...`
+          : "settling..."
+      }
+      if (sd.disconnected) b.status_label.textContent += " (disconnected)"
     }
   }
 
@@ -219,9 +237,6 @@
     res.subscribe(update => {
       try {
         var result = JSON.parse(update.body_text)
-        if (result.match) pass_count++
-        else fail_count++
-        update_tally()
         set_bar_result(result.peer, result)
       } catch (e) {
         console.error("result parse error:", e)
@@ -244,7 +259,8 @@
           config_loaded = true
           min_delay.value = cfg.min_delay
           max_delay.value = cfg.max_delay
-          edit_interval.value = cfg.edit_interval
+          edit_interval_min.value = cfg.edit_interval_min
+          edit_interval_max.value = cfg.edit_interval_max
           session_duration.value = cfg.session_duration
           settle_delay.value = cfg.settle_delay
           connect_min.value = cfg.connect_min
@@ -259,7 +275,7 @@
     })
   })
 
-  var config_inputs = [min_delay, max_delay, edit_interval, session_duration, settle_delay, connect_min, connect_max, disconnect_min, disconnect_max]
+  var config_inputs = [min_delay, max_delay, edit_interval_min, edit_interval_max, session_duration, settle_delay, connect_min, connect_max, disconnect_min, disconnect_max]
   config_inputs.forEach(el => el.onchange = send_config)
 
   function send_config() {
@@ -269,7 +285,8 @@
       body: JSON.stringify({
         min_delay: parseInt(min_delay.value),
         max_delay: parseInt(max_delay.value),
-        edit_interval: parseInt(edit_interval.value),
+        edit_interval_min: parseInt(edit_interval_min.value),
+        edit_interval_max: parseInt(edit_interval_max.value),
         session_duration: parseInt(session_duration.value),
         settle_delay: parseInt(settle_delay.value),
         connect_min: parseInt(connect_min.value),

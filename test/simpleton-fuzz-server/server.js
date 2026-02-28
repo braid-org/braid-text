@@ -8,7 +8,8 @@ var path = require("path")
 var port = process.argv[2] || 4920
 var min_delay = parseInt(process.argv[3]) || 500
 var max_delay = parseInt(process.argv[4]) || 2000
-var edit_interval = parseInt(process.argv[5]) || 50
+var edit_interval_min = parseInt(process.argv[5]) || 50
+var edit_interval_max = parseInt(process.argv[6]) || 500
 var session_duration = 15000     // ms before session ends
 var settle_delay = 3000          // ms to wait after last ACK before verifying
 var connect_min = 2000           // min connected duration ms (0 = no disconnects)
@@ -88,7 +89,8 @@ var server = http2.createSecureServer({
                     var cfg = JSON.parse(body)
                     if (cfg.min_delay != null) min_delay = cfg.min_delay
                     if (cfg.max_delay != null) max_delay = cfg.max_delay
-                    if (cfg.edit_interval != null) edit_interval = cfg.edit_interval
+                    if (cfg.edit_interval_min != null) edit_interval_min = cfg.edit_interval_min
+                    if (cfg.edit_interval_max != null) edit_interval_max = cfg.edit_interval_max
                     if (cfg.session_duration != null) session_duration = cfg.session_duration
                     if (cfg.settle_delay != null) settle_delay = cfg.settle_delay
                     var restart_disconnects = false
@@ -140,10 +142,11 @@ var server = http2.createSecureServer({
             var session = {
                 res, peer, doc_key,
                 fuzz_timer: null, session_end_timer: null,
-                settling: false, settle_timer: null,
+                settling: false, settle_timer: null, settle_start_time: null,
                 start_time: null, pending_acks: 0, running: false,
                 disconnected: false, disconnect_timer: null,
-                doc_sub_res: null
+                doc_sub_res: null,
+                pending_ack_flushers: []
             }
             sessions.push(session)
             res.startSubscription({
@@ -260,19 +263,26 @@ var server = http2.createSecureServer({
         var orig_writeHead = res.writeHead.bind(res)
         var orig_end = res.end.bind(res)
         var buffered_writeHead_args = null
+        var flushed = false
         res.writeHead = function (...args) {
             buffered_writeHead_args = args
         }
-        res.end = function (...args) {
-            var ms = min_delay + Math.floor(Math.random() * (max_delay - min_delay))
-            setTimeout(() => {
+        res.end = function (...end_args) {
+            function do_flush() {
+                if (flushed) return
+                flushed = true
+                if (put_session) put_session.pending_ack_flushers = put_session.pending_ack_flushers.filter(f => f !== do_flush)
+                clearTimeout(delay_timer)
                 if (buffered_writeHead_args) orig_writeHead(...buffered_writeHead_args)
-                orig_end(...args)
+                orig_end(...end_args)
                 if (put_session) {
                     put_session.pending_acks--
                     check_settle(put_session)
                 }
-            }, ms)
+            }
+            var ms = (put_session && put_session.settling) ? 0 : min_delay + Math.floor(Math.random() * (max_delay - min_delay))
+            var delay_timer = setTimeout(do_flush, ms)
+            if (put_session) put_session.pending_ack_flushers.push(do_flush)
         }
     }
 
@@ -334,30 +344,30 @@ async function do_remote_edit(session) {
 }
 
 function do_local_edit_command(session) {
-    // pos and del_count are clamped client-side to actual text length
+    // range and content are clamped client-side to actual text length
     var pos = Math.floor(Math.random() * 100)
     var roll = Math.random()
     var cmd
     if (roll < 0.5) {
         // Insert
         var char = client_alphabet[Math.floor(Math.random() * client_alphabet.length)]
-        cmd = { type: "edit", op: "insert", pos, content: char }
+        cmd = { type: "edit", range: [pos, pos], content: char }
     } else if (roll < 0.75) {
         // Delete
         var del_count = 1 + Math.floor(Math.random() * 3)
-        cmd = { type: "edit", op: "delete", pos, del_count }
+        cmd = { type: "edit", range: [pos, pos + del_count], content: "" }
     } else {
         // Replace
         var del_count = 1 + Math.floor(Math.random() * 3)
         var char = client_alphabet[Math.floor(Math.random() * client_alphabet.length)]
-        cmd = { type: "edit", op: "replace", pos, del_count, content: char }
+        cmd = { type: "edit", range: [pos, pos + del_count], content: char }
     }
     try {
         session.res.sendUpdate({ body: JSON.stringify(cmd) })
     } catch (e) {
         console.log(`failed to send edit to ${session.peer}: ${e.message}`)
     }
-    console.log(`fuzz: local ${cmd.op} command to ${session.peer}`)
+    console.log(`fuzz: local edit [${cmd.range}] "${cmd.content}" to ${session.peer}`)
 }
 
 async function do_fuzz_tick(session) {
@@ -392,6 +402,9 @@ function start_session(session) {
         // Stop disconnect cycling and ensure connected state so client can settle
         if (session.disconnect_timer) { clearTimeout(session.disconnect_timer); session.disconnect_timer = null }
         session.disconnected = false
+        // Flush all pending ACK delays immediately — session is over
+        var flushers = session.pending_ack_flushers.slice()
+        for (var f of flushers) f()
         // Only start settling if client is connected (has an active doc subscription)
         if (session.doc_sub_res) {
             check_settle(session)
@@ -404,6 +417,7 @@ function start_session(session) {
 function stop_session(session) {
     stop_fuzzing(session)
     session.settling = false
+    session.settle_start_time = null
     session.running = false
     session.start_time = null
     session.disconnected = false
@@ -418,7 +432,7 @@ function schedule_next_fuzz(session) {
         try { await do_fuzz_tick(session) }
         catch (e) { console.log(`fuzz tick error for ${session.peer}: ${e.message}`) }
         if (session.fuzz_timer) schedule_next_fuzz(session)
-    }, edit_interval)
+    }, edit_interval_min + Math.floor(Math.random() * (edit_interval_max - edit_interval_min + 1)))
 }
 
 function stop_fuzzing(session) {
@@ -434,15 +448,19 @@ function check_settle(session) {
     if (!session.settling) return
     if (session.pending_acks > 0) {
         if (session.settle_timer) { clearTimeout(session.settle_timer); session.settle_timer = null }
+        session.settle_start_time = null
         return
     }
+    // (Re)start the settle timer — resets if client sends a PUT during settling
     if (session.settle_timer) clearTimeout(session.settle_timer)
+    session.settle_start_time = Date.now()
     session.settle_timer = setTimeout(() => {
         session.settle_timer = null
+        session.settle_start_time = null
         if (session.pending_acks > 0) return
         request_state_upload(session)
     }, settle_delay)
-    console.log(`  settle timer started for ${session.peer} (${settle_delay}ms)`)
+    console.log(`  settle timer (re)started for ${session.peer} (${settle_delay}ms)`)
 }
 
 function request_state_upload(session) {
@@ -483,7 +501,7 @@ setInterval(broadcast_config, 250)
 
 function config_json() {
     return JSON.stringify({
-        min_delay, max_delay, edit_interval, session_duration, settle_delay,
+        min_delay, max_delay, edit_interval_min, edit_interval_max, session_duration, settle_delay,
         connect_min, connect_max, disconnect_min, disconnect_max,
         sessions: sessions.length,
         session_details: sessions.map(s => ({
@@ -491,6 +509,7 @@ function config_json() {
             running: s.running,
             settling: s.settling,
             start_time: s.start_time,
+            settle_start_time: s.settle_start_time,
             pending_acks: s.pending_acks,
             disconnected: s.disconnected
         }))
@@ -533,7 +552,7 @@ server.listen(port, async () => {
     console.log(`  test client:  https://localhost:${port}/test`)
     console.log(`  documents:    /fuzz-doc-{peer} (created per session)`)
     console.log(`  PUT ACK delay:    ${min_delay}-${max_delay}ms`)
-    console.log(`  edit interval:    ${edit_interval}ms`)
+    console.log(`  edit interval:    ${edit_interval_min}-${edit_interval_max}ms`)
     console.log(`  session duration: ${session_duration}ms`)
     console.log(`  settle delay:     ${settle_delay}ms`)
     console.log(`  connect duration: ${connect_min}-${connect_max}ms`)
