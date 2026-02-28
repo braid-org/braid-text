@@ -13,6 +13,8 @@
         <label><input id="min_delay" type="number" style="width:65px">–<input id="max_delay" type="number" style="width:65px"> ms ACK delay</label>
         <label><input id="connect_min" type="number" style="width:65px">–<input id="connect_max" type="number" style="width:65px"> ms connected duration</label>
         <label><input id="disconnect_min" type="number" style="width:65px">–<input id="disconnect_max" type="number" style="width:65px"> ms disconnected duration</label>
+        <label><input id="put_drop_prob" type="number" step="1" min="0" max="100" style="width:65px">% PUT drop probability</label>
+        <label><input id="ack_drop_prob" type="number" step="1" min="0" max="100" style="width:65px">% ACK drop probability</label>
       </div>
     </div>
     <div style="font-size: 12px; color: #444; border-left: 1px solid #ddd; padding-left: 20px; max-width: 520px">
@@ -28,7 +30,7 @@
           </div>
           <code>range</code> is <code>[start, end]</code> in the text. Clamp both to your actual text length.
         </li>
-        <li>Server also makes remote edits (via PUT) which arrive through the normal simpleton-sync subscription.</li>
+        <li>Server also makes remote edits (via PUT) which arrive through the normal simpleton-sync subscription. These updates include a <code>Repr-Digest</code> header (SHA-256). Your client should verify that the digest matches your document state after applying patches — throw/crash on mismatch (don't try to recover).</li>
         <li>When you receive <code>{"type":"upload-state"}</code>, POST your final document text to <code>/fuzz-session</code> as <code>{"type":"state", "peer":"…", "state":"…"}</code>. Server compares it to expected state.</li>
       </ol>
       <p style="margin: 6px 0 0; color: #888"><a href="/test" target="_blank">/test</a> runs this protocol using the JS reference implementation of simpleton-sync.</p>
@@ -267,6 +269,8 @@
           connect_max.value = cfg.connect_max
           disconnect_min.value = cfg.disconnect_min
           disconnect_max.value = cfg.disconnect_max
+          put_drop_prob.value = Math.round(cfg.put_drop_prob * 100)
+          ack_drop_prob.value = Math.round(cfg.ack_drop_prob * 100)
         }
         update_from_config(cfg)
       } catch (e) {
@@ -275,7 +279,7 @@
     })
   })
 
-  var config_inputs = [min_delay, max_delay, edit_interval_min, edit_interval_max, session_duration, settle_delay, connect_min, connect_max, disconnect_min, disconnect_max]
+  var config_inputs = [min_delay, max_delay, edit_interval_min, edit_interval_max, session_duration, settle_delay, connect_min, connect_max, disconnect_min, disconnect_max, put_drop_prob, ack_drop_prob]
   config_inputs.forEach(el => el.onchange = send_config)
 
   function send_config() {
@@ -292,7 +296,9 @@
         connect_min: parseInt(connect_min.value),
         connect_max: parseInt(connect_max.value),
         disconnect_min: parseInt(disconnect_min.value),
-        disconnect_max: parseInt(disconnect_max.value)
+        disconnect_max: parseInt(disconnect_max.value),
+        put_drop_prob: parseFloat(put_drop_prob.value) / 100,
+        ack_drop_prob: parseFloat(ack_drop_prob.value) / 100
       })
     })
   }

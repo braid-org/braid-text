@@ -16,6 +16,8 @@ var connect_min = 2000           // min connected duration ms (0 = no disconnect
 var connect_max = 8000           // max connected duration ms
 var disconnect_min = 2000        // min disconnect duration ms
 var disconnect_max = 8000        // max disconnect duration ms
+var put_drop_prob = 0.2          // probability (0-1) of dropping a PUT entirely (not processed, connection destroyed)
+var ack_drop_prob = 0.2          // probability (0-1) of processing a PUT but dropping the ACK (connection destroyed after processing)
 
 braid_text.db_folder = null
 
@@ -99,6 +101,8 @@ var server = http2.createSecureServer({
                     if (cfg.disconnect_min != null) { disconnect_min = cfg.disconnect_min; restart_disconnects = true }
                     if (cfg.disconnect_max != null) { disconnect_max = cfg.disconnect_max; restart_disconnects = true }
                     if (restart_disconnects) sessions.forEach(s => restart_disconnect_scheduler(s))
+                    if (cfg.put_drop_prob != null) put_drop_prob = cfg.put_drop_prob
+                    if (cfg.ack_drop_prob != null) ack_drop_prob = cfg.ack_drop_prob
                     res.writeHead(200, { "Content-Type": "application/json" })
                     res.end(config_json())
                 } catch (e) {
@@ -259,6 +263,16 @@ var server = http2.createSecureServer({
     // Track pending ACKs per session (matched by doc URL).
     if (req.method === "PUT") {
         var put_session = sessions.find(s => s.doc_key === req.url)
+
+        // PUT drop: drop the entire request (don't process, destroy connection)
+        // Disabled during settling so verification can complete.
+        if (put_session && !put_session.settling && put_drop_prob > 0 && Math.random() < put_drop_prob) {
+            console.log(`  (simulated PUT drop for ${put_session.peer} -- dropping PUT ${req.url})`)
+            req.on("data", () => {})
+            req.on("end", () => res.destroy())
+            return
+        }
+
         if (put_session) put_session.pending_acks++
         var orig_writeHead = res.writeHead.bind(res)
         var orig_end = res.end.bind(res)
@@ -268,6 +282,15 @@ var server = http2.createSecureServer({
             buffered_writeHead_args = args
         }
         res.end = function (...end_args) {
+            // ACK drop: process the PUT but destroy connection instead of responding.
+            // Disabled during settling so verification can complete.
+            if (put_session && !put_session.settling && ack_drop_prob > 0 && Math.random() < ack_drop_prob) {
+                console.log(`  (simulated ACK drop for ${put_session.peer} -- PUT processed but ACK dropped)`)
+                put_session.pending_acks--
+                res.destroy()
+                return
+            }
+
             function do_flush() {
                 if (flushed) return
                 flushed = true
@@ -502,7 +525,7 @@ setInterval(broadcast_config, 250)
 function config_json() {
     return JSON.stringify({
         min_delay, max_delay, edit_interval_min, edit_interval_max, session_duration, settle_delay,
-        connect_min, connect_max, disconnect_min, disconnect_max,
+        connect_min, connect_max, disconnect_min, disconnect_max, put_drop_prob, ack_drop_prob,
         sessions: sessions.length,
         session_details: sessions.map(s => ({
             peer: s.peer,
@@ -557,5 +580,7 @@ server.listen(port, async () => {
     console.log(`  settle delay:     ${settle_delay}ms`)
     console.log(`  connect duration: ${connect_min}-${connect_max}ms`)
     console.log(`  disconnect dur:   ${disconnect_min}-${disconnect_max}ms`)
+    console.log(`  PUT drop prob:    ${put_drop_prob}`)
+    console.log(`  ACK drop prob:    ${ack_drop_prob}`)
     console.log(`  (HTTP/2 with self-signed cert -- accept the cert warning in browser)`)
 })
