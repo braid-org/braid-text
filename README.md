@@ -25,7 +25,7 @@ This will run a collaboratively-editable wiki:
 
 ```shell
 npm install
-node server-demo.js
+ node server-demo.js
 ```
 
 Now open these URLs in your browser:
