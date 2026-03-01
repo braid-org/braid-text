@@ -4,23 +4,24 @@ This library provides a simple http route handler, along with client code, enabl
 
 - Supports [Braid-HTTP](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) protocol
 - Supports [Simpleton](https://braid.org/meeting-76/simpleton) merge-type
-  - Enables light clients
-    - As little as 50 lines of code!
-    - With zero history overhead on client
-  - Supports [backpressure](https://braid.org/meeting-81/simpleton) to run smoothly on constrained servers
-  - Server merges with Diamond-Types
+   - Enables light clients
+      - As little as 50 lines of code!
+      - With zero history overhead on client
+   - Supports [backpressure](https://braid.org/meeting-81/simpleton) to run smoothly on constrained servers
+   -  Server merges with Diamond-Types
 - Supports [Diamond Types](https://github.com/josephg/diamond-types) merge-type
-  - Fully peer-to-peer CRDT
-  - Fast / Robust / Extensively fuzz-tested
+   - Fully peer-to-peer CRDT
+   - Fast / Robust / Extensively fuzz-tested
 - Developed in [braid.org](https://braid.org)
 
 This library makes it safe, easy & efficient to add collaborative text editing to every user-editable string in your web app.  Make your app multiplayer!
 
-Check out the [**demo video**](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755) 📺 from the Braid 86 release!
+Check out the **[demo video](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)** 📺 from the Braid 86 release!
 
 ### Demo: a Wiki!
 
 This will run a collaboratively-editable wiki:
+
 
 ```shell
 npm install
@@ -28,10 +29,11 @@ node server-demo.js
 ```
 
 Now open these URLs in your browser:
-  - http://localhost:8888/demo (to see the demo text)
-  - http://localhost:8888/demo?editor (to edit the text)
-  - http://localhost:8888/demo?markdown-editor (to edit it as markdown)
-  - http://localhost:8888/any-other-path?editor (to create a new page, just go to its URL, and then start editing)
+
+- [http://localhost:8888/demo](http://localhost:8888/demo) (to see the demo text)
+- [http://localhost:8888/demo?editor](http://localhost:8888/demo?editor) (to edit the text)
+- [http://localhost:8888/demo?markdown-editor](http://localhost:8888/demo?markdown-editor) (to edit it as markdown)
+- [http://localhost:8888/any-other-path?editor](http://localhost:8888/any-other-path?editor) (to create a new page, just go to its URL, and then start editing)
 
 Or try opening the URL in [Braid-Chrome](https://github.com/braid-org/braid-chrome), or [another Braid client](https://bloop.monster/simpleditor), to edit it directly!
 
@@ -40,11 +42,14 @@ Check out the `server-demo.js` file to see examples for how to add simple access
 ## General Use as Server
 
 Install it in your project:
+
+
 ```shell
 npm install braid-text
 ```
 
 Import the request handler into your code, and use it to handle HTTP requests wherever you want:
+
 
 ```javascript
 var braid_text = require("braid-text")
@@ -60,23 +65,27 @@ http_server.on("request", (req, res) => {
 ## Server API
 
 `braid_text.db_folder = './braid-text-db' // <-- this is the default`
-  - This is where the Diamond-Types history files will be stored for each resource.
-  - This folder will be created if it doesn't exist.
-  - The files for a resource will all be prefixed with a url-encoding of `key` within this folder.
+
+- This is where the Diamond-Types history files will be stored for each resource.
+- This folder will be created if it doesn't exist.
+- The files for a resource will all be prefixed with a url-encoding of `key` within this folder.
 
 `braid_text.serve(req, res, options)`
-  - `req`: Incoming HTTP request object.
+
+- `req`: Incoming HTTP request object.
   - `res`: Outgoing HTTP response object.
   - `options`: <small style="color:lightgrey">[optional]</small> An object containing additional options:
     - `key`:  <small style="color:lightgrey">[optional]</small> ID of text resource to sync with.  Defaults to `req.url`.
   - This is the main method of this library, and does all the work to handle Braid-HTTP `GET` and `PUT` requests concerned with a specific text resource.
 
 `await braid_text.get(key)`
-  - `key`: ID of text resource.
-  - Returns the text of the resource as a string.
+
+- `key`: ID of text resource.
+- Returns the text of the resource as a string.
 
 `await braid_text.get(key, options)`
-  - `key`: ID of text resource.
+
+- `key`: ID of text resource.
   - `options`: An object containing additional options, like http headers:
     - `version`:  <small style="color:lightgrey">[optional]</small> The [version](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-2) to get, as an array of strings.  (The array is typically length 1.)
     - `parents`:  <small style="color:lightgrey">[optional]</small> The version to start the subscription at, as an array of strings.
@@ -86,7 +95,8 @@ http_server.on("request", (req, res) => {
   - If NOT subscribing, returns `{version: <current_version>, body: <current-text>}`. If subscribing, returns nothing.
 
 `await braid_text.put(key, options)`
-  - `key`: ID of text resource.
+
+- `key`: ID of text resource.
   - `options`: An object containing additional options, like http headers:
     - `version`:  <small style="color:lightgrey">[optional]</small> The [version](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-2) being `PUT`, as an array of strings. Will be generated if not provided.
     - `parents`:  <small style="color:lightgrey">[optional]</small> The previous version being updated, as array of strings. Defaults to the server’s current version.
@@ -97,6 +107,7 @@ http_server.on("request", (req, res) => {
 ## General Use as Client
 
 Here's a basic running example to start:
+
 
 ```html
 <!-- 1. Your textarea -->
@@ -138,6 +149,7 @@ For better performance and control, you can work with patches instead of full te
 #### Patch Format
 
 Each patch is an object with two properties:
+
 - `range`: `[start, end]` - The range of characters to delete
 - `content`: The text to insert at that position
 
@@ -146,6 +158,7 @@ Patches in an array each have positions which refer to the **original text** bef
 #### Receiving Patches
 
 Instead of receiving complete text updates, you can process individual changes:
+
 
 ```javascript
 var simpleton = simpleton_client(url, {
@@ -161,6 +174,7 @@ This is more efficient for large documents and helps preserve cursor position.
 #### Custom Patch Generation
 
 You can provide your own diff algorithm or use patches from your editor's API:
+
 
 ```javascript
 var simpleton = simpleton_client(url, {
@@ -178,6 +192,7 @@ See [editor.html](https://github.com/braid-org/braid-text/blob/master/client/edi
 ### Adding Multiplayer Cursor + Selections
 
 This will render each peer's cursor and selection with colored highlights.  Just add three lines to your simpleton client:
+
 
 ```html
 <!-- 1. Include these additional script tags -->
@@ -202,10 +217,10 @@ This will render each peer's cursor and selection with colored highlights.  Just
 </script>
 ```
 
-
 ## Client API
 
 ### Constructor
+
 
 ```javascript
 simpleton = simpleton_client(url, options)
@@ -214,15 +229,16 @@ simpleton = simpleton_client(url, options)
 Creates a new Simpleton client that synchronizes with a Braid-Text server.
 
 **Parameters:**
+
 - `url`: The URL of the resource to synchronize with
 - `options`: Configuration object with the following properties:
-
 #### Required Options
 
 - `get_state`: **[required]** Function that returns the current text state
-  ```javascript
-  () => current_text_string
-  ```
+
+```javascript
+() => current_text_string
+```
 
 #### Incoming Updates (choose one)
 
@@ -258,46 +274,56 @@ Creates a new Simpleton client that synchronizes with a Braid-Text server.
 ### Methods
 
 - `simpleton.changed()`: Notify the client that local changes have occurred. Call this in your editor's change event handler. The client will call `get_patches` and `get_state` when it's ready to send updates. Returns the array of JS-index patches (or `undefined` if there was no change), which can be passed to `cursors.on_edit()`.
-
 ### Deprecated Options
 
 The following options are deprecated and should be replaced with the new API:
 
-- ~~`apply_remote_update`~~ → Use `on_patches` or `on_state` instead
-- ~~`generate_local_diff_update`~~ → Use `get_patches` and `get_state` instead
-
+- `apply_remote_update` → Use `on_patches` or `on_state` instead
+- `generate_local_diff_update` → Use `get_patches` and `get_state` instead
 ### Multiplayer Cursor API
 
 `cursor_highlights(textarea, url)` returns an object with:
+
 - `cursors.on_patches(patches)` — call after applying remote patches to transform and re-render remote cursors
 - `cursors.on_edit(patches)` — call after local edits; pass the patches from `simpleton.changed()` to update cursor positions and broadcast your selection
 - `cursors.destroy()` — tear down listeners and DOM elements
 
 Colors are auto-assigned per peer ID. See `?editor` and `?markdown-editor` in the demo server for working examples.
 
-
-
 ## Testing
 
 ### to run unit tests:
+
 first run the test server:
 
-    npm install
-    node test/server.js
 
-then open http://localhost:8889/test.html, and the boxes should turn green as the tests pass.
+```
+npm install
+node test/server.js
+```
+
+then open [http://localhost:8889/test.html](http://localhost:8889/test.html), and the boxes should turn green as the tests pass.
 
 ### to run fuzz tests:
 
-    npm install
-    node test/test.js
+
+```
+npm install
+node test/test.js
+```
 
 if the last output line looks like this, good:
 
-    t = 9999, seed = 1397019, best_n = Infinity @ NaN
+
+```
+t = 9999, seed = 1397019, best_n = Infinity @ NaN
+```
 
 but it's bad if it looks like this:
 
-    t = 9999, seed = 1397019, best_n = 5 @ 1396791
+
+```
+t = 9999, seed = 1397019, best_n = 5 @ 1396791
+```
 
 the number at the end is the random seed that generated the simplest error example
