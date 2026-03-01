@@ -94,7 +94,7 @@ http_server.on("request", (req, res) => {
     - `peer`: <small style="color:lightgrey">[optional]</small> Unique string ID that identifies the peer making the subscription. Mutations will not be echoed back to the same peer that `PUT`s them, for any `PUT` setting the same `peer` header.
   - If NOT subscribing, returns `{version: <current_version>, body: <current-text>}`. If subscribing, returns nothing.
 
-`await braid_text.put(key, options)`
+`await braid_text.put(key, options).     `
 
 - `key`: ID of text resource.
   - `options`: An object containing additional options, like http headers:
