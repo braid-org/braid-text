@@ -16,7 +16,7 @@ This library provides a simple http route handler, along with client code, enabl
 
 This library makes it safe, easy & efficient to add collaborative text editing to every user-editable string in your web app.  Make your app multiplayer!
 
-Check out the **[demo video](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)** 📺 from the Braid 86 release!
+Check out the **[demo video](https://braid.org/video/https://invisiblecollege.s3.us-west-1.amazonaws.com/braid-meeting-86.mp4#4755)** 📺 from the **Braid** 86 release!
 
 ### Demo: a Wiki!
 
@@ -81,7 +81,7 @@ http_server.on("request", (req, res) => {
 `await braid_text.get(key)`
 
 - `key`: ID of text resource.
-- Returns tdsf he text of the resource as a string.
+- Returns tdsf asdfhe text of the resource as a string.
 
 `await braid_text.get(key, options)`
 
