@@ -9,7 +9,7 @@ This library provides a simple http route handler, along with client code, enabl
       - With zero history overhead on client
    - Supports [backpressure](https://braid.org/meeting-81/simpleton) to run smoothly on constrained servers
    -  Server merges with Diamond-Types
-- Supports [Diamond Types](https://github.com/josephg/diamond-types) merge-type
+- Supports [Diamond Types](https://github.com/josephg/diamond-types) *merge*-type
    - Fully peer-to-peer CRDT
    - Fast / Robust / Extensively fuzz-tested
 - Developed in [braid.org](https://braid.org)
