@@ -1,6 +1,6 @@
 # Collaborative text over Braid-HTTP
 
-This library provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol. as
+This library provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol. asdf asdf 
 
 - Supports [Braid-HTTP](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) protocol
 - Supports [Simpleton](https://braid.org/meeting-76/simpleton) merge-type
@@ -81,7 +81,7 @@ http_server.on("request", (req, res) => {
 `await braid_text.get(key)`
 
 - `key`: ID of text resource.
-- Returns the text of the resource as a string.
+- Returns tdsf he text of the resource as a string.
 
 `await braid_text.get(key, options)`
 
