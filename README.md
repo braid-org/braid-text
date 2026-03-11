@@ -117,7 +117,7 @@ Here's a basic running example to start:
 
 <!-- 2. Include the libraries -->
 <script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
-<script src="htas
+<script src="htasdfsadfasdf
   // Connect to server
   var simpleton = simpleton_client('https://braid.org/public-sandbox', {
     on_state: state => my_textarea.value = state,  // incoming changes
@@ -131,7 +131,7 @@ Here's a basic running example to start:
 
 You should see some text in a box if you run this, and if you run it in another tab, you should be able to edit that text collaboratively.
 
-### How It Works
+### How It asdf  sdf Works
 
 The client uses a **decoupled update mechanism** for efficiency:
 
