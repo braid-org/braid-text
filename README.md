@@ -117,10 +117,7 @@ Here's a basic running example to start:
 
 <!-- 2. Include the libraries -->
 <script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
-<script src="https://unpkg.com/braid-text@~0.3/client/simpleton-sync.js"></script>
-
-<!-- 3. Wire it up -->
-<script>
+<script src="htas
   // Connect to server
   var simpleton = simpleton_client('https://braid.org/public-sandbox', {
     on_state: state => my_textarea.value = state,  // incoming changes
