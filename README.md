@@ -1,6 +1,6 @@
 # Collaborative text over Braid-HTTP
 
-This library provides a simple http route handler, along with client code, enabling fast text synchronization over a standard prot~~dasf~~ocol. asdf asdf 
+This library provides a ~~simple~~ http route handler, along with client code, enabling fast text synchronization over a standard prot~~dasf~~ocol. asdf asdf 
 
 - Supports [Braid-HTTP](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) protocol
 - Supports [Simpleton](https://braid.org/meeting-76/simpleton) merge-type
