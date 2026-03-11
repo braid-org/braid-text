@@ -709,7 +709,6 @@ function create_braid_text() {
                     options.my_subscribe(x)
                 } else {
                     x.parents = options.version ? options.version : options.parents
-                    options.my_last_seen_version = x.parents
 
                     // only send them a version from these parents if we have these parents (otherwise we'll assume these parents are more recent, probably versions they created but haven't sent us yet, and we'll send them appropriate rebased updates when they send us these versions)
                     let local_version = OpLog_remote_to_local(resource.doc, x.parents)
