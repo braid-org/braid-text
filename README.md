@@ -1,6 +1,6 @@
 # Collaborative text over Braid-HTTP
 
-This library provides a simple http route handler, along with client code, enabling fast text synchronization over a standard protocol. asdf asdf 
+This library provides a simple http route handler, along with client code, enabling fast text synchronization over a standard prot~~dasf~~ocol. asdf asdf 
 
 - Supports [Braid-HTTP](https://github.com/braid-org/braid-spec/blob/master/draft-toomim-httpbis-braid-http-04.txt) protocol
 - Supports [Simpleton](https://braid.org/meeting-76/simpleton) merge-type
@@ -232,6 +232,7 @@ Creates a new Simpleton client that synchronizes with a Braid-Text server.
 
 - `url`: The URL of the resource to synchronize with
 - `options`: Configuration object with the following properties:
+
 #### Required Options
 
 - `get_state`: **[required]** Function that returns the current text state
@@ -274,12 +275,14 @@ Creates a new Simpleton client that synchronizes with a Braid-Text server.
 ### Methods
 
 - `simpleton.changed()`: Notify the client that local changes have occurred. Call this in your editor's change event handler. The client will call `get_patches` and `get_state` when it's ready to send updates. Returns the array of JS-index patches (or `undefined` if there was no change), which can be passed to `cursors.on_edit()`.
+
 ### Deprecated Options
 
 The following options are deprecated and should be replaced with the new API:
 
 - `apply_remote_update` → Use `on_patches` or `on_state` instead
 - `generate_local_diff_update` → Use `get_patches` and `get_state` instead
+
 ### Multiplayer Cursor API
 
 `cursor_highlights(textarea, url)` returns an object with:
