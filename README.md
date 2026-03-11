@@ -129,9 +129,9 @@ Here's a basic running example to start:
 </script>
 ```
 
-You should see some text in a box if you run this, and if you run it in another tab, you should be able to edit that text collaboratively.
+You should see some text in a box if you run this, and if you run it in another tab, you should be able to edit that textdfdf asdf collaboratively.
 
-### How It asdf  sdf Works
+### How It asdf  sdf dWorks
 
 The client uses a **decoupled update mechanism** for efficiency:
 
