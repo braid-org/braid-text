@@ -302,6 +302,8 @@ function cursor_highlights(textarea, url) {
     var hl = textarea_highlights(textarea)
     var applying_remote = false
     var client = null
+    var online = false
+    var destroyed = false
 
     cursor_client(url, {
         peer,
@@ -316,7 +318,11 @@ function cursor_highlights(textarea, url) {
             }
             hl.render()
         }
-    }).then(function(c) { client = c })
+    }).then(function(c) {
+        client = c
+        if (online) client.online()
+        if (destroyed) client.destroy()
+    })
 
     document.addEventListener('selectionchange', function() {
         if (applying_remote) return
@@ -325,8 +331,14 @@ function cursor_highlights(textarea, url) {
     })
 
     return {
-        online: function() { if (client) client.online() },
-        offline: function() { if (client) client.offline() },
+        online: function() {
+            online = true
+            if (client) client.online()
+        },
+        offline: function() {
+            online = false
+            if (client) client.offline()
+        },
 
         on_patches: function(patches) {
             applying_remote = true
@@ -343,6 +355,7 @@ function cursor_highlights(textarea, url) {
         },
 
         destroy: function() {
+            destroyed = true
             if (client) client.destroy()
             hl.destroy()
         }
