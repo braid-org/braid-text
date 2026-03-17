@@ -18,7 +18,7 @@
 async function cursor_client(url, { peer, get_text, on_change }) {
     // --- feature detection: HEAD probe ---
     try {
-        var head_res = await fetch(url, {
+        var head_res = await braid_fetch(url, {
             method: 'HEAD',
             headers: { 'Accept': 'application/text-cursors+json' }
         })
