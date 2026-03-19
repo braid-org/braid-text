@@ -118,7 +118,7 @@ function simpleton_client(url, {
     var outstanding_changes = 0      // PUTs sent, not yet ACKed
     var max_outstanding_changes = 10 // throttle limit
     var throttled = false
-    var throttled_update = null
+    var throttled_updates = []
     var ac = new AbortController()
 
     // ── Subscription (GET) ──────────────────────────────────────────────
@@ -150,8 +150,11 @@ function simpleton_client(url, {
             // parents match our client_version exactly. This ensures
             // we stay on a single line of time.
             update.parents.sort()
-            if (versions_eq(client_version, update.parents))
-                if (throttled) throttled_update = update
+            var last_queued = throttled_updates.length
+                ? throttled_updates[throttled_updates.length - 1].version
+                : client_version
+            if (versions_eq(last_queued, update.parents))
+                if (throttled) throttled_updates.push(update)
                 else await apply_update(update)
         }, on_error)
     }).catch(on_error)
@@ -265,10 +268,10 @@ function simpleton_client(url, {
         if (!change) {
             if (throttled) {
                 throttled = false
-                if (throttled_update &&
-                    versions_eq(client_version, throttled_update.parents))
-                    apply_update(throttled_update).catch(on_error)
-                throttled_update = null
+                for (var update of throttled_updates)
+                    if (versions_eq(client_version, update.parents))
+                        apply_update(update).catch(on_error)
+                throttled_updates = []
             }
             return
         }
