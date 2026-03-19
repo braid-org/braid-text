@@ -718,7 +718,6 @@ function create_braid_text() {
                     }
                 }
 
-                options.my_last_sent_version = x.version
                 resource.simpleton_clients.add(options)
                 options.signal?.addEventListener('abort', () =>
                     resource.simpleton_clients.delete(options))
@@ -1015,7 +1014,6 @@ function create_braid_text() {
 
                             if (braid_text.verbose) console.log(`sending from rebase: ${JSON.stringify(x)}`)
                             client.my_subscribe(x)
-                            client.my_last_sent_version = x.version
 
                             delete client.my_timeout
                         }, time_override ?? Math.min(3000, 23 * Math.pow(1.5, client.my_unused_version_count - 1)))
@@ -1033,7 +1031,10 @@ function create_braid_text() {
 
                     let x = { version: resource.version }
                     if (peer && client.peer === peer) {
-                        if (!v_eq(client.my_last_sent_version, parents)) {
+                        if (!v_eq(resource.version, [version])) {
+                            // the resource has other changes beyond this
+                            // PUT, so the client is behind — start a
+                            // timeout to batch and rebase
                             client.my_unused_version_count = (client.my_unused_version_count ?? 0) + 1
                             set_timeout()
                             continue
@@ -1041,37 +1042,16 @@ function create_braid_text() {
                             delete client.my_unused_version_count
                         }
 
-                        x.parents = [version]
-                        if (!v_eq(x.version, x.parents)) {
-                            // Note: this rebase will never trigger in the
-                            // presence of the timeout logic above, because
-                            // any version that would cause x.version to
-                            // differ from x.parents would have already
-                            // updated my_last_sent_version when forwarding
-                            // other peers' changes to this client, causing
-                            // a mismatch and triggering a timeout instead.
-                            //
-                            // However, this is the standard rebase path and
-                            // is left here for implementations that omit the
-                            // timeout optimization — without it, this branch
-                            // is needed to rebase the client's version when
-                            // concurrent edits have been merged.
-                            if (braid_text.verbose) console.log("rebasing..")
-                            x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, x.parents))
-                        } else {
-                            // this client already has this version,
-                            // so let's pretend to send it back, but not
-                            if (braid_text.verbose) console.log(`not reflecting back to simpleton`)
-                            client.my_last_sent_version = x.version
-                            continue
-                        }
+                        // this client already has this version,
+                        // so let's pretend to send it back, but not
+                        if (braid_text.verbose) console.log(`not reflecting back to simpleton`)
+                        continue
                     } else {
                         x.parents = version_before
                         x.patches = patches
                     }
                     if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
                     post_commit_updates.push([client, x])
-                    client.my_last_sent_version = x.version
                 }
             } else {
                 if (resource.simpleton_clients.size) {
@@ -1084,7 +1064,6 @@ function create_braid_text() {
                     for (let client of resource.simpleton_clients) {
                         if (client.my_timeout) continue
                         post_commit_updates.push([client, x])
-                        client.my_last_sent_version = x.version
                     }
                 }
             }

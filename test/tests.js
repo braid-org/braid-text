@@ -3018,64 +3018,6 @@ runTest(
 )
 
 runTest(
-    "test put from same peer triggers rebase when other changes exist",
-    async () => {
-        var key = 'test-' + Math.random().toString(36).slice(2)
-
-        var r = await braid_fetch(`/eval`, {
-            method: 'PUT',
-            body: `void (async () => {
-                var resource = await braid_text.get_resource('/${key}')
-
-                try {
-                    // First put some initial content
-                    await braid_text.put(resource, {
-                        version: ['a-2'],
-                        parents: [],
-                        patches: [{unit: 'text', range: '[0:0]', content: 'abc'}]
-                    })
-
-                    // Another peer makes a change (so resource.version moves ahead)
-                    await braid_text.put(resource, {
-                        version: ['other-2'],
-                        parents: ['a-2'],
-                        patches: [{unit: 'text', range: '[3:3]', content: 'XYZ'}]
-                    })
-
-                    // Now add a simpleton client AFTER the other change
-                    // Set my_last_sent_version to match what we'll use as parents for the next put
-                    var rebased = false
-                    var client = {
-                        peer: 'test-peer',
-                        my_subscribe: (update) => { rebased = true },
-                        my_last_sent_version: ['a-2']  // matches parents we'll use below
-                    }
-                    resource.simpleton_clients.add(client)
-
-                    // Our peer puts with parents: ['a-2'] which matches my_last_sent_version
-                    // resource.version includes 'other-2', so x.version != x.parents -> rebase
-                    await braid_text.put(resource, {
-                        version: ['b-2'],
-                        parents: ['a-2'],
-                        patches: [{unit: 'text', range: '[0:0]', content: '123'}],
-                        peer: 'test-peer',
-                        merge_type: 'simpleton'
-                    })
-
-                    res.end(rebased ? 'rebased' : 'not rebased')
-                } catch (e) {
-                    res.end('error: ' + e.message)
-                }
-            })()`
-        })
-        if (!r.ok) return 'eval failed: ' + r.status
-
-        return await r.text()
-    },
-    'rebased'
-)
-
-runTest(
     "test put from same peer with existing timeout extends timeout",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)
