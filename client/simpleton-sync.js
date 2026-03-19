@@ -199,11 +199,31 @@ function simpleton_client(url, {
             client_state = apply_patches(client_state, patches)
         }
 
+        // ── Advance version ─────────────────────────────────────────
+        // IMPORTANT: This must happen synchronously (before any await)
+        // to prevent the changed() accumulation loop from interleaving
+        // and capturing a stale client_version during a yield point.
+        client_version = update.version
+
+        // ── Notify listener ─────────────────────────────────────────
+        // IMPORTANT: No changed() / flush is called here.
+        // The JS does NOT send edits after receiving a server
+        // update. The PUT response handler's async accumulation
+        // loop handles flushing accumulated edits.
+        if (on_state) on_state(client_state)
+
         // ── Digest verification ─────────────────────────────────────
         // If the server sent a repr-digest, verify our state
         // matches. On mismatch, THROW — this halts the
         // subscription handler. The document is corrupted and
         // continuing would compound the problem.
+        //
+        // This is placed after advancing client_version and calling
+        // on_state so that the await does not create a yield point
+        // between applying patches and advancing client_version.
+        // That yield point previously allowed the changed() PUT loop
+        // to interleave, capturing a stale client_version and causing
+        // edit loss.
         if (update.extra_headers &&
             update.extra_headers["repr-digest"] &&
             update.extra_headers["repr-digest"].startsWith('sha-256=') &&
@@ -213,16 +233,6 @@ function simpleton_client(url, {
             console.log('state: ' + client_state)
             throw new Error('repr-digest mismatch')
         }
-
-        // ── Advance version ─────────────────────────────────────────
-        client_version = update.version
-
-        // ── Notify listener ─────────────────────────────────────────
-        // IMPORTANT: No changed() / flush is called here.
-        // The JS does NOT send edits after receiving a server
-        // update. The PUT response handler's async accumulation
-        // loop handles flushing accumulated edits.
-        if (on_state) on_state(client_state)
     }
 
     // ── Public interface ────────────────────────────────────────────────

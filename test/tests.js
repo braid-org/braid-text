@@ -3053,7 +3053,7 @@ runTest(
                     resource.simpleton_clients.add(client)
 
                     // Our peer puts with parents: ['a-2'] which matches my_last_sent_version
-                    // resource.version includes 'other-2', so x.version != x.parents -> rebase (P62)
+                    // resource.version includes 'other-2', so x.version != x.parents -> rebase
                     await braid_text.put(resource, {
                         version: ['b-2'],
                         parents: ['a-2'],
@@ -3128,61 +3128,6 @@ runTest(
         return await r.text()
     },
     'timeout replaced'
-)
-
-runTest(
-    "test put from same peer with existing timeout and matching version stops timeout early",
-    async () => {
-        var key = 'test-' + Math.random().toString(36).slice(2)
-
-        var r = await braid_fetch(`/eval`, {
-            method: 'PUT',
-            body: `void (async () => {
-                var resource = await braid_text.get_resource('/${key}')
-
-                try {
-                    // First put some initial content
-                    await braid_text.put(resource, {
-                        version: ['a-2'],
-                        parents: [],
-                        patches: [{unit: 'text', range: '[0:0]', content: 'abc'}]
-                    })
-
-                    // Add a simpleton client with existing timeout
-                    // my_last_sent_version matches what we'll use as parents
-                    var timeout_fired = false
-                    var client = {
-                        peer: 'test-peer',
-                        my_subscribe: (update) => { timeout_fired = true },
-                        my_last_sent_version: ['a-2'],  // matches parents we'll use
-                        my_timeout: setTimeout(() => {}, 10000)
-                    }
-                    resource.simpleton_clients.add(client)
-
-                    // Put from same peer with parents matching my_last_sent_version
-                    // This should hit P58 (versions match -> stop timeout early with set_timeout(0))
-                    await braid_text.put(resource, {
-                        version: ['b-2'],
-                        parents: ['a-2'],  // matches my_last_sent_version
-                        patches: [{unit: 'text', range: '[3:3]', content: 'xyz'}],
-                        peer: 'test-peer',
-                        merge_type: 'simpleton'
-                    })
-
-                    // Wait a tiny bit for the 0ms timeout to fire
-                    await new Promise(done => setTimeout(done, 10))
-
-                    res.end(timeout_fired ? 'timeout fired early' : 'timeout did not fire')
-                } catch (e) {
-                    res.end('error: ' + e.message)
-                }
-            })()`
-        })
-        if (!r.ok) return 'eval failed: ' + r.status
-
-        return await r.text()
-    },
-    'timeout fired early'
 )
 
 runTest(

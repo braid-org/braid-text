@@ -1023,16 +1023,10 @@ function create_braid_text() {
 
                     if (client.my_timeout) {
                         if (peer && client.peer === peer) {
-                            if (!v_eq(client.my_last_sent_version, parents)) {
-                                // note: we don't add to client.my_unused_version_count,
-                                // because we're already in a timeout;
-                                // we'll just extend it here..
-                                set_timeout()
-                            } else {
-                                // hm.. it appears we got a correctly parented version,
-                                // which suggests that maybe we can stop the timeout early
-                                set_timeout(0)
-                            }
+                            // note: we don't add to client.my_unused_version_count,
+                            // because we're already in a timeout;
+                            // we'll just extend it here..
+                            set_timeout()
                         }
                         continue
                     }
@@ -1049,6 +1043,19 @@ function create_braid_text() {
 
                         x.parents = [version]
                         if (!v_eq(x.version, x.parents)) {
+                            // Note: this rebase will never trigger in the
+                            // presence of the timeout logic above, because
+                            // any version that would cause x.version to
+                            // differ from x.parents would have already
+                            // updated my_last_sent_version when forwarding
+                            // other peers' changes to this client, causing
+                            // a mismatch and triggering a timeout instead.
+                            //
+                            // However, this is the standard rebase path and
+                            // is left here for implementations that omit the
+                            // timeout optimization — without it, this branch
+                            // is needed to rebase the client's version when
+                            // concurrent edits have been merged.
                             if (braid_text.verbose) console.log("rebasing..")
                             x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, x.parents))
                         } else {
