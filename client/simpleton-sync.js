@@ -136,6 +136,7 @@ function simpleton_client(url, {
     braid_fetch(url, {
         peer,
         subscribe: true,
+        heartbeats: 20,
         signal: ac.signal,
         retry: () => true,
         parents: () => client_version.length ? client_version : null,
