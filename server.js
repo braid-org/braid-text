@@ -899,6 +899,10 @@ function create_braid_text() {
 
             let change_count = patches.reduce((a, b) => a + b.content_codepoints.length + (b.range[1] - b.range[0]), 0)
 
+            // Nothing to do: e.g. PUT with empty body on an already-empty doc,
+            // or patches that delete and insert zero characters.
+            if (change_count === 0) return { change_count }
+
             version = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
 
             let v = decode_version(version)
