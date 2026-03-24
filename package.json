@@ -1,6 +1,6 @@
 {
   "name": "braid-text",
-  "version": "0.3.22",
+  "version": "0.3.23",
   "description": "Library for collaborative text over http using braid.",
   "author": "Braid Working Group",
   "repository": "braid-org/braid-text",
@@ -9,8 +9,10 @@
     "test": "node test/test.js"
   },
   "main": "server.js",
+  "types": "server.d.ts",
   "files": [
     "server.js",
+    "server.d.ts",
     "simpleton-client.js",
     "client/simpleton-sync.js",
     "client/cursor-sync.js",

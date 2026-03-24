@@ -345,7 +345,7 @@ function create_braid_text() {
     braid_text.serve = async (req, res, options = {}) => {
         options = {
             key: req.url.split('?')[0], // Default key
-            put_cb: (key, val, old_val, patches) => { },  // Default callback when a PUT changes a key
+            put_cb: (key, val, params) => { },  // Default callback when a PUT changes a key
             ...options                  // Override with all options passed in
         }
 
@@ -556,6 +556,7 @@ function create_braid_text() {
                 }
 
                 var old_val = resource.val
+                var old_version = resource.version
                 var put_patches = patches ? patches.map(p => ({unit: p.unit, range: p.range, content: p.content})) : null
                 var {change_count} = await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
 
@@ -577,7 +578,7 @@ function create_braid_text() {
             
                 res.setHeader("Version", get_current_version())
 
-                options.put_cb(options.key, resource.val, old_val, put_patches)
+                options.put_cb(options.key, resource.val, {old_val, patches: put_patches, version: resource.version, parents: old_version})
             } catch (e) {
                 console.log(`${req.method} ERROR: ${e.stack}`)
                 return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)

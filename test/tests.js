@@ -3495,6 +3495,57 @@ runTest(
 )
 
 runTest(
+    "put_cb receives correct version and parents",
+    async () => {
+        var r = await braid_fetch('/eval', {
+            method: 'PUT',
+            body: `void (async () => {
+                var bt = braid_text.create_braid_text()
+                bt.db_folder = null
+                var results = []
+
+                // Helper: fake a PUT through serve() and capture put_cb params
+                function fake_put(key, version, parents, body) {
+                    var headers = {version: '"' + version + '"', 'content-type': 'text/plain'}
+                    if (parents !== undefined) headers.parents = parents === '' ? '' : '"' + parents + '"'
+                    return bt.serve(
+                        {method: 'PUT', url: '/' + key, headers,
+                         on(e, cb) { if (e === 'data') cb(Buffer.from(body)); if (e === 'end') cb() },
+                         pause() {}, resume() {}},
+                        {setHeader(){}, getHeader(){return ''}, hasHeader(){return false},
+                         writeHead(){}, write(){}, end(){}, on(){}},
+                        {put_cb: (k, v, params) => results.push(params)}
+                    )
+                }
+
+                // First PUT: new doc, empty parents
+                await fake_put('test', 'aaa-5', '', 'hello')
+
+                // Second PUT: explicit parents pointing to first version
+                await fake_put('test', 'bbb-6', 'aaa-5', 'hello world')
+
+                // Third PUT: no parents header — server infers from current version
+                await fake_put('test', 'ccc-1', undefined, 'hello world!')
+
+                res.end(JSON.stringify({
+                    // First put: parents=[] (new doc), version has aaa
+                    r0_parents_empty: results[0].parents.length === 0,
+                    r0_version_has_aaa: results[0].version.some(v => v.startsWith('aaa-')),
+                    // Second put: parents should be previous version (has aaa)
+                    r1_parents_has_aaa: results[1].parents.some(v => v.startsWith('aaa-')),
+                    // Third put: no explicit parents, so parents = server's version before this edit
+                    r2_parents_has_bbb: results[2].parents.some(v => v.startsWith('bbb-')),
+                    r2_version_has_ccc: results[2].version.some(v => v.startsWith('ccc-')),
+                    count: results.length
+                }))
+            })()`
+        })
+        return await r.text()
+    },
+    '{"r0_parents_empty":true,"r0_version_has_aaa":true,"r1_parents_has_aaa":true,"r2_parents_has_bbb":true,"r2_version_has_ccc":true,"count":3}'
+)
+
+runTest(
     "braid_text.cors = false suppresses CORS headers in serve()",
     async () => {
         // Run this test server-side via /eval so we can call serve()
