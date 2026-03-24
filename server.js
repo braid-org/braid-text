@@ -349,7 +349,7 @@ function create_braid_text() {
             ...options                  // Override with all options passed in
         }
 
-        braid_text.free_cors(res)
+        if (braid_text.cors !== false) braid_text.free_cors(res)
 
         function my_end(statusCode, x, statusText, headers) {
             res.writeHead(statusCode, statusText, headers)

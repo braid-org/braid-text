@@ -3494,6 +3494,53 @@ runTest(
     'ok'
 )
 
+runTest(
+    "braid_text.cors = false suppresses CORS headers in serve()",
+    async () => {
+        // Run this test server-side via /eval so we can call serve()
+        // directly with fake req/res objects and inspect the headers
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var results = []
+                for (var cors of [true, false]) {
+                    braid_text.cors = cors
+
+                    // Make a fake response that records the headers
+                    var fake_res = {
+                        headers: {},
+                        setHeader(k, v) { this.headers[k] = v },
+                        getHeader(k) { return this.headers[k] },
+                        hasHeader(k) { return k in this.headers },
+                        writeHead() {},
+                        write() {},
+                        end() {},
+                        on() {}
+                    }
+
+                    // OPTIONS request — serve() will set CORS headers then return
+                    var fake_req = {
+                        method: 'OPTIONS',
+                        url: '/test_cors_' + Math.random(),
+                        headers: {}
+                    }
+
+                    await braid_text.serve(fake_req, fake_res)
+
+                    // Now we inspect the headers to see if CORS is there!
+                    results.push(!!fake_res.headers['Access-Control-Allow-Origin'])
+                }
+
+                // Restore default
+                braid_text.cors = true
+                res.end(results.join(','))
+            })()`
+        })
+        return await r.text()
+    },
+    'true,false'
+)
+
 }
 
 // Export for both Node.js and browser environments
