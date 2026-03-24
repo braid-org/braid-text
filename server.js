@@ -345,7 +345,7 @@ function create_braid_text() {
     braid_text.serve = async (req, res, options = {}) => {
         options = {
             key: req.url.split('?')[0], // Default key
-            put_cb: (key, val) => { },  // Default callback when a PUT changes a key
+            put_cb: (key, val, old_val, patches) => { },  // Default callback when a PUT changes a key
             ...options                  // Override with all options passed in
         }
 
@@ -555,6 +555,8 @@ function create_braid_text() {
                         })
                 }
 
+                var old_val = resource.val
+                var put_patches = patches ? patches.map(p => ({unit: p.unit, range: p.range, content: p.content})) : null
                 var {change_count} = await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
 
                 // if Repr-Digest is set,
@@ -575,7 +577,7 @@ function create_braid_text() {
             
                 res.setHeader("Version", get_current_version())
 
-                options.put_cb(options.key, resource.val)
+                options.put_cb(options.key, resource.val, old_val, put_patches)
             } catch (e) {
                 console.log(`${req.method} ERROR: ${e.stack}`)
                 return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
@@ -653,7 +655,7 @@ function create_braid_text() {
 
         if (!options) {
             // if it doesn't exist already, don't create it in this case
-            if (!braid_text.cache[key]) return
+            if (!braid_text.cache[key]) return null
             return (await get_resource(key)).val
         }
 
@@ -896,6 +898,10 @@ function create_braid_text() {
             })).sort((a, b) => a.range[0] - b.range[0])
 
             let change_count = patches.reduce((a, b) => a + b.content_codepoints.length + (b.range[1] - b.range[0]), 0)
+
+            // Nothing to do: e.g. PUT with empty body on an already-empty doc,
+            // or patches that delete and insert zero characters.
+            if (change_count === 0) return { change_count }
 
             version = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
 
