@@ -69,6 +69,11 @@ http_server.on("request", (req, res) => {
   - `res`: Outgoing HTTP response object.
   - `options`: <small style="color:lightgrey">[optional]</small> An object containing additional options:
     - `key`:  <small style="color:lightgrey">[optional]</small> ID of text resource to sync with.  Defaults to `req.url`.
+    - `put_cb`: <small style="color:lightgrey">[optional]</small> Callback invoked after a PUT changes a resource. Signature: `(key, val, old_val, patches)` where:
+      - `key` - The resource key
+      - `val` - The new document text after the PUT
+      - `old_val` - The document text before the PUT
+      - `patches` - Array of patches applied (each `{unit, range, content}`), or `null` for full-body replacements
   - This is the main method of this library, and does all the work to handle Braid-HTTP `GET` and `PUT` requests concerned with a specific text resource.
 
 `await braid_text.get(key)`
