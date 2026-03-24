@@ -12,6 +12,8 @@
 //
 // url: resource endpoint
 //
+// headers:  custom headers that get forwarded through into the fetch
+//
 // on_patches?: (patches) => void
 //     processes incoming patches by applying them to the UI/textarea.
 //     Patches are guaranteed to be in-order and non-overlapping.
