@@ -655,7 +655,7 @@ function create_braid_text() {
 
         if (!options) {
             // if it doesn't exist already, don't create it in this case
-            if (!braid_text.cache[key]) return
+            if (!braid_text.cache[key]) return null
             return (await get_resource(key)).val
         }
 
