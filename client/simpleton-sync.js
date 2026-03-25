@@ -106,7 +106,7 @@ function simpleton_client(url, {
     get_patches,
     get_state,
     content_type,
-    headers: user_headers,    // The user can pass in custom headers
+    headers: custom_headers,    // The user can pass in custom headers
                               // that are forwared into the fetch
     on_error,
     on_res,
@@ -144,7 +144,7 @@ function simpleton_client(url, {
         retry: () => true,
         parents: () => client_version.length ? client_version : null,
         onSubscriptionStatus: status => on_online && on_online(status.online),
-        headers: { ...user_headers,
+        headers: { ...custom_headers,
                    "Merge-Type": "simpleton",
                    ...content_type && {Accept: content_type} },
     }).then(res => {
@@ -332,7 +332,7 @@ function simpleton_client(url, {
                         peer, version, parents, patches,
                         retry: (res) => res.status !== 550,
                         headers: {
-                            ...user_headers,
+                            ...custom_headers,
                             "Merge-Type": "simpleton",
                             ...send_digests && {
                                 "Repr-Digest": await get_digest(client_state) },

@@ -15,12 +15,12 @@
 //   cursors.changed(patches)
 //   cursors.destroy()
 //
-async function cursor_client(url, { peer, get_text, on_change }) {
+async function cursor_client(url, { peer, get_text, on_change, headers: custom_headers }) {
     // --- feature detection: HEAD probe ---
     try {
         var head_res = await braid_fetch(url, {
             method: 'HEAD',
-            headers: { 'Accept': 'application/text-cursors+json' }
+            headers: { ...custom_headers, 'Accept': 'application/text-cursors+json' }
         })
         var ct = head_res.headers.get('content-type') || ''
         if (!ct.includes('application/text-cursors+json')) return null
@@ -124,6 +124,7 @@ async function cursor_client(url, { peer, get_text, on_change }) {
         braid_fetch(url, {
             method: 'PUT',
             headers: {
+                ...custom_headers,
                 'Content-Type': 'application/text-cursors+json',
                 Peer: peer,
                 'Content-Range': 'json [' + JSON.stringify(peer) + ']',
@@ -155,6 +156,7 @@ async function cursor_client(url, { peer, get_text, on_change }) {
         }},
         peer,
         headers: {
+            ...custom_headers,
             Accept: 'application/text-cursors+json',
             Heartbeats: '10',
         },

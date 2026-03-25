@@ -1,7 +1,5 @@
 // cursor-highlights.js — Render colored cursors and selections behind a <textarea>
 //
-// No dependencies. Pure DOM/CSS.
-//
 // Usage:
 //   var hl = textarea_highlights(textarea)
 //   hl.set('peer-1', [{ from: 5, to: 10, color: 'rgba(97,175,239,0.25)' }])
@@ -17,13 +15,13 @@ function textarea_highlights(textarea) {
         style.textContent = `
             .textarea-hl-backdrop {
                 position: absolute;
-                top: 0; left: 0; right: 0; bottom: 0;
                 white-space: pre-wrap;
                 word-wrap: break-word;
                 overflow-y: auto;
                 pointer-events: none;
                 color: transparent;
                 z-index: 1;
+                box-sizing: border-box;
                 scrollbar-width: none;
                 -ms-overflow-style: none;
             }
@@ -35,45 +33,34 @@ function textarea_highlights(textarea) {
                 box-decoration-break: clone;
             }
             .textarea-hl-backdrop .cursor {
-                position: relative;
-                display: inline-block;
-                width: 0;
-                height: 1em;
-                z-index: 10;
-            }
-            .textarea-hl-backdrop .cursor::before {
-                content: '';
-                position: absolute;
-                left: -1px;
-                top: 0;
-                bottom: 0;
-                width: 2px;
-                background-color: var(--cursor-color, #ff5722);
-                z-index: 10;
+                border-left: 2px solid var(--cursor-color, #ff5722);
+                margin-left: -1px;
+                margin-right: -1px;
             }
         `
         document.head.appendChild(style)
     }
 
-    // Ensure textarea is wrapped in a position:relative container
-    var wrap = textarea.parentElement
-    if (getComputedStyle(wrap).position === 'static')
-        wrap.style.position = 'relative'
+    // Save original styles so we can restore on destroy
+    var original_bg = textarea.style.backgroundColor
+    var original_position = textarea.style.position
+    var original_zIndex = textarea.style.zIndex
 
-    // Move textarea's background to the wrapper so backdrops show through
+    // Read the textarea's background color before we make it transparent.
+    // Walk up the DOM if the textarea itself is transparent.
     var bg = getComputedStyle(textarea).backgroundColor
-    if (!wrap.style.backgroundColor) {
-        if (!bg || bg === 'rgba(0, 0, 0, 0)') {
-            // Walk up the DOM to find the effective background
-            var el = wrap
-            while (el) {
-                var elBg = getComputedStyle(el).backgroundColor
-                if (elBg && elBg !== 'rgba(0, 0, 0, 0)') { bg = elBg; break }
-                el = el.parentElement
-            }
+    if (!bg || bg === 'rgba(0, 0, 0, 0)') {
+        var el = textarea.parentElement
+        while (el) {
+            var elBg = getComputedStyle(el).backgroundColor
+            if (elBg && elBg !== 'rgba(0, 0, 0, 0)') { bg = elBg; break }
+            el = el.parentElement
         }
-        wrap.style.backgroundColor = bg || 'white'
     }
+    bg = bg || 'white'
+
+    // Make textarea transparent so backdrops show through.
+    // position:relative + z-index puts the textarea text above the backdrops.
     textarea.style.backgroundColor = 'transparent'
     textarea.style.position = 'relative'
     textarea.style.zIndex = '2'
@@ -95,7 +82,6 @@ function textarea_highlights(textarea) {
     var bg_height = test_span.getBoundingClientRect().height
     document.body.removeChild(test_div)
     var sel_pad = (line_height - bg_height) / 2
-    wrap.style.setProperty('--sel-pad', sel_pad + 'px')
 
     // State
     var layer_data = {}     // layer_id -> [{ from, to, color }]
@@ -110,16 +96,29 @@ function textarea_highlights(textarea) {
     }
     textarea.addEventListener('scroll', sync_scroll)
 
+    // Re-render when textarea resizes (user drag, window resize, CSS change)
+    var resize_observer = new ResizeObserver(do_render)
+    resize_observer.observe(textarea)
+
     // Build a backdrop style string matching the textarea's font/padding/border
     function backdrop_style() {
         var cs = getComputedStyle(textarea)
+        var bw = parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)
+        var bh = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+        // Use clientWidth/clientHeight (content + padding, excludes scrollbar)
+        // plus border, so the backdrop's content area matches the textarea's
+        // even when the textarea reserves space for a scrollbar.
         return 'font-family:' + cs.fontFamily + ';' +
             'font-size:' + cs.fontSize + ';' +
             'line-height:' + cs.lineHeight + ';' +
             'padding:' + cs.paddingTop + ' ' + cs.paddingRight + ' ' +
                 cs.paddingBottom + ' ' + cs.paddingLeft + ';' +
             'border:' + cs.borderTopWidth + ' solid transparent;' +
-            'border-radius:' + cs.borderRadius + ';'
+            'border-radius:' + cs.borderRadius + ';' +
+            'width:' + (textarea.clientWidth + bw) + 'px;' +
+            'height:' + (textarea.clientHeight + bh) + 'px;' +
+            '--sel-pad:' + sel_pad + 'px;' +
+            'background-color:' + bg + ';'
     }
 
     function escape_html(text) {
@@ -192,13 +191,17 @@ function textarea_highlights(textarea) {
             }))
 
             if (!layer_divs[id]) {
+                // Insert backdrop as previous sibling of textarea.
+                // position:absolute takes it out of flow so it doesn't
+                // affect layout. Without top/left set, it naturally sits
+                // at the textarea's position.
                 var div = document.createElement('div')
                 div.className = 'textarea-hl-backdrop'
-                wrap.insertBefore(div, textarea)
+                textarea.parentElement.insertBefore(div, textarea)
                 layer_divs[id] = div
             }
 
-            // Font/padding/border are set inline to match textarea;
+            // Font/padding/border/size are set inline to match textarea;
             // positioning/pointer-events/etc come from the CSS class.
             layer_divs[id].style.cssText = style_str
 
@@ -262,9 +265,14 @@ function textarea_highlights(textarea) {
             textarea.removeEventListener('scroll', sync_scroll)
             textarea.removeEventListener('blur', on_blur)
             textarea.removeEventListener('focus', on_focus)
+            resize_observer.disconnect()
             for (var div of Object.values(layer_divs)) div.remove()
             layer_data = {}
             layer_divs = {}
+            // Restore textarea styles
+            textarea.style.backgroundColor = original_bg
+            textarea.style.position = original_position
+            textarea.style.zIndex = original_zIndex
         }
     }
 }
@@ -297,7 +305,7 @@ function peer_bg_color(peer_id) {
 //   cursors.on_edit(patches)      // call after local edit; patches optional
 //   cursors.destroy()
 //
-function cursor_highlights(textarea, url) {
+function cursor_highlights(textarea, url, options) {
     var peer = Math.random().toString(36).slice(2)
     var hl = textarea_highlights(textarea)
     var applying_remote = false
@@ -307,6 +315,7 @@ function cursor_highlights(textarea, url) {
 
     cursor_client(url, {
         peer,
+        headers: options?.headers,
         get_text: () => textarea.value,
         on_change: (sels) => {
             for (var [id, ranges] of Object.entries(sels)) {
@@ -324,11 +333,12 @@ function cursor_highlights(textarea, url) {
         if (destroyed) client.destroy()
     })
 
-    document.addEventListener('selectionchange', function() {
+    function on_selectionchange() {
         if (applying_remote) return
         if (document.activeElement !== textarea) return
         if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
-    })
+    }
+    document.addEventListener('selectionchange', on_selectionchange)
 
     return {
         online: function() {
@@ -356,6 +366,7 @@ function cursor_highlights(textarea, url) {
 
         destroy: function() {
             destroyed = true
+            document.removeEventListener('selectionchange', on_selectionchange)
             if (client) client.destroy()
             hl.destroy()
         }
