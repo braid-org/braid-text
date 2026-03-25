@@ -229,6 +229,13 @@ async function cursor_client(url, { peer, get_text, on_change, headers: custom_h
             last_sent = key
             last_ranges = ranges
 
+            // Report local cursor immediately for rendering
+            if (on_change) {
+                var update = {}
+                update[peer] = last_ranges
+                on_change(update)
+            }
+
             if (!online) return
 
             // Debounce 50ms
@@ -236,29 +243,34 @@ async function cursor_client(url, { peer, get_text, on_change, headers: custom_h
             send_timer = setTimeout(function() { do_put(ranges) }, 50)
         },
 
-        // Transform all stored remote cursor positions through text edits.
+        // Transform all cursor positions (remote and local) through text edits.
         // patches: [{ range: [start, end], content: string }] in JS string indices.
         changed: function(patches) {
-            var any_changed = false
-            for (var id of Object.keys(selections)) {
-                selections[id] = selections[id].map(function(sel) {
-                    var from = sel.from
-                    var to = sel.to
+            function transform_ranges(ranges) {
+                return ranges.map(function(sel) {
+                    var from = sel.from, to = sel.to
                     for (var p of patches) {
-                        var del_len = p.range[1] - p.range[0]
-                        var ins_len = p.content.length
-                        from = transform_pos(from, p.range[0], del_len, ins_len)
-                        to = transform_pos(to, p.range[0], del_len, ins_len)
+                        var dl = p.range[1] - p.range[0], il = p.content.length
+                        from = transform_pos(from, p.range[0], dl, il)
+                        to = transform_pos(to, p.range[0], dl, il)
                     }
                     return { from, to }
                 })
-                any_changed = true
             }
-            if (any_changed && on_change) {
-                // Report all current selections
+
+            for (var id of Object.keys(selections))
+                selections[id] = transform_ranges(selections[id])
+
+            if (last_ranges)
+                last_ranges = transform_ranges(last_ranges)
+
+            // Report all cursors including local
+            if (on_change) {
                 var all = {}
                 for (var id of Object.keys(selections))
                     all[id] = selections[id]
+                if (last_ranges)
+                    all[peer] = last_ranges
                 on_change(all)
             }
         },
@@ -276,5 +288,122 @@ async function cursor_client(url, { peer, get_text, on_change, headers: custom_h
             if (put_ac) put_ac.abort()
             if (send_timer) clearTimeout(send_timer)
         },
+    }
+}
+
+// --- Color helpers ---
+
+var _cursor_colors = ["#e06c75", "#61afef", "#98c379", "#c678dd", "#e5c07b", "#56b6c2"]
+
+function peer_color(peer_id) {
+    var hash = 0
+    for (var i = 0; i < peer_id.length; i++)
+        hash = ((hash << 5) - hash + peer_id.charCodeAt(i)) | 0
+    return _cursor_colors[Math.abs(hash) % _cursor_colors.length]
+}
+
+function peer_bg_color(peer_id) {
+    var c = peer_color(peer_id)
+    var r = parseInt(c.slice(1, 3), 16)
+    var g = parseInt(c.slice(3, 5), 16)
+    var b = parseInt(c.slice(5, 7), 16)
+    var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    return `rgba(${r}, ${g}, ${b}, ${dark ? 0.4 : 0.25})`
+}
+
+// --- High-level wrapper: textarea + cursor sync ---
+//
+// Requires textarea_highlights (from textarea-highlights.js)
+//
+// Usage:
+//   var cursors = cursor_highlights(textarea, url, { headers: {...} })
+//   cursors.on_patches(patches)   // call after applying remote patches
+//   cursors.on_edit(patches)      // call after local edit; patches optional
+//   cursors.destroy()
+//
+function cursor_highlights(textarea, url, options) {
+    var peer = Math.random().toString(36).slice(2)
+    var hl = textarea_highlights(textarea)
+    var applying_remote = false
+    var client = null
+    var online = false
+    var destroyed = false
+
+    cursor_client(url, {
+        peer,
+        headers: options?.headers,
+        get_text: () => textarea.value,
+        on_change: function(sels) {
+            for (var [id, ranges] of Object.entries(sels)) {
+                // Skip own cursor when textarea is focused (browser draws it)
+                if (id === peer && document.activeElement === textarea) {
+                    hl.remove(id)
+                    continue
+                }
+                if (!ranges.length) { hl.remove(id); continue }
+                hl.set(id, ranges.map(r => ({
+                    from: r.from, to: r.to,
+                    color: r.from === r.to ? peer_color(id) : peer_bg_color(id)
+                })))
+            }
+            hl.render()
+        }
+    }).then(function(c) {
+        client = c
+        if (online) client.online()
+        if (destroyed) client.destroy()
+    })
+
+    function on_selectionchange() {
+        if (applying_remote) return
+        if (document.activeElement !== textarea) return
+        if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
+    }
+    document.addEventListener('selectionchange', on_selectionchange)
+
+    // Show own cursor when blurred, hide when focused
+    function on_blur() {
+        if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
+    }
+    function on_focus() {
+        hl.remove(peer)
+        hl.render()
+    }
+    textarea.addEventListener('blur', on_blur)
+    textarea.addEventListener('focus', on_focus)
+
+    return {
+        online: function() {
+            online = true
+            if (client) client.online()
+        },
+        offline: function() {
+            online = false
+            if (client) client.offline()
+        },
+
+        on_patches: function(patches) {
+            applying_remote = true
+            // cursor-sync transforms all cursors (remote + local) uniformly
+            if (client) client.changed(patches)
+            hl.render()
+            setTimeout(() => { applying_remote = false }, 0)
+        },
+
+        on_edit: function(patches) {
+            if (client) {
+                if (patches) client.changed(patches)
+                client.set(textarea.selectionStart, textarea.selectionEnd)
+            }
+        },
+
+        destroy: function() {
+            destroyed = true
+            document.removeEventListener('selectionchange', on_selectionchange)
+            textarea.removeEventListener('blur', on_blur)
+            textarea.removeEventListener('focus', on_focus)
+            if (client) client.destroy()
+            hl.destroy()
+        }
     }
 }

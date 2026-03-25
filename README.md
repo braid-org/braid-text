@@ -188,7 +188,7 @@ This will render each peer's cursor and selection with colored highlights.  Just
 
 ```html
 <!-- 1. Include these additional script tags -->
-<script src="https://unpkg.com/braid-text@~0.3/client/cursor-highlights.js"></script>
+<script src="https://unpkg.com/braid-text@~0.3/client/textarea-highlights.js"></script>
 <script src="https://unpkg.com/braid-text@~0.3/client/cursor-sync.js"></script>
 
 <!-- 2. Add two lines to your simpleton_client() call -->

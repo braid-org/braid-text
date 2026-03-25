@@ -1,6 +1,10 @@
-// textarea-highlights.js — Render colored cursors and selections behind a <textarea>
+// textarea-highlights.js — Render colored highlights behind a <textarea>
 //
 // No dependencies. Pure DOM/CSS.
+//
+// Renders colored ranges (selections) and zero-width points (cursors) as
+// overlays behind a textarea's text. Works with any textarea regardless
+// of its parent's CSS — backdrops are positioned as absolute siblings.
 //
 // Usage:
 //   var hl = textarea_highlights(textarea)
@@ -17,13 +21,13 @@ function textarea_highlights(textarea) {
         style.textContent = `
             .textarea-hl-backdrop {
                 position: absolute;
-                top: 0; left: 0; right: 0; bottom: 0;
                 white-space: pre-wrap;
                 word-wrap: break-word;
                 overflow-y: auto;
                 pointer-events: none;
                 color: transparent;
                 z-index: 1;
+                box-sizing: border-box;
                 scrollbar-width: none;
                 -ms-overflow-style: none;
             }
@@ -35,32 +39,34 @@ function textarea_highlights(textarea) {
                 box-decoration-break: clone;
             }
             .textarea-hl-backdrop .cursor {
-                position: relative;
-                display: inline-block;
-                width: 0;
-                height: 1em;
-                z-index: 10;
-            }
-            .textarea-hl-backdrop .cursor::before {
-                content: '';
-                position: absolute;
-                left: -1px;
-                top: 0;
-                bottom: 0;
-                width: 2px;
-                background-color: var(--cursor-color, #ff5722);
-                z-index: 10;
+                border-left: 2px solid var(--cursor-color, #ff5722);
+                margin-left: -1px;
+                margin-right: -1px;
             }
         `
         document.head.appendChild(style)
     }
 
-    // Ensure textarea is wrapped in a position:relative container
-    var wrap = textarea.parentElement
-    if (getComputedStyle(wrap).position === 'static')
-        wrap.style.position = 'relative'
+    // Save original styles so we can restore on destroy
+    var original_bg = textarea.style.backgroundColor
+    var original_position = textarea.style.position
+    var original_zIndex = textarea.style.zIndex
 
-    // Make textarea transparent so backdrops show through
+    // Read the textarea's background color before we make it transparent.
+    // Walk up the DOM if the textarea itself is transparent.
+    var bg = getComputedStyle(textarea).backgroundColor
+    if (!bg || bg === 'rgba(0, 0, 0, 0)') {
+        var el = textarea.parentElement
+        while (el) {
+            var elBg = getComputedStyle(el).backgroundColor
+            if (elBg && elBg !== 'rgba(0, 0, 0, 0)') { bg = elBg; break }
+            el = el.parentElement
+        }
+    }
+    bg = bg || 'white'
+
+    // Make textarea transparent so backdrops show through.
+    // position:relative + z-index puts the textarea text above the backdrops.
     textarea.style.backgroundColor = 'transparent'
     textarea.style.position = 'relative'
     textarea.style.zIndex = '2'
@@ -82,7 +88,6 @@ function textarea_highlights(textarea) {
     var bg_height = test_span.getBoundingClientRect().height
     document.body.removeChild(test_div)
     var sel_pad = (line_height - bg_height) / 2
-    wrap.style.setProperty('--sel-pad', sel_pad + 'px')
 
     // State
     var layer_data = {}     // layer_id -> [{ from, to, color }]
@@ -97,16 +102,29 @@ function textarea_highlights(textarea) {
     }
     textarea.addEventListener('scroll', sync_scroll)
 
+    // Re-render when textarea resizes (user drag, window resize, CSS change)
+    var resize_observer = new ResizeObserver(do_render)
+    resize_observer.observe(textarea)
+
     // Build a backdrop style string matching the textarea's font/padding/border
     function backdrop_style() {
         var cs = getComputedStyle(textarea)
+        var bw = parseFloat(cs.borderLeftWidth) + parseFloat(cs.borderRightWidth)
+        var bh = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+        // Use clientWidth/clientHeight (content + padding, excludes scrollbar)
+        // plus border, so the backdrop's content area matches the textarea's
+        // even when the textarea reserves space for a scrollbar.
         return 'font-family:' + cs.fontFamily + ';' +
             'font-size:' + cs.fontSize + ';' +
             'line-height:' + cs.lineHeight + ';' +
             'padding:' + cs.paddingTop + ' ' + cs.paddingRight + ' ' +
                 cs.paddingBottom + ' ' + cs.paddingLeft + ';' +
             'border:' + cs.borderTopWidth + ' solid transparent;' +
-            'border-radius:' + cs.borderRadius + ';'
+            'border-radius:' + cs.borderRadius + ';' +
+            'width:' + (textarea.clientWidth + bw) + 'px;' +
+            'height:' + (textarea.clientHeight + bh) + 'px;' +
+            '--sel-pad:' + sel_pad + 'px;' +
+            'background-color:' + bg + ';'
     }
 
     function escape_html(text) {
@@ -155,6 +173,50 @@ function textarea_highlights(textarea) {
         return result
     }
 
+    // --- render implementation ---
+
+    function do_render() {
+        var text = textarea.value
+        var len = text.length
+        var style_str = backdrop_style()
+
+        // Remove divs for layers that no longer exist
+        for (var id of Object.keys(layer_divs)) {
+            if (!layer_data[id]) {
+                layer_divs[id].remove()
+                delete layer_divs[id]
+            }
+        }
+
+        // Render each layer
+        for (var id of Object.keys(layer_data)) {
+            var highlights = layer_data[id].map(h => ({
+                from: Math.min(h.from, len),
+                to: Math.min(h.to, len),
+                color: h.color
+            }))
+
+            if (!layer_divs[id]) {
+                // Insert backdrop as previous sibling of textarea.
+                // position:absolute takes it out of flow so it doesn't
+                // affect layout. Without top/left set, it naturally sits
+                // at the textarea's position.
+                var div = document.createElement('div')
+                div.className = 'textarea-hl-backdrop'
+                textarea.parentElement.insertBefore(div, textarea)
+                layer_divs[id] = div
+            }
+
+            // Font/padding/border/size are set inline to match textarea;
+            // positioning/pointer-events/etc come from the CSS class.
+            layer_divs[id].style.cssText = style_str
+
+            layer_divs[id].innerHTML = build_html(text, highlights)
+            layer_divs[id].scrollTop = textarea.scrollTop
+            layer_divs[id].scrollLeft = textarea.scrollLeft
+        }
+    }
+
     return {
         set: function(layer_id, highlights) {
             layer_data[layer_id] = highlights
@@ -168,53 +230,17 @@ function textarea_highlights(textarea) {
             }
         },
 
-        render: function() {
-            var text = textarea.value
-            var len = text.length
-            var style_str = backdrop_style()
-
-            // Remove divs for layers that no longer exist
-            for (var id of Object.keys(layer_divs)) {
-                if (!layer_data[id]) {
-                    layer_divs[id].remove()
-                    delete layer_divs[id]
-                }
-            }
-
-            // Render each layer
-            for (var id of Object.keys(layer_data)) {
-                var highlights = layer_data[id].map(h => ({
-                    from: Math.min(h.from, len),
-                    to: Math.min(h.to, len),
-                    color: h.color
-                }))
-
-                if (!layer_divs[id]) {
-                    var div = document.createElement('div')
-                    div.className = 'textarea-hl-backdrop'
-                    wrap.insertBefore(div, textarea)
-                    layer_divs[id] = div
-                }
-
-                // Font/padding/border are set inline to match textarea;
-                // positioning/pointer-events/etc come from the CSS class.
-                layer_divs[id].style.cssText = style_str
-
-                layer_divs[id].innerHTML = build_html(text, highlights)
-                layer_divs[id].scrollTop = textarea.scrollTop
-                layer_divs[id].scrollLeft = textarea.scrollLeft
-            }
-        },
-
-        layers: function() {
-            return Object.keys(layer_data)
-        },
+        render: do_render,
 
         destroy: function() {
             textarea.removeEventListener('scroll', sync_scroll)
+            resize_observer.disconnect()
             for (var div of Object.values(layer_divs)) div.remove()
             layer_data = {}
             layer_divs = {}
+            textarea.style.backgroundColor = original_bg
+            textarea.style.position = original_position
+            textarea.style.zIndex = original_zIndex
         }
     }
 }
