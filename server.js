@@ -578,7 +578,9 @@ function create_braid_text() {
             
                 res.setHeader("Version", get_current_version())
 
-                options.put_cb(options.key, resource.val, {old_val, patches: put_patches, version: resource.version, parents: old_version})
+                options.put_cb(options.key, resource.val,
+                               {old_val, patches: put_patches,
+                                version: resource.version, parents: old_version})
             } catch (e) {
                 console.log(`${req.method} ERROR: ${e.stack}`)
                 return done_my_turn(500, "The server failed to apply this version. The error generated was: " + e)
