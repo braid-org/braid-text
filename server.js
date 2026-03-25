@@ -3116,12 +3116,17 @@ async function handle_cursors(resource, req, res) {
             res.sendUpdate({ body: JSON.stringify(cursors.snapshot()) })
         }
     } else if (req.method === 'PUT' || req.method === 'POST' || req.method === 'PATCH') {
-        var raw_body = await new Promise((resolve, reject) => {
-            var chunks = []
-            req.on('data', chunk => chunks.push(chunk))
-            req.on('end', () => resolve(Buffer.concat(chunks).toString()))
-            req.on('error', reject)
-        })
+        var raw_body
+        if (req.already_buffered_body != null) {
+            raw_body = req.already_buffered_body.toString()
+        } else {
+            raw_body = await new Promise((resolve, reject) => {
+                var chunks = []
+                req.on('data', chunk => chunks.push(chunk))
+                req.on('end', () => resolve(Buffer.concat(chunks).toString()))
+                req.on('error', reject)
+            })
+        }
         var range = req.headers['content-range']
         if (!range || !range.startsWith('json ')) {
             res.writeHead(400)
