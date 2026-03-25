@@ -1,1 +1,0 @@
-client/simpleton-sync.js
