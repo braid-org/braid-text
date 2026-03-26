@@ -121,7 +121,7 @@ async function test_throttle_staleness() {
     await wait_for(() => a.online)
 
     const resource = await braid_text.get_resource(key)
-    delay_peer = [...resource.simpleton_clients][0].peer
+    delay_peer = [...resource.dt.simpleton_clients][0].peer
 
     const b = make_client(url, 'B')
     await wait_for(() => b.online)

@@ -562,7 +562,7 @@ runTest(
             body: `void (async () => {
                 var resource = await braid_text.get_resource('/${key}')
                 resource.meta = { test_meta_info: 42 }
-                resource.change_meta()
+                resource.save_meta()
 
                 await new Promise(done => setTimeout(done, 200))
 
@@ -2522,8 +2522,8 @@ runTest(
                     })
 
                     var encoded = bt.encode_filename('/test')
-                    var db_file = test_db + '/' + encoded + '.1'
-                    var intent_file = test_db + '/.wal-intent/' + encoded + '.1'
+                    var db_file = test_db + '/' + encoded + '.dt.1'
+                    var intent_file = test_db + '/wal-intent/' + encoded + '.dt.1'
 
                     // Read the db file
                     var data = await fs.promises.readFile(db_file)
@@ -2563,7 +2563,7 @@ runTest(
 
                     // Get the resource - this should trigger wal-intent replay
                     var resource = await bt2.get_resource('/test')
-                    var text = resource.doc.get()
+                    var text = resource.dt.doc.get()
 
                     // Verify intent file was cleaned up
                     var intent_exists = true
@@ -2625,8 +2625,8 @@ runTest(
                     })
 
                     var encoded = bt.encode_filename('/test')
-                    var db_file = test_db + '/' + encoded + '.1'
-                    var intent_file = test_db + '/.wal-intent/' + encoded + '.1'
+                    var db_file = test_db + '/' + encoded + '.dt.1'
+                    var intent_file = test_db + '/wal-intent/' + encoded + '.dt.1'
 
                     // Read the db file
                     var data = await fs.promises.readFile(db_file)
@@ -2755,7 +2755,7 @@ runTest(
                     patches: [{unit: 'text', range: '[0:0]', content: 'abcde'}]
                 })
 
-                res.end(resource.doc.get() + ':' + result.change_count)
+                res.end(resource.dt.doc.get() + ':' + result.change_count)
             })()`
         })
         if (!r.ok) return 'eval failed: ' + r.status
@@ -2835,7 +2835,7 @@ runTest(
                         patches: [{unit: 'text', range: '[-1:-0]', content: ''}]
                     })
 
-                    res.end(resource.doc.get())
+                    res.end(resource.dt.doc.get())
                 } catch (e) {
                     res.end('error: ' + e.message)
                 }
@@ -2931,6 +2931,7 @@ runTest(
             method: 'PUT',
             body: `void (async () => {
                 var resource = await braid_text.get_resource('/${key}')
+                    await braid_text.ensure_dt_exists(resource)
 
                 try {
                     // Add a simpleton client with a specific peer
@@ -2940,7 +2941,7 @@ runTest(
                         my_last_sent_version: [],
                         my_last_seen_version: null
                     }
-                    resource.simpleton_clients.add(client)
+                    resource.dt.simpleton_clients.add(client)
 
                     // Do a put with the same peer and merge_type: 'simpleton'
                     await braid_text.put(resource, {
@@ -2991,7 +2992,7 @@ runTest(
                         my_last_sent_version: ['a-2'],  // client thinks it has a-2
                         my_last_seen_version: null
                     }
-                    resource.simpleton_clients.add(client)
+                    resource.dt.simpleton_clients.add(client)
 
                     // Do a put with parents: [] (empty/root), which doesn't match my_last_sent_version
                     // This should trigger P60 (version mismatch -> set_timeout)
@@ -3042,7 +3043,7 @@ runTest(
                         my_last_sent_version: ['a-2'],
                         my_timeout: setTimeout(() => {}, 10000)  // existing timeout
                     }
-                    resource.simpleton_clients.add(client)
+                    resource.dt.simpleton_clients.add(client)
 
                     var old_timeout = client.my_timeout
 
@@ -3098,7 +3099,7 @@ runTest(
                         my_last_sent_version: ['a-2'],
                         my_timeout: setTimeout(() => {}, 10000)  // has existing timeout
                     }
-                    resource.simpleton_clients.add(client)
+                    resource.dt.simpleton_clients.add(client)
 
                     // Do a put with merge_type: 'dt'
                     // This should hit P69 and skip the client (not send update)
@@ -3147,7 +3148,7 @@ runTest(
                         my_subscribe: (update) => { callback_result = 'called' },
                         my_last_sent_version: ['a-2']
                     }
-                    resource.simpleton_clients.add(client)
+                    resource.dt.simpleton_clients.add(client)
 
                     // Trigger a timeout by putting with mismatched parents
                     await braid_text.put(resource, {
@@ -3272,10 +3273,11 @@ runTest(
             method: 'PUT',
             body: `void (async () => {
                 var resource = await braid_text.get_resource('/${key}')
+                    await braid_text.ensure_dt_exists(resource)
 
                 // Add a simpleton client (non-dt subscriber)
                 var received_update = null
-                resource.simpleton_clients.add({
+                resource.dt.simpleton_clients.add({
                     my_subscribe: (update) => {
                         received_update = update
                     },

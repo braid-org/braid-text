@@ -291,7 +291,7 @@ async function main() {
             doc.free()
             middle_doc.free()
             for (let p of Object.values(braid_text.cache))
-                (await p).doc.free()
+                (await p).dt.free()
             braid_text.cache = {}
         } catch (e) {
             if (console.log == og_log) throw e

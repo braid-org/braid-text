@@ -3,6 +3,9 @@ let { Doc, OpLog, Branch } = require("@braid.org/diamond-types-node")
 let {http_server: braidify, fetch: braid_fetch} = require("braid-http")
 let fs = require("fs")
 
+let Y = null
+try { Y = require('yjs') } catch(e) {}
+
 
 function create_braid_text() {
     let braid_text = {
@@ -10,7 +13,13 @@ function create_braid_text() {
         db_folder: './braid-text-db',
         length_cache_size: 10,
         meta_file_save_period_ms: 1000,
+        debug_sync_checks: false,
         cache: {}
+    }
+
+    function require_yjs() {
+        if (!Y) throw new Error('yjs is not installed. Install it with: npm install yjs')
+        return Y
     }
 
     let waiting_puts = 0
@@ -53,10 +62,11 @@ function create_braid_text() {
         }
 
         var resource = (typeof a == 'string') ? await get_resource(a) : a
+        await ensure_dt_exists(resource)
 
         if (!resource.meta.fork_point && options.fork_point_hint) {
             resource.meta.fork_point = options.fork_point_hint
-            resource.change_meta()
+            resource.save_meta()
         }
 
         function extend_frontier(frontier, version, parents) {
@@ -78,7 +88,7 @@ function create_braid_text() {
                 frontier = []
                 var shadow = new Set()
 
-                var bytes = resource.doc.toBytes()
+                var bytes = resource.dt.doc.toBytes()
                 var [_, events, parentss] = braid_text.dt_parse([...bytes])
                 for (var i = events.length - 1; i >= 0 && looking_for.size; i--) {
                     var e = events[i].join('-')
@@ -139,7 +149,7 @@ function create_braid_text() {
                     resource.meta.fork_point =
                         extend_frontier(resource.meta.fork_point,
                             update.version, update.parents)
-                    resource.change_meta()
+                    resource.save_meta()
                 }
 
                 // see if remote has the fork point
@@ -148,7 +158,7 @@ function create_braid_text() {
                     if (signal.aborted) return
 
                     resource.meta.fork_point = null
-                    resource.change_meta()
+                    resource.save_meta()
                 }
                 if (signal.aborted) return
 
@@ -158,7 +168,7 @@ function create_braid_text() {
                     // DEBUGGING HACK ID: L04LPFHQ1M -- INVESTIGATING DISCONNECTS
                     options.do_investigating_disconnects_log_L04LPFHQ1M?.(a, 'braid-text fork-point binary search')
 
-                    var bytes = resource.doc.toBytes()
+                    var bytes = resource.dt.doc.toBytes()
                     var [_, events, __] = braid_text.dt_parse([...bytes])
                     events = events.map(x => x.join('-'))
 
@@ -413,7 +423,7 @@ function create_braid_text() {
             var unknowns = []
             for (var event of (req.version || []).concat(req.parents || [])) {
                 var [actor, seq] = decode_version(event)
-                if (!resource.actor_seqs[actor]?.has(seq))
+                if (!resource.dt?.known_versions[actor]?.has(seq))
                     unknowns.push(event)
             }
             if (unknowns.length)
@@ -494,8 +504,8 @@ function create_braid_text() {
 
                 res.startSubscription({
                     onClose: () => {
-                        if (merge_type === "dt") resource.clients.delete(options)
-                        else resource.simpleton_clients.delete(options)
+                        if (merge_type === "dt") resource.dt.clients.delete(options)
+                        else resource.dt.simpleton_clients.delete(options)
                     }
                 })
 
@@ -532,10 +542,11 @@ function create_braid_text() {
                 }
 
                 if (req.parents) {
+                    await ensure_dt_exists(resource)
                     await wait_for_events(
                         options.key,
                         req.parents,
-                        resource.actor_seqs,
+                        resource.dt.known_versions,
                         // approximation of memory usage for this update
                         body != null ? body.length :
                             patches.reduce((a, b) => a + b.range.length + b.content.length, 0),
@@ -546,7 +557,7 @@ function create_braid_text() {
                     var unknowns = []
                     for (var event of req.parents) {
                         var [actor, seq] = decode_version(event)
-                        if (!resource.actor_seqs[actor]?.has(seq)) unknowns.push(event)
+                        if (!resource.dt.known_versions[actor]?.has(seq)) unknowns.push(event)
                     }
                     if (unknowns.length)
                         return done_my_turn(309, '', "Version Unknown Here", {
@@ -557,8 +568,13 @@ function create_braid_text() {
 
                 var old_val = resource.val
                 var old_version = resource.version
-                var put_patches = patches ? patches.map(p => ({unit: p.unit, range: p.range, content: p.content})) : null
-                var {change_count} = await braid_text.put(resource, { peer, version: req.version, parents: req.parents, patches, body, merge_type })
+                var put_patches = patches?.map(p => ({unit: p.unit,
+                                                      range: p.range,
+                                                      content: p.content})) || null
+                var {change_count} = await braid_text.put(
+                    resource,
+                    { peer, version: req.version, parents: req.parents, patches, body, merge_type }
+                )
 
                 // if Repr-Digest is set,
                 // and the request version is also our new current version,
@@ -676,10 +692,10 @@ function create_braid_text() {
                 var bytes = null
                 if (op_v || options.parents) {
                     if (op_v) {
-                        var doc = dt_get(resource.doc, op_v)
+                        var doc = dt_get(resource.dt.doc, op_v)
                         bytes = doc.toBytes()
                     } else {
-                        bytes = resource.doc.toBytes()
+                        bytes = resource.dt.doc.toBytes()
                         var doc = Doc.fromBytes(bytes)
                     }
                     if (options.parents) {
@@ -687,16 +703,18 @@ function create_braid_text() {
                             dt_get_local_version(bytes, options.parents))
                     }
                     doc.free()
-                } else bytes = resource.doc.toBytes()
+                } else bytes = resource.dt.doc.toBytes()
                 return { body: bytes }
             }
 
-            return options.version || options.parents ? {
-                    version: options.version || options.parents,
-                    body: dt_get_string(resource.doc, options.version || options.parents)
-                } : {
-                    version,
-                    body: resource.doc.get()
+            if (options.version || options.parents) {
+                    await ensure_dt_exists(resource)
+                    return {
+                        version: options.version || options.parents,
+                        body: dt_get_string(resource.dt.doc, options.version || options.parents)
+                    }
+                } else {
+                    return { version, body: resource.val }
                 }
         } else {
             options.my_subscribe_chain = Promise.resolve()
@@ -706,27 +724,32 @@ function create_braid_text() {
                     options.subscribe(x))
 
             if (options.merge_type != "dt") {
+                // Simpleton clients require DT
+                await ensure_dt_exists(resource)
+
                 let x = { version }
 
                 if (!options.parents && !options.version) {
                     x.parents = []
-                    x.body = resource.doc.get()
+                    x.body = resource.val
                     options.my_subscribe(x)
                 } else {
                     x.parents = options.version ? options.version : options.parents
 
                     // only send them a version from these parents if we have these parents (otherwise we'll assume these parents are more recent, probably versions they created but haven't sent us yet, and we'll send them appropriate rebased updates when they send us these versions)
-                    let local_version = OpLog_remote_to_local(resource.doc, x.parents)
+                    let local_version = OpLog_remote_to_local(resource.dt.doc, x.parents)
                     if (local_version) {
-                        x.patches = get_xf_patches(resource.doc, local_version)
+                        x.patches = get_xf_patches(resource.dt.doc, local_version)
                         options.my_subscribe(x)
                     }
                 }
 
-                resource.simpleton_clients.add(options)
+                resource.dt.simpleton_clients.add(options)
                 options.signal?.addEventListener('abort', () =>
-                    resource.simpleton_clients.delete(options))
+                    resource.dt.simpleton_clients.delete(options))
             } else {
+                // DT merge-type clients require DT
+                await ensure_dt_exists(resource)
 
                 if (options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1].split(',').map(x=>x.trim()).includes('dt')) {
                     // optimization: if client wants past current version,
@@ -734,7 +757,7 @@ function create_braid_text() {
                     if (options.parents && v_eq(options.parents, version)) {
                         options.my_subscribe({ encoding: 'dt', body: new Doc().toBytes() })
                     } else {
-                        var bytes = resource.doc.toBytes()
+                        var bytes = resource.dt.doc.toBytes()
                         if (options.parents) {
                             var doc = Doc.fromBytes(bytes)
                             bytes = doc.getPatchSince(
@@ -752,10 +775,10 @@ function create_braid_text() {
                             body: "",
                         })
 
-                        updates = dt_get_patches(resource.doc)
+                        updates = dt_get_patches(resource.dt.doc)
                     } else {
                         // Then start the subscription from the parents in options
-                        updates = dt_get_patches(resource.doc, options.parents || options.version)
+                        updates = dt_get_patches(resource.dt.doc, options.parents || options.version)
                     }
 
                     for (let u of updates)
@@ -772,9 +795,9 @@ function create_braid_text() {
                     if (updates.length === 0) options.write?.("\r\n")
                 }
 
-                resource.clients.add(options)
+                resource.dt.clients.add(options)
                 options.signal?.addEventListener('abort', () =>
-                    resource.clients.delete(options))
+                    resource.dt.clients.delete(options))
             }
         }
     }
@@ -789,8 +812,8 @@ function create_braid_text() {
         let resource = (typeof key == 'string') ? await get_resource(key) : key
 
         if (options.merge_type != "dt")
-            resource.simpleton_clients.delete(options)
-        else resource.clients.delete(options)
+            resource.dt.simpleton_clients.delete(options)
+        else resource.dt.clients.delete(options)
     }
 
     braid_text.put = async (key, options) => {
@@ -823,7 +846,7 @@ function create_braid_text() {
             // support for json patch puts..
             if (options.patches && options.patches.length &&
                 options.patches.every(x => x.unit === 'json')) {
-                let x = JSON.parse(resource.doc.get())
+                let x = JSON.parse(resource.val)
                 for (let p of options.patches)
                     apply_patch(x, p.range, p.content === '' ? undefined : JSON.parse(p.content))
                 options = { body: JSON.stringify(x, null, 4) }
@@ -832,29 +855,33 @@ function create_braid_text() {
             let { version, parents, patches, body, peer } = options
 
             if (options.transfer_encoding === 'dt') {
-                var start_i = 1 + resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
+                await ensure_dt_exists(resource)
+                var start_i = 1 + resource.dt.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
 
-                resource.doc.mergeBytes(body)
+                resource.dt.doc.mergeBytes(body)
 
-                var end_i = resource.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
+                var end_i = resource.dt.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
                 for (var i = start_i; i <= end_i; i++) {
-                    let v = resource.doc.localToRemoteVersion([i])[0]
-                    if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new braid_text.RangeSet()
-                    resource.actor_seqs[v[0]].add_range(v[1], v[1])
+                    let v = resource.dt.doc.localToRemoteVersion([i])[0]
+                    if (!resource.dt.known_versions[v[0]]) resource.dt.known_versions[v[0]] = new braid_text.RangeSet()
+                    resource.dt.known_versions[v[0]].add_range(v[1], v[1])
                 }
-                resource.val = resource.doc.get()
-                resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
+                resource.val = resource.dt.doc.get()
+                resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
-                await resource.db_delta(body)
+                await resource.dt.save_delta(body)
 
                 // Notify non-simpleton clients with the dt-encoded update
                 var dt_update = { body, encoding: 'dt' }
-                await Promise.all([...resource.clients].
+                await Promise.all([...resource.dt.clients].
                     filter(client => !peer || client.peer !== peer).
                     map(client => client.my_subscribe(dt_update)))
 
                 return { change_count: end_i - start_i + 1 }
             }
+
+            // Text/DT patches require DT
+            await ensure_dt_exists(resource)
 
             if (version && !version.length) {
                 console.log(`warning: ignoring put with empty version`)
@@ -871,15 +898,15 @@ function create_braid_text() {
                 // make sure we have all these parents
                 for (let p of parents) {
                     let P = decode_version(p)
-                    if (!resource.actor_seqs[P[0]]?.has(P[1]))
+                    if (!resource.dt.known_versions[P[0]]?.has(P[1]))
                         throw new Error(`missing parent version: ${p}`)
                 }
             }
 
             if (!parents) parents = resource.version
 
-            let max_pos = resource.length_cache.get('' + parents) ??
-                (v_eq(resource.version, parents) ? resource.doc.len() : dt_len(resource.doc, parents))
+            let max_pos = resource.dt.length_at_version.get('' + parents) ??
+                (v_eq(resource.version, parents) ? resource.dt.doc.len() : dt_len(resource.dt.doc, parents))
 
             if (body != null) {
                 patches = [{
@@ -912,7 +939,7 @@ function create_braid_text() {
             var low_seq = v[1] + 1 - change_count
 
             // make sure we haven't seen this already
-            var intersects_range = resource.actor_seqs[v[0]]?.has(low_seq, v[1])
+            var intersects_range = resource.dt.known_versions[v[0]]?.has(low_seq, v[1])
             if (intersects_range) {
                 // if low_seq is below the range min,
                 // then the intersection has gaps,
@@ -936,8 +963,8 @@ function create_braid_text() {
                 change_count = new_count
                 low_seq = v[1] + 1 - change_count
                 parents = [`${v[0]}-${low_seq - 1}`]
-                max_pos = resource.length_cache.get('' + parents) ??
-                    (v_eq(resource.version, parents) ? resource.doc.len() : dt_len(resource.doc, parents))
+                max_pos = resource.dt.length_at_version.get('' + parents) ??
+                    (v_eq(resource.version, parents) ? resource.dt.doc.len() : dt_len(resource.dt.doc, parents))
                 patches = new_patches
             }
 
@@ -951,12 +978,12 @@ function create_braid_text() {
                 must_be_at_least = p.range[1]
             }
 
-            resource.length_cache.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
+            resource.dt.length_at_version.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
                 a + (b.content_codepoints?.length ?? 0) - (b.range[1] - b.range[0]),
                 max_pos))
 
-            if (!resource.actor_seqs[v[0]]) resource.actor_seqs[v[0]] = new RangeSet()
-            resource.actor_seqs[v[0]].add_range(low_seq, v[1])
+            if (!resource.dt.known_versions[v[0]]) resource.dt.known_versions[v[0]] = new RangeSet()
+            resource.dt.known_versions[v[0]].add_range(low_seq, v[1])
 
             // get the version of the first character-wise edit
             v = `${v[0]}-${low_seq}`
@@ -964,7 +991,7 @@ function create_braid_text() {
             let ps = parents
 
             let version_before = resource.version
-            let v_before = resource.doc.getLocalVersion()
+            let v_before = resource.dt.doc.getLocalVersion()
 
             let bytes = []
 
@@ -989,20 +1016,20 @@ function create_braid_text() {
                 }
             }
 
-            for (let b of bytes) resource.doc.mergeBytes(b)
-            resource.val = resource.doc.get()
-            resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
+            for (let b of bytes) resource.dt.doc.mergeBytes(b)
+            resource.val = resource.dt.doc.get()
+            resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
             // Transform stored cursor positions through the applied patches
-            if (resource.cursor_state) resource.cursor_state.transform(patches)
+            if (resource.cursors) resource.cursors.transform(patches)
 
             var post_commit_updates = []
 
             if (options.merge_type != "dt") {
-                let patches = get_xf_patches(resource.doc, v_before)
+                let patches = get_xf_patches(resource.dt.doc, v_before)
                 if (braid_text.verbose) console.log(JSON.stringify({ patches }))
 
-                for (let client of resource.simpleton_clients) {
+                for (let client of resource.dt.simpleton_clients) {
                     if (peer && client.peer === peer) {
                         client.my_last_seen_version = [version]
                     }
@@ -1011,7 +1038,7 @@ function create_braid_text() {
                         if (client.my_timeout) clearTimeout(client.my_timeout)
                         client.my_timeout = setTimeout(() => {
                             // if the doc has been freed, exit early
-                            if (resource.doc.__wbg_ptr === 0) return
+                            if (resource.dt.doc.__wbg_ptr === 0) return
 
                             let x = {
                                 version: resource.version,
@@ -1019,7 +1046,7 @@ function create_braid_text() {
                             }
                             if (braid_text.verbose) console.log("rebasing after timeout.. ")
                             if (braid_text.verbose) console.log("    client.my_unused_version_count = " + client.my_unused_version_count)
-                            x.patches = get_xf_patches(resource.doc, OpLog_remote_to_local(resource.doc, client.my_last_seen_version))
+                            x.patches = get_xf_patches(resource.dt.doc, OpLog_remote_to_local(resource.dt.doc, client.my_last_seen_version))
 
                             if (braid_text.verbose) console.log(`sending from rebase: ${JSON.stringify(x)}`)
                             client.my_subscribe(x)
@@ -1063,14 +1090,14 @@ function create_braid_text() {
                     post_commit_updates.push([client, x])
                 }
             } else {
-                if (resource.simpleton_clients.size) {
+                if (resource.dt.simpleton_clients.size) {
                     let x = {
                         version: resource.version,
                         parents: version_before,
-                        patches: get_xf_patches(resource.doc, v_before)
+                        patches: get_xf_patches(resource.dt.doc, v_before)
                     }
                     if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
-                    for (let client of resource.simpleton_clients) {
+                    for (let client of resource.dt.simpleton_clients) {
                         if (client.my_timeout) continue
                         post_commit_updates.push([client, x])
                     }
@@ -1086,12 +1113,12 @@ function create_braid_text() {
                     content: p.content
                 })),
             }
-            for (let client of resource.clients) {
+            for (let client of resource.dt.clients) {
                 if (!peer || client.peer !== peer)
                     post_commit_updates.push([client, x])
             }
 
-            await resource.db_delta(resource.doc.getPatchSince(v_before))
+            await resource.dt.save_delta(resource.dt.doc.getPatchSince(v_before))
 
             await Promise.all(post_commit_updates.map(([client, x]) => client.my_subscribe(x)))
 
@@ -1104,7 +1131,7 @@ function create_braid_text() {
             if (braid_text.db_folder) {
                 await db_folder_init()
                 var pages = new Set()
-                for (let x of await require('fs').promises.readdir(braid_text.db_folder)) if (/\.\d+$/.test(x)) pages.add(decode_filename(x.replace(/\.\d+$/, '')))
+                for (let x of await require('fs').promises.readdir(braid_text.db_folder)) if (/\.(dt|yjs)\.\d+$/.test(x)) pages.add(decode_filename(x.replace(/\.(dt|yjs)\.\d+$/, '')))
                 return [...pages.keys()]
             } else return Object.keys(braid_text.cache)
         } catch (e) { return [] }
@@ -1121,39 +1148,93 @@ function create_braid_text() {
         let cache = braid_text.cache
         if (!cache[key]) cache[key] = new Promise(async done => {
             let resource = {key}
-            resource.clients = new Set()
-            resource.simpleton_clients = new Set()
-
-            resource.doc = new Doc("server")
+            resource.dt = null
+            resource.yjs = null
+            resource.val = ""
+            resource.version = []
             resource.meta = {}
+            resource.save_meta = () => {}
+            resource.cursors = null
 
-            let { change, change_meta } = braid_text.db_folder
-                ? await file_sync(key,
-                    (bytes) => resource.doc.mergeBytes(bytes),
-                    () => resource.doc.toBytes(),
+            // Load DT data from disk if it exists
+            var has_dt_files = braid_text.db_folder
+                && (await get_files_for_key(key, 'dt')).length > 0
+            if (has_dt_files) {
+                resource.dt = {
+                    doc: new Doc("server"),
+                    known_versions: {},
+                    save_delta: () => {},
+                    length_at_version: createSimpleCache(braid_text.length_cache_size),
+                    clients: new Set(),
+                    simpleton_clients: new Set(),
+                }
+                let { change, change_meta } = await file_sync(key,
+                    (bytes) => resource.dt.doc.mergeBytes(bytes),
+                    () => resource.dt.doc.toBytes(),
                     (meta) => resource.meta = meta,
-                    () => resource.meta)
-                : { change: () => { }, change_meta: () => {} }
+                    () => resource.meta,
+                    'dt')
 
-            resource.db_delta = change
-            resource.change_meta = change_meta
+                resource.dt.save_delta = change
+                resource.save_meta = change_meta
 
-            resource.actor_seqs = {}
+                dt_get_actor_seq_runs([...resource.dt.doc.toBytes()], (actor, base, len) => {
+                    if (!resource.dt.known_versions[actor]) resource.dt.known_versions[actor] = new RangeSet()
+                    resource.dt.known_versions[actor].add_range(base, base + len - 1)
+                })
 
-            dt_get_actor_seq_runs([...resource.doc.toBytes()], (actor, base, len) => {
-                if (!resource.actor_seqs[actor]) resource.actor_seqs[actor] = new RangeSet()
-                resource.actor_seqs[actor].add_range(base, base + len - 1)
-            })
+                resource.val = resource.dt.doc.get()
+                resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
+            } else if (braid_text.db_folder) {
+                // No DT files — still load meta
+                let { change, change_meta } = await file_sync(key,
+                    () => {},
+                    () => Buffer.alloc(0),
+                    (meta) => resource.meta = meta,
+                    () => resource.meta,
+                    'dt')
+                resource.save_meta = change_meta
+            }
 
-            resource.val = resource.doc.get()
-            resource.version = resource.doc.getRemoteVersion().map(x => x.join("-")).sort()
+            // Load Yjs data from disk if it exists
+            var has_yjs_files = braid_text.db_folder && Y
+                && (await get_files_for_key(key, 'yjs')).length > 0
+            if (has_yjs_files) {
+                resource.yjs = {
+                    doc: new Y.Doc(),
+                    text: null,
+                    save_delta: () => {},
+                }
+                resource.yjs.text = resource.yjs.doc.getText('text')
+                let { change } = await file_sync(key,
+                    (bytes) => Y.applyUpdate(resource.yjs.doc, bytes),
+                    () => Y.encodeStateAsUpdate(resource.yjs.doc),
+                    () => {},
+                    () => ({}),
+                    'yjs')
 
-            resource.length_cache = createSimpleCache(braid_text.length_cache_size)
+                resource.yjs.save_delta = change
+
+                var yjs_text = resource.yjs.text.toString()
+                if (resource.dt) {
+                    // Both exist — sanity check they match
+                    if (resource.val !== yjs_text) {
+                        console.error(`INIT MISMATCH key=${key}: DT text !== Yjs text`)
+                        console.error(`  DT:  ${resource.val.slice(0, 100)}... (${resource.val.length})`)
+                        console.error(`  Yjs: ${yjs_text.slice(0, 100)}... (${yjs_text.length})`)
+                    }
+                } else {
+                    // Yjs only — use its text as resource.val
+                    resource.val = yjs_text
+                }
+            }
+
+            // length_at_version cache is created as part of resource.dt when DT is initialized
 
             // Add delete method to resource
             resource.delete = async () => {
-                // Free the diamond-types document
-                if (resource.doc) resource.doc.free()
+                if (resource.dt) resource.dt.doc.free()
+                if (resource.yjs) resource.yjs.doc.destroy()
 
                 // Remove from in-memory cache
                 delete braid_text.cache[key]
@@ -1172,7 +1253,7 @@ function create_braid_text() {
                     // Remove meta file if it exists
                     try {
                         var encoded = encode_filename(key)
-                        await fs.promises.unlink(`${braid_text.db_folder}/.meta/${encoded}`)
+                        await fs.promises.unlink(`${braid_text.db_folder}/meta/${encoded}`)
                     } catch (e) {
                         // Meta file might not exist, that's ok
                     }
@@ -1191,23 +1272,133 @@ function create_braid_text() {
         return await cache[key]
     }
 
+    async function ensure_dt_exists(resource) {
+        if (resource.dt) return
+        resource.dt = {
+            doc: new Doc("server"),
+            known_versions: {},
+            save_delta: () => {},
+            length_at_version: createSimpleCache(braid_text.length_cache_size),
+            clients: new Set(),
+            simpleton_clients: new Set(),
+        }
+        if (resource.val) {
+            // Seed DT with current text as a root insert
+            var bytes = dt_create_bytes(
+                `999999999-0`, [], 0, 0, resource.val)
+            resource.dt.doc.mergeBytes(bytes)
+        }
+        resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
+
+        dt_get_actor_seq_runs([...resource.dt.doc.toBytes()], (actor, base, len) => {
+            if (!resource.dt.known_versions[actor]) resource.dt.known_versions[actor] = new RangeSet()
+            resource.dt.known_versions[actor].add_range(base, base + len - 1)
+        })
+
+        // Set up DT persistence if db_folder exists
+        if (braid_text.db_folder) {
+            let { change } = await file_sync(resource.key,
+                (bytes) => resource.dt.doc.mergeBytes(bytes),
+                () => resource.dt.doc.toBytes(),
+                () => {},
+                () => ({}),
+                'dt')
+            resource.dt.save_delta = change
+        }
+    }
+
+    async function ensure_yjs_exists(resource) {
+        if (resource.yjs) return
+        require_yjs()
+        resource.yjs = {
+            doc: new Y.Doc(),
+            text: null,
+            save_delta: () => {},
+        }
+        resource.yjs.text = resource.yjs.doc.getText('text')
+        if (resource.val) {
+            resource.yjs.text.insert(0, resource.val)
+        }
+
+        // Set up Yjs persistence if db_folder exists
+        if (braid_text.db_folder) {
+            let { change } = await file_sync(resource.key,
+                (bytes) => Y.applyUpdate(resource.yjs.doc, bytes),
+                () => Y.encodeStateAsUpdate(resource.yjs.doc),
+                () => {},
+                () => ({}),
+                'yjs')
+            resource.yjs.save_delta = change
+        }
+    }
+
     async function db_folder_init() {
         if (braid_text.verbose) console.log('__!')
         if (!db_folder_init.p) db_folder_init.p = (async () => {
             await fs.promises.mkdir(braid_text.db_folder, { recursive: true });
-            await fs.promises.mkdir(`${braid_text.db_folder}/.meta`, { recursive: true })
-            await fs.promises.mkdir(`${braid_text.db_folder}/.temp`, { recursive: true })
-            await fs.promises.mkdir(`${braid_text.db_folder}/.wal-intent`, { recursive: true })
 
-            // Clean out .temp directory on startup
-            var temp_files = await fs.promises.readdir(`${braid_text.db_folder}/.temp`)
+            // Migrate from old dot-prefixed directory names to new names
+            // This is idempotent: safe to re-run if interrupted mid-migration
+            async function migrate_dir(old_name, new_name) {
+                var old_path = `${braid_text.db_folder}/${old_name}`
+                var new_path = `${braid_text.db_folder}/${new_name}`
+                try {
+                    await fs.promises.stat(old_path)
+                    // Old dir exists — ensure new dir exists and move contents
+                    await fs.promises.mkdir(new_path, { recursive: true })
+                    var entries = await fs.promises.readdir(old_path)
+                    for (var entry of entries) {
+                        var src = `${old_path}/${entry}`
+                        var dst = `${new_path}/${entry}`
+                        try { await fs.promises.stat(dst) } catch (e) {
+                            // dst doesn't exist, move src there
+                            await fs.promises.rename(src, dst)
+                        }
+                        // If dst already exists (crash recovery), just remove src
+                        try { await fs.promises.unlink(src) } catch (e) {}
+                    }
+                    // Remove old dir once empty
+                    try { await fs.promises.rmdir(old_path) } catch (e) {}
+                } catch (e) {
+                    // Old dir doesn't exist — no migration needed
+                }
+            }
+            await migrate_dir('.meta', 'meta')
+            await migrate_dir('.temp', 'temp')
+            await migrate_dir('.wal-intent', 'wal-intent')
+
+            // Migrate data files from [key].N to [key].dt.N
+            // Idempotent: only renames files that match old pattern but not new
+            var all_files = await fs.promises.readdir(braid_text.db_folder)
+            for (var f of all_files) {
+                // Match old format: ends with .N (digits only) but not .dt.N or .yjs.N
+                if (/\.\d+$/.test(f) && !/\.(dt|yjs)\.\d+$/.test(f)) {
+                    var new_name = f.replace(/\.(\d+)$/, '.dt.$1')
+                    var old_path = `${braid_text.db_folder}/${f}`
+                    var new_path = `${braid_text.db_folder}/${new_name}`
+                    try { await fs.promises.stat(new_path) } catch (e) {
+                        // New file doesn't exist, rename
+                        await fs.promises.rename(old_path, new_path)
+                        continue
+                    }
+                    // If new file already exists (crash recovery), remove old
+                    try { await fs.promises.unlink(old_path) } catch (e) {}
+                }
+            }
+
+            await fs.promises.mkdir(`${braid_text.db_folder}/meta`, { recursive: true })
+            await fs.promises.mkdir(`${braid_text.db_folder}/temp`, { recursive: true })
+            await fs.promises.mkdir(`${braid_text.db_folder}/wal-intent`, { recursive: true })
+
+            // Clean out temp directory on startup
+            var temp_files = await fs.promises.readdir(`${braid_text.db_folder}/temp`)
             for (var f of temp_files)
-                await fs.promises.unlink(`${braid_text.db_folder}/.temp/${f}`)
+                await fs.promises.unlink(`${braid_text.db_folder}/temp/${f}`)
 
-            // Replay any pending .wal-intent files
-            var intent_files = await fs.promises.readdir(`${braid_text.db_folder}/.wal-intent`)
+            // Replay any pending wal-intent files
+            var intent_files = await fs.promises.readdir(`${braid_text.db_folder}/wal-intent`)
             for (var intent_name of intent_files) {
-                var intent_path = `${braid_text.db_folder}/.wal-intent/${intent_name}`
+                var intent_path = `${braid_text.db_folder}/wal-intent/${intent_name}`
                 var target_path = `${braid_text.db_folder}/${intent_name}`
 
                 var intent_data = await fs.promises.readFile(intent_path)
@@ -1227,25 +1418,27 @@ function create_braid_text() {
 
             // Populate key_to_filename mapping from existing files
             var files = (await fs.promises.readdir(braid_text.db_folder))
-                .filter(x => /\.\d+$/.test(x))
+                .filter(x => /\.dt\.\d+$/.test(x))
             init_filename_mapping(files)
         })()
         await db_folder_init.p
     }
 
-    async function get_files_for_key(key) {
+    async function get_files_for_key(key, type) {
         await db_folder_init()
         try {
-            let re = new RegExp("^" + encode_filename(key).replace(/[^a-zA-Z0-9]/g, "\\$&") + "\\.\\w+$")
+            var suffix = type ? `\\.${type}\\.\\d+$` : `\\.(dt|yjs)\\.\\d+$`
+            let re = new RegExp("^" + encode_filename(key).replace(/[^a-zA-Z0-9]/g, "\\$&") + suffix)
             return (await fs.promises.readdir(braid_text.db_folder))
                 .filter((a) => re.test(a))
                 .map((a) => `${braid_text.db_folder}/${a}`)
         } catch (e) { return [] }    
     }
 
-    async function file_sync(key, process_delta, get_init, set_meta, get_meta) {
+    async function file_sync(key, process_delta, get_init, set_meta, get_meta, file_type) {
         await db_folder_init()
         let encoded = encode_filename(key)
+        file_type = file_type || 'dt'
 
         if (encoded.length > max_encoded_key_size) throw new Error(`invalid key: too long (max ${max_encoded_key_size})`)
 
@@ -1254,7 +1447,7 @@ function create_braid_text() {
         let threshold = 0
 
         // Read existing files and sort by numbers.
-        const files = (await get_files_for_key(key))
+        const files = (await get_files_for_key(key, file_type))
             .filter(x => x.match(/\.\d+$/))
             .sort((a, b) => parseInt(a.match(/\d+$/)[0]) - parseInt(b.match(/\d+$/)[0]))
 
@@ -1286,7 +1479,7 @@ function create_braid_text() {
                 }
 
                 currentSize = data.length
-                currentNumber = parseInt(filename.match(/\d+$/)[0])
+                currentNumber = parseInt(filename.match(/(\d+)$/)[1])
                 done = true
             } catch (error) {
                 console.error(`Error processing file: ${files[i]}`)
@@ -1294,7 +1487,7 @@ function create_braid_text() {
             }
         }
 
-        var meta_filename = `${braid_text.db_folder}/.meta/${encoded}`
+        var meta_filename = `${braid_text.db_folder}/meta/${encoded}`
         var meta_dirty = null
         var meta_saving = null
         var meta_file_content = '{}'
@@ -1307,7 +1500,7 @@ function create_braid_text() {
             change: (bytes) => within_fiber('file:' + key, async () => {
                 if (!bytes) currentSize = threshold
                 else currentSize += bytes.length + 4 // we account for the extra 4 bytes for uint32
-                const filename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
+                const filename = `${braid_text.db_folder}/${encoded}.${file_type}.${currentNumber}`
                 if (currentSize < threshold) {
                     if (braid_text.verbose) console.log(`appending to db..`)
 
@@ -1316,13 +1509,13 @@ function create_braid_text() {
                     let append_data = Buffer.concat([len_buf, bytes])
 
                     let basename = require('path').basename(filename)
-                    let intent_path = `${braid_text.db_folder}/.wal-intent/${basename}`
+                    let intent_path = `${braid_text.db_folder}/wal-intent/${basename}`
                     let stat = await fs.promises.stat(filename)
                     let size_buf = Buffer.allocUnsafe(8)
                     size_buf.writeBigUInt64LE(BigInt(stat.size), 0)
 
                     await atomic_write(intent_path, Buffer.concat([size_buf, append_data]),
-                        `${braid_text.db_folder}/.temp`)
+                        `${braid_text.db_folder}/temp`)
                     await fs.promises.appendFile(filename, append_data)
                     await fs.promises.unlink(intent_path)
 
@@ -1336,9 +1529,9 @@ function create_braid_text() {
                         const buffer = Buffer.allocUnsafe(4)
                         buffer.writeUInt32LE(init.length, 0)
 
-                        const newFilename = `${braid_text.db_folder}/${encoded}.${currentNumber}`
+                        const newFilename = `${braid_text.db_folder}/${encoded}.${file_type}.${currentNumber}`
                         await atomic_write(newFilename, Buffer.concat([buffer, init]),
-                            `${braid_text.db_folder}/.temp`)
+                            `${braid_text.db_folder}/temp`)
 
                         if (braid_text.verbose) console.log("wrote to : " + newFilename)
 
@@ -1360,7 +1553,7 @@ function create_braid_text() {
                 while (meta_dirty) {
                     meta_dirty = false
                     await atomic_write(meta_filename, JSON.stringify(get_meta()),
-                        `${braid_text.db_folder}/.temp`)
+                        `${braid_text.db_folder}/temp`)
                     await new Promise(done => setTimeout(done,
                         braid_text.meta_file_save_period_ms))
                 }
@@ -1472,7 +1665,7 @@ function create_braid_text() {
 
     function validate_old_patches(resource, base_v, parents, patches) {
         // if we have seen it already, make sure it's the same as before
-        let updates = dt_get_patches(resource.doc, parents)
+        let updates = dt_get_patches(resource.dt.doc, parents)
 
         let seen = {}
         for (let u of updates) {
@@ -2470,8 +2663,8 @@ function create_braid_text() {
     // Populate key_to_filename mapping from existing files on disk
     function init_filename_mapping(files) {
         for (var file of files) {
-            // Extract the encoded key (strip extension like .0, .1, etc.)
-            var encoded = file.replace(/\.\d+$/, '')
+            // Extract the encoded key (strip extension like .dt.0, .dt.1, etc.)
+            var encoded = file.replace(/\.(dt|yjs)\.\d+$/, '')
             var key = decode_filename(encoded)
 
             if (!key_to_filename.has(key)) {
@@ -2524,10 +2717,119 @@ function create_braid_text() {
 
     function validate_patch(x) {
         if (typeof x != 'object') throw new Error(`invalid patch: not an object`)
-        if (x.unit && x.unit !== 'text') throw new Error(`invalid patch unit '${x.unit}': only 'text' supported`)
+        if (x.unit === 'yjs-text') return validate_yjs_patch(x)
+        if (x.unit && x.unit !== 'text') throw new Error(`invalid patch unit '${x.unit}': only 'text' and 'yjs-text' supported`)
         if (typeof x.range !== 'string') throw new Error(`invalid patch range: must be a string`)
         if (!x.range.match(/^\s*\[\s*-?\d+\s*:\s*-?\d+\s*\]\s*$/)) throw new Error(`invalid patch range: ${x.range}`)
         if (typeof x.content !== 'string') throw new Error(`invalid patch content: must be a string`)
+    }
+
+    // yjs-text range format:
+    //   Inserts (exclusive):  yjs-text (clientID-clock:clientID-clock)
+    //   Deletes (inclusive):  yjs-text [clientID-clock:clientID-clock]
+    //   Null origins:         (:), (:42-5), (42-5:)
+    //   Client IDs and clocks are always non-negative integers.
+
+    var yjs_id_pattern = '(\\d+-\\d+)'
+    var yjs_range_re = new RegExp(
+        '^\\s*yjs-text\\s*' +
+        '([\\(\\[])' +                        // open bracket: ( or [
+        '\\s*' + yjs_id_pattern + '?' +        // optional left ID
+        '\\s*:\\s*' +                          // colon separator
+        yjs_id_pattern + '?' + '\\s*' +        // optional right ID
+        '([\\)\\]])' +                         // close bracket: ) or ]
+        '\\s*$'
+    )
+
+    function validate_yjs_patch(x) {
+        if (typeof x != 'object') throw new Error(`invalid yjs patch: not an object`)
+        if (typeof x.range !== 'string') throw new Error(`invalid yjs patch range: must be a string`)
+        if (typeof x.content !== 'string') throw new Error(`invalid yjs patch content: must be a string`)
+        var parsed = parse_yjs_range(x.range)
+        if (!parsed) throw new Error(`invalid yjs patch range: ${x.range}`)
+    }
+
+    function parse_yjs_range(range_string) {
+        var m = range_string.match(yjs_range_re)
+        if (!m) return null
+
+        var open = m[1]     // ( or [
+        var left = m[2]     // e.g. "42-5" or undefined
+        var right = m[3]    // e.g. "73-2" or undefined
+        var close = m[4]    // ) or ]
+
+        // Validate bracket pairing: () for exclusive, [] for inclusive
+        var exclusive = (open === '(' && close === ')')
+        var inclusive = (open === '[' && close === ']')
+        if (!exclusive && !inclusive) return null
+
+        function parse_id(s) {
+            if (!s) return null
+            var dash = s.lastIndexOf('-')
+            return { client: parseInt(s.slice(0, dash)), clock: parseInt(s.slice(dash + 1)) }
+        }
+
+        var result = {
+            inclusive: inclusive,
+            left: parse_id(left),
+            right: parse_id(right)
+        }
+
+        // Inclusive ranges must have at least one ID (can't delete nothing)
+        if (inclusive && !result.left && !result.right) return null
+
+        return result
+    }
+
+    braid_text.parse_yjs_range = parse_yjs_range
+    braid_text.validate_patches = validate_patches
+
+    // Convert a Yjs binary update to yjs-text range patches.
+    // Decodes the binary without needing a Y.Doc.
+    // Returns array of {unit: 'yjs-text', range: '...', content: '...'}
+    braid_text.from_yjs_binary = function(update) {
+        require_yjs()
+        var decoded = Y.decodeUpdate(
+            update instanceof Uint8Array ? update : new Uint8Array(update))
+        var patches = []
+
+        // Convert inserted structs to yjs-text patches
+        for (var struct of decoded.structs) {
+            if (!struct.content?.str) continue  // skip non-text items
+            var id = struct.id
+            var origin = struct.origin
+            var rightOrigin = struct.rightOrigin
+            var left = origin ? `${origin.client}-${origin.clock}` : ''
+            var right = rightOrigin ? `${rightOrigin.client}-${rightOrigin.clock}` : ''
+            patches.push({
+                unit: 'yjs-text',
+                range: `yjs-text (${left}:${right})`,
+                content: struct.content.str
+            })
+        }
+
+        // Convert delete set entries to yjs-text patches
+        for (var [clientID, deleteItems] of decoded.ds.clients) {
+            for (var item of deleteItems) {
+                var left = `${clientID}-${item.clock}`
+                var right = `${clientID}-${item.clock + item.len - 1}`
+                patches.push({
+                    unit: 'yjs-text',
+                    range: `yjs-text [${left}:${right}]`,
+                    content: ''
+                })
+            }
+        }
+
+        return patches
+    }
+
+    // Convert yjs-text range patches to a Yjs binary update.
+    // This is the inverse of from_yjs_binary.
+    // TODO: implement when needed for Braid-HTTP yjs merge-type
+    braid_text.to_yjs_binary = function(patches) {
+        require_yjs()
+        throw new Error('to_yjs_binary not yet implemented')
     }
 
     // Splits an array of patches at a given character position within the
@@ -2952,6 +3254,8 @@ function create_braid_text() {
     }
 
     braid_text.get_resource = get_resource
+    braid_text.ensure_dt_exists = ensure_dt_exists
+    braid_text.ensure_yjs_exists = ensure_yjs_exists
 
     braid_text.db_folder_init = db_folder_init
     braid_text.encode_filename = encode_filename
@@ -3096,8 +3400,8 @@ async function handle_cursors(resource, req, res) {
 
     res.setHeader('Content-Type', 'application/text-cursors+json')
 
-    if (!resource.cursor_state) resource.cursor_state = new cursor_state()
-    var cursors = resource.cursor_state
+    if (!resource.cursors) resource.cursors = new cursor_state()
+    var cursors = resource.cursors
     var peer = req.headers['peer']
 
     if (req.method === 'GET' || req.method === 'HEAD') {
