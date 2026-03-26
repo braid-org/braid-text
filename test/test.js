@@ -268,46 +268,43 @@ async function runConsoleTests() {
     var braid_text = require(`${__dirname}/../server.js`)
     var yjs_unit_tests = [
         ['yjs-text: parse exclusive range', () => {
-            var p = braid_text.parse_yjs_range('yjs-text (42-5:73-2)')
+            var p = braid_text.parse_yjs_range('(42-5:73-2)')
             return JSON.stringify(p)
         }, '{"inclusive":false,"left":{"client":42,"clock":5},"right":{"client":73,"clock":2}}'],
 
         ['yjs-text: parse null origins', () => {
-            return JSON.stringify(braid_text.parse_yjs_range('yjs-text (:)'))
+            return JSON.stringify(braid_text.parse_yjs_range('(:)'))
         }, '{"inclusive":false,"left":null,"right":null}'],
 
         ['yjs-text: parse null left origin', () => {
-            return JSON.stringify(braid_text.parse_yjs_range('yjs-text (:73-2)'))
+            return JSON.stringify(braid_text.parse_yjs_range('(:73-2)'))
         }, '{"inclusive":false,"left":null,"right":{"client":73,"clock":2}}'],
 
         ['yjs-text: parse null right origin', () => {
-            return JSON.stringify(braid_text.parse_yjs_range('yjs-text (42-5:)'))
+            return JSON.stringify(braid_text.parse_yjs_range('(42-5:)'))
         }, '{"inclusive":false,"left":{"client":42,"clock":5},"right":null}'],
 
         ['yjs-text: parse inclusive range (delete)', () => {
-            return JSON.stringify(braid_text.parse_yjs_range('yjs-text [42-5:42-8]'))
+            return JSON.stringify(braid_text.parse_yjs_range('[42-5:42-8]'))
         }, '{"inclusive":true,"left":{"client":42,"clock":5},"right":{"client":42,"clock":8}}'],
 
         ['yjs-text: parse large client IDs', () => {
-            var p = braid_text.parse_yjs_range('yjs-text (3847291042-5:1923847561-2)')
+            var p = braid_text.parse_yjs_range('(3847291042-5:1923847561-2)')
             return p.left.client + ',' + p.right.client
         }, '3847291042,1923847561'],
 
         ['yjs-text: reject mixed brackets', () => {
-            return String(braid_text.parse_yjs_range('yjs-text (42-5:73-2]'))
+            return String(braid_text.parse_yjs_range('(42-5:73-2]'))
         }, 'null'],
 
-        ['yjs-text: reject missing prefix', () => {
-            return String(braid_text.parse_yjs_range('[42-5:73-2]'))
-        }, 'null'],
 
         ['yjs-text: reject inclusive with no IDs', () => {
-            return String(braid_text.parse_yjs_range('yjs-text [:]'))
+            return String(braid_text.parse_yjs_range('[:]'))
         }, 'null'],
 
         ['yjs-text: validate_patches accepts yjs-text', () => {
             braid_text.validate_patches([
-                {unit: 'yjs-text', range: 'yjs-text (42-5:73-2)', content: 'hello'}
+                {unit: 'yjs-text', range: '(42-5:73-2)', content: 'hello'}
             ])
             return 'ok'
         }, 'ok'],
@@ -332,7 +329,7 @@ async function runConsoleTests() {
             if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
             if (patches[0].unit !== 'yjs-text') return 'wrong unit: ' + patches[0].unit
             if (patches[0].content !== 'hello') return 'wrong content: ' + patches[0].content
-            if (patches[0].range !== 'yjs-text (:)') return 'wrong range: ' + patches[0].range
+            if (patches[0].range !== '(:)') return 'wrong range: ' + patches[0].range
             return 'ok'
         }, 'ok'],
 
@@ -349,7 +346,7 @@ async function runConsoleTests() {
             if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
             if (patches[0].content !== ' ') return 'wrong content: ' + patches[0].content
             // Should have exclusive range with origins referencing clock 4 and clock 5
-            var expected = `yjs-text (${cid}-4:${cid}-5)`
+            var expected = `(${cid}-4:${cid}-5)`
             if (patches[0].range !== expected) return 'wrong range: ' + patches[0].range + ' expected: ' + expected
             return 'ok'
         }, 'ok'],
@@ -366,7 +363,7 @@ async function runConsoleTests() {
             doc.destroy()
             if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
             if (patches[0].content !== '') return 'expected empty content'
-            var expected = 'yjs-text [' + cid + '-5:' + cid + '-10]'
+            var expected = '[' + cid + '-5:' + cid + '-10]'
             if (patches[0].range !== expected) return 'wrong range: ' + patches[0].range
             return 'ok'
         }, 'ok'],
@@ -382,9 +379,76 @@ async function runConsoleTests() {
             var patches = braid_text.from_yjs_binary(update)
             doc.destroy()
             if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
-            if (patches[0].range !== `yjs-text [${cid}-1:${cid}-3]`) return 'wrong range: ' + patches[0].range
+            if (patches[0].range !== `[${cid}-1:${cid}-3]`) return 'wrong range: ' + patches[0].range
             return 'ok'
         }, 'ok'],
+
+        ['to_yjs_binary: insert applies correctly', () => {
+            var Y = require('yjs')
+            var doc = new Y.Doc()
+            doc.getText('text').insert(0, 'hello')
+            var cid = doc.clientID
+
+            var doc2 = new Y.Doc()
+            Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
+
+            var binary = braid_text.to_yjs_binary([{
+                unit: 'yjs-text',
+                range: `(${cid}-4:)`,
+                content: ' world',
+                id: {client: 999, clock: 0}
+            }])
+            Y.applyUpdate(doc2, binary)
+            var result = doc2.getText('text').toString()
+            doc.destroy(); doc2.destroy()
+            return result
+        }, 'hello world'],
+
+        ['to_yjs_binary: delete applies correctly', () => {
+            var Y = require('yjs')
+            var doc = new Y.Doc()
+            doc.getText('text').insert(0, 'hello world')
+            var cid = doc.clientID
+
+            var doc2 = new Y.Doc()
+            Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
+
+            var binary = braid_text.to_yjs_binary([{
+                unit: 'yjs-text',
+                range: `[${cid}-5:${cid}-10]`,
+                content: ''
+            }])
+            Y.applyUpdate(doc2, binary)
+            var result = doc2.getText('text').toString()
+            doc.destroy(); doc2.destroy()
+            return result
+        }, 'hello'],
+
+        ['to_yjs_binary: from/to round-trip on synced docs', () => {
+            var Y = require('yjs')
+            var doc1 = new Y.Doc()
+            doc1.getText('text').insert(0, 'hello')
+            var doc2 = new Y.Doc()
+            Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc1))
+
+            var sv = Y.encodeStateVector(doc1)
+            doc1.getText('text').insert(5, ' world')
+            var update = Y.encodeStateAsUpdate(doc1, sv)
+
+            // binary -> json -> binary -> apply
+            var patches = braid_text.from_yjs_binary(update)
+            var decoded = Y.decodeUpdate(update)
+            for (var i = 0; i < patches.length; i++) {
+                if (patches[i].content.length > 0 && decoded.structs[i])
+                    patches[i].id = {client: decoded.structs[i].id.client, clock: decoded.structs[i].id.clock}
+            }
+            var binary2 = braid_text.to_yjs_binary(patches)
+            Y.applyUpdate(doc2, binary2)
+
+            var result = doc2.getText('text').toString()
+            doc1.destroy(); doc2.destroy()
+            return result
+        }, 'hello world'],
 
         ['from_yjs_binary: no-op returns empty', () => {
             var Y = require('yjs')

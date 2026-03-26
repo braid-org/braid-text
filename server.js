@@ -854,6 +854,59 @@ function create_braid_text() {
 
             let { version, parents, patches, body, peer } = options
 
+            // yjs-text patches: apply to Y.Doc, sync to DT
+            if (patches && patches.length && patches[0].unit === 'yjs-text') {
+                await ensure_yjs_exists(resource)
+
+                // Convert yjs-text patches to binary and apply to Y.Doc
+                var binary = braid_text.to_yjs_binary(patches)
+                var delta = null
+                var observer = (e) => { delta = e.changes.delta }
+                resource.yjs.text.observe(observer)
+                try {
+                    Y.applyUpdate(resource.yjs.doc, binary)
+                } finally {
+                    resource.yjs.text.unobserve(observer)
+                }
+
+                resource.val = resource.yjs.text.toString()
+
+                // Sync to DT if it exists
+                if (resource.dt && delta) {
+                    // Convert Yjs delta to positional text patches
+                    var text_patches = yjs_delta_to_patches(delta)
+                    if (text_patches.length) {
+                        // Apply positional patches to DT
+                        // We need a version for DT — use a synthetic one
+                        var dt_version = `yjs-${Date.now()}-${Math.random().toString(36).slice(2)}-0`
+                        var dt_change_count = text_patches.reduce(
+                            (a, p) => a + [...p.content].length + (p.range[1] - p.range[0]), 0)
+                        await braid_text.put(resource, {
+                            version: [dt_version],
+                            parents: resource.version,
+                            patches: text_patches,
+                            peer: peer
+                        })
+                    }
+                }
+
+                // Persist Yjs delta
+                if (resource.yjs.save_delta) await resource.yjs.save_delta(binary)
+
+                // Sanity check
+                if (braid_text.debug_sync_checks && resource.dt) {
+                    var dt_text = resource.dt.doc.get()
+                    var yjs_text = resource.yjs.text.toString()
+                    if (dt_text !== yjs_text) {
+                        console.error(`SYNC MISMATCH key=${resource.key}: DT text !== Y.Doc text`)
+                        console.error(`  DT:  ${dt_text.slice(0, 100)}... (${dt_text.length})`)
+                        console.error(`  Yjs: ${yjs_text.slice(0, 100)}... (${yjs_text.length})`)
+                    }
+                }
+
+                return { change_count: patches.length }
+            }
+
             if (options.transfer_encoding === 'dt') {
                 await ensure_dt_exists(resource)
                 var start_i = 1 + resource.dt.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
@@ -2732,7 +2785,7 @@ function create_braid_text() {
 
     var yjs_id_pattern = '(\\d+-\\d+)'
     var yjs_range_re = new RegExp(
-        '^\\s*yjs-text\\s*' +
+        '^\\s*' +
         '([\\(\\[])' +                        // open bracket: ( or [
         '\\s*' + yjs_id_pattern + '?' +        // optional left ID
         '\\s*:\\s*' +                          // colon separator
@@ -2803,7 +2856,7 @@ function create_braid_text() {
             var right = rightOrigin ? `${rightOrigin.client}-${rightOrigin.clock}` : ''
             patches.push({
                 unit: 'yjs-text',
-                range: `yjs-text (${left}:${right})`,
+                range: `(${left}:${right})`,
                 content: struct.content.str
             })
         }
@@ -2815,7 +2868,7 @@ function create_braid_text() {
                 var right = `${clientID}-${item.clock + item.len - 1}`
                 patches.push({
                     unit: 'yjs-text',
-                    range: `yjs-text [${left}:${right}]`,
+                    range: `[${left}:${right}]`,
                     content: ''
                 })
             }
@@ -2826,10 +2879,73 @@ function create_braid_text() {
 
     // Convert yjs-text range patches to a Yjs binary update.
     // This is the inverse of from_yjs_binary.
-    // TODO: implement when needed for Braid-HTTP yjs merge-type
+    // Each insert patch needs a clientID and clock for the new item.
+    // These are passed as patch.id = {client, clock}.
     braid_text.to_yjs_binary = function(patches) {
         require_yjs()
-        throw new Error('to_yjs_binary not yet implemented')
+        var lib0_encoding = require('lib0/encoding')
+        var encoder = new Y.UpdateEncoderV1()
+
+        // Group inserts by client
+        var inserts_by_client = new Map()
+        var deletes_by_client = new Map()
+
+        for (var p of patches) {
+            var parsed = parse_yjs_range(p.range)
+            if (!parsed) throw new Error(`invalid yjs-text range: ${p.range}`)
+
+            if (p.content.length > 0) {
+                // Insert
+                if (!p.id) throw new Error('insert patch requires .id = {client, clock}')
+                var list = inserts_by_client.get(p.id.client) || []
+                list.push({ id: p.id, origin: parsed.left, rightOrigin: parsed.right, content: p.content })
+                inserts_by_client.set(p.id.client, list)
+            } else {
+                // Delete
+                if (!parsed.left) throw new Error('delete patch requires left ID')
+                var client = parsed.left.client
+                var list = deletes_by_client.get(client) || []
+                list.push({ clock: parsed.left.clock, len: parsed.right ? parsed.right.clock - parsed.left.clock + 1 : 1 })
+                deletes_by_client.set(client, list)
+            }
+        }
+
+        // Write structs
+        lib0_encoding.writeVarUint(encoder.restEncoder, inserts_by_client.size)
+        for (var [client, items] of inserts_by_client) {
+            items.sort((a, b) => a.id.clock - b.id.clock)
+            lib0_encoding.writeVarUint(encoder.restEncoder, items.length)
+            encoder.writeClient(client)
+            lib0_encoding.writeVarUint(encoder.restEncoder, items[0].id.clock)
+            for (var item of items) {
+                var has_origin = item.origin !== null
+                var has_right_origin = item.rightOrigin !== null
+                // info byte: content ref (4 = string) | origin flags
+                var info = 4 | (has_origin ? 0x80 : 0) | (has_right_origin ? 0x40 : 0)
+                encoder.writeInfo(info)
+                if (has_origin) encoder.writeLeftID(Y.createID(item.origin.client, item.origin.clock))
+                if (has_right_origin) encoder.writeRightID(Y.createID(item.rightOrigin.client, item.rightOrigin.clock))
+                if (!has_origin && !has_right_origin) {
+                    // Root insert — write parent type key
+                    encoder.writeParentInfo(true)
+                    encoder.writeString('text')
+                }
+                encoder.writeString(item.content)
+            }
+        }
+
+        // Write delete set
+        lib0_encoding.writeVarUint(encoder.restEncoder, deletes_by_client.size)
+        for (var [client, deletes] of deletes_by_client) {
+            lib0_encoding.writeVarUint(encoder.restEncoder, client)
+            lib0_encoding.writeVarUint(encoder.restEncoder, deletes.length)
+            for (var d of deletes) {
+                encoder.writeDsClock(d.clock)
+                encoder.writeDsLen(d.len)
+            }
+        }
+
+        return encoder.toUint8Array()
     }
 
     // Splits an array of patches at a given character position within the
