@@ -898,12 +898,93 @@ function create_braid_text() {
 
             let { version, parents, patches, body, peer } = options
 
+            // Raw Yjs binary update: apply directly to Y.Doc, sync to DT
+            if (options.yjs_update) {
+                await ensure_yjs_exists(resource)
+
+                // Pre-sync check: DT and Yjs should agree before we start
+                if (braid_text.debug_sync_checks && resource.dt) {
+                    var pre_dt = resource.dt.doc.get()
+                    var pre_yjs = resource.yjs.text.toString()
+                    if (pre_dt !== pre_yjs) {
+                        console.error(`PRE-SYNC MISMATCH key=${resource.key}: DT="${pre_dt.slice(0,50)}" Yjs="${pre_yjs.slice(0,50)}"`)
+                    }
+                }
+
+                var prev_text = resource.yjs.text.toString()
+                var delta = null
+                var observer = (e) => { delta = e.changes.delta }
+                resource.yjs.text.observe(observer)
+                try {
+                    Y.applyUpdate(resource.yjs.doc,
+                        options.yjs_update instanceof Uint8Array ? options.yjs_update : new Uint8Array(options.yjs_update))
+                } finally {
+                    resource.yjs.text.unobserve(observer)
+                }
+
+                resource.val = resource.yjs.text.toString()
+
+                // Sync to DT if it exists
+                if (resource.dt && delta) {
+                    var text_patches = yjs_delta_to_patches(delta, prev_text)
+                    if (text_patches.length) {
+                        var syn_actor = `yjs-${Date.now()}-${Math.random().toString(36).slice(2)}`
+                        var syn_seq = 0
+                        var yjs_v_before = resource.dt.doc.getLocalVersion()
+                        // Patches are sequential (each relative to state after previous)
+                        // so no offset adjustment needed
+                        var dt_bytes = []
+                        var dt_ps = resource.version
+                        for (var tp of text_patches) {
+                            var tp_range = tp.range.match(/-?\d+/g).map(Number)
+                            var tp_del = tp_range[1] - tp_range[0]
+                            var syn_v = `${syn_actor}-${syn_seq}`
+                            if (tp_del) {
+                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0], tp_del, null))
+                                dt_ps = [`${syn_actor}-${syn_seq + tp_del - 1}`]
+                                syn_seq += tp_del
+                                syn_v = `${syn_actor}-${syn_seq}`
+                            }
+                            if (tp.content.length) {
+                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0], 0, tp.content))
+                                var cp_len = [...tp.content].length
+                                dt_ps = [`${syn_actor}-${syn_seq + cp_len - 1}`]
+                                syn_seq += cp_len
+                            }
+                        }
+                        for (var b of dt_bytes) resource.dt.doc.mergeBytes(b)
+                        resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
+                        if (!resource.dt.known_versions[syn_actor]) resource.dt.known_versions[syn_actor] = new RangeSet()
+                        resource.dt.known_versions[syn_actor].add_range(0, syn_seq - 1)
+                        await resource.dt.save_delta(resource.dt.doc.getPatchSince(yjs_v_before))
+                    }
+                }
+
+                // Persist Yjs
+                if (resource.yjs.save_delta) await resource.yjs.save_delta(
+                    options.yjs_update instanceof Uint8Array ? options.yjs_update : new Uint8Array(options.yjs_update))
+
+                // Sanity check
+                if (braid_text.debug_sync_checks && resource.dt) {
+                    var dt_text = resource.dt.doc.get()
+                    var yjs_text = resource.yjs.text.toString()
+                    if (dt_text !== yjs_text) {
+                        console.error(`SYNC MISMATCH key=${resource.key}: DT text !== Y.Doc text`)
+                        console.error(`  DT:  ${dt_text.slice(0, 100)}... (${dt_text.length})`)
+                        console.error(`  Yjs: ${yjs_text.slice(0, 100)}... (${yjs_text.length})`)
+                    }
+                }
+
+                return { change_count: 1 }
+            }
+
             // yjs-text patches: apply to Y.Doc, sync to DT
             if (patches && patches.length && patches[0].unit === 'yjs-text') {
                 await ensure_yjs_exists(resource)
 
                 // Convert yjs-text patches to binary and apply to Y.Doc
                 var binary = braid_text.to_yjs_binary(patches)
+                var prev_text = resource.yjs.text.toString()
                 var delta = null
                 var observer = (e) => { delta = e.changes.delta }
                 resource.yjs.text.observe(observer)
@@ -917,30 +998,29 @@ function create_braid_text() {
 
                 // Sync to DT if it exists
                 if (resource.dt && delta) {
-                    var text_patches = yjs_delta_to_patches(delta)
+                    var text_patches = yjs_delta_to_patches(delta, prev_text)
                     if (text_patches.length) {
                         // Generate a synthetic version for DT
                         var syn_actor = `yjs-${Date.now()}-${Math.random().toString(36).slice(2)}`
                         var syn_seq = 0
                         var yjs_v_before = resource.dt.doc.getLocalVersion()
+                        // Patches are sequential (each relative to state after previous)
+                        // so no offset adjustment needed
                         var dt_bytes = []
                         var dt_ps = resource.version
-                        var dt_offset = 0
                         for (var tp of text_patches) {
                             var tp_range = tp.range.match(/-?\d+/g).map(Number)
                             var tp_del = tp_range[1] - tp_range[0]
                             var syn_v = `${syn_actor}-${syn_seq}`
                             if (tp_del) {
-                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0] + dt_offset, tp_del, null))
-                                dt_offset -= tp_del
+                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0], tp_del, null))
                                 dt_ps = [`${syn_actor}-${syn_seq + tp_del - 1}`]
                                 syn_seq += tp_del
                                 syn_v = `${syn_actor}-${syn_seq}`
                             }
                             if (tp.content.length) {
-                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0] + dt_offset, 0, tp.content))
+                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0], 0, tp.content))
                                 var cp_len = [...tp.content].length
-                                dt_offset += cp_len
                                 dt_ps = [`${syn_actor}-${syn_seq + cp_len - 1}`]
                                 syn_seq += cp_len
                             }
@@ -1154,7 +1234,26 @@ function create_braid_text() {
             resource.val = resource.dt.doc.get()
             resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
-            // Sync to Yjs if it exists
+            // Get transformed patches (resolved after DT merge)
+            // xf_patches: absolute positions (for simpleton clients)
+            // xf_patches_relative: sequential positions (for Yjs sync)
+            var xf_patches_relative = []
+            for (let xf of resource.dt.doc.xfSince(v_before)) {
+                xf_patches_relative.push(
+                    xf.kind == "Ins"
+                        ? { range: [xf.start, xf.start], content: xf.content }
+                        : { range: [xf.start, xf.end], content: "" }
+                )
+            }
+            var xf_patches = relative_to_absolute_patches(
+                xf_patches_relative.map(p => ({
+                    unit: 'text',
+                    range: `[${p.range[0]}:${p.range[1]}]`,
+                    content: p.content
+                }))
+            )
+
+            // Sync to Yjs if it exists, using relative (sequential) patches
             if (resource.yjs) {
                 var captured_yjs_update = null
                 var yjs_update_handler = (update, origin) => {
@@ -1162,12 +1261,17 @@ function create_braid_text() {
                 }
                 resource.yjs.doc.on('update', yjs_update_handler)
                 resource.yjs.doc.transact(() => {
-                    var yjs_offset = 0
-                    for (let p of patches) {
-                        var del = p.range[1] - p.range[0]
-                        if (del) resource.yjs.text.delete(p.range[0] + yjs_offset, del)
-                        if (p.content?.length) resource.yjs.text.insert(p.range[0] + yjs_offset, p.content)
-                        yjs_offset += (p.content_codepoints?.length || 0) - del
+                    // xf_patches_relative are sequential codepoint positions; Yjs uses UTF-16
+                    for (let p of xf_patches_relative) {
+                        var current_text = resource.yjs.text.toString()
+                        var cp_to_utf16 = codepoint_to_utf16_pos(current_text)
+                        var utf16_start = cp_to_utf16(p.range[0])
+                        var cp_del = p.range[1] - p.range[0]
+                        if (cp_del) {
+                            var utf16_end = cp_to_utf16(p.range[1])
+                            resource.yjs.text.delete(utf16_start, utf16_end - utf16_start)
+                        }
+                        if (p.content?.length) resource.yjs.text.insert(utf16_start, p.content)
                     }
                 }, 'braid_text_dt_sync')
                 resource.yjs.doc.off('update', yjs_update_handler)
@@ -1205,7 +1309,7 @@ function create_braid_text() {
             var post_commit_updates = []
 
             if (options.merge_type != "dt") {
-                let patches = get_xf_patches(resource.dt.doc, v_before)
+                let patches = xf_patches
                 if (braid_text.verbose) console.log(JSON.stringify({ patches }))
 
                 for (let client of resource.dt.simpleton_clients) {
@@ -1273,7 +1377,7 @@ function create_braid_text() {
                     let x = {
                         version: resource.version,
                         parents: version_before,
-                        patches: get_xf_patches(resource.dt.doc, v_before)
+                        patches: xf_patches
                     }
                     if (braid_text.verbose) console.log(`sending: ${JSON.stringify(x)}`)
                     for (let client of resource.dt.simpleton_clients) {
@@ -2963,28 +3067,54 @@ function create_braid_text() {
     // Convert a Yjs delta (array of {retain, insert, delete} ops)
     // to positional text patches [{unit, range, content}]
     // range is returned as a parsed array [start, end], not a string
-    function yjs_delta_to_patches(delta) {
+    // Convert a Yjs delta to positional text patches with codepoint positions.
+    // Yjs deltas use UTF-16 positions; we need to convert to codepoints for DT.
+    // prev_text is the text BEFORE the delta was applied (in UTF-16, i.e. a JS string).
+    function yjs_delta_to_patches(delta, prev_text) {
         var patches = []
-        var pos = 0
+        var utf16_pos = 0
+        var cp_pos = 0
         for (var op of delta) {
             if (op.retain) {
-                pos += op.retain
+                // Count codepoints in the retained region
+                var retained = prev_text.slice(utf16_pos, utf16_pos + op.retain)
+                cp_pos += [...retained].length
+                utf16_pos += op.retain
             } else if (op.insert) {
+                var cp_len = [...op.insert].length
                 patches.push({
                     unit: 'text',
-                    range: `[${pos}:${pos}]`,
+                    range: `[${cp_pos}:${cp_pos}]`,
                     content: op.insert
                 })
-                pos += op.insert.length
+                cp_pos += cp_len
             } else if (op.delete) {
+                var deleted = prev_text.slice(utf16_pos, utf16_pos + op.delete)
+                var cp_del = [...deleted].length
                 patches.push({
                     unit: 'text',
-                    range: `[${pos}:${pos + op.delete}]`,
+                    range: `[${cp_pos}:${cp_pos + cp_del}]`,
                     content: ''
                 })
+                utf16_pos += op.delete
             }
         }
         return patches
+    }
+
+    // Convert codepoint index to UTF-16 index in a string.
+    // Returns a function that maps codepoint position -> UTF-16 position.
+    function codepoint_to_utf16_pos(str) {
+        return function(cp_pos) {
+            var utf16 = 0
+            var cp = 0
+            while (cp < cp_pos && utf16 < str.length) {
+                var code = str.charCodeAt(utf16)
+                utf16 += (code >= 0xD800 && code <= 0xDBFF) ? 2 : 1
+                cp++
+            }
+            return utf16
+        }
     }
 
     braid_text.parse_yjs_range = parse_yjs_range

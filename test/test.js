@@ -521,20 +521,30 @@ async function runConsoleTests() {
     console.log('\n' + '='.repeat(50))
     console.log(`Total: ${totalTests} | Passed: ${passedTests} | Failed: ${failedTests}`)
     if (failedTests === 0 && !args.includes('fuzz') && !args.includes('all')) {
-        console.log(`\nAll tests complete. Consider 'npm test -- fuzz' for fuzz tests, or 'npm test -- all' for everything.`)
+        console.log(`\nAll tests complete. Consider 'npm test -- fuzz' for all fuzz tests, 'npm test -- fuzz1' for DT fuzz, 'npm test -- fuzz2' for Yjs bridge fuzz, or 'npm test -- all' for everything.`)
     }
     console.log('='.repeat(50))
 
     // Run fuzz tests if 'all' was requested
     if (args.includes('all') && failedTests === 0) {
-        console.log('\nRunning fuzz tests...\n')
+        console.log('\nRunning DT fuzz tests...\n')
         try {
             require('child_process').execSync('node test/fuzz-test.js', {
                 stdio: 'inherit',
                 cwd: path.join(__dirname, '..')
             })
         } catch (e) {
-            console.log('Fuzz tests failed!')
+            console.log('DT fuzz tests failed!')
+            failedTests++
+        }
+        console.log('\nRunning Yjs bridge fuzz tests...\n')
+        try {
+            require('child_process').execSync('node test/yjs-fuzz-test.js', {
+                stdio: 'inherit',
+                cwd: path.join(__dirname, '..')
+            })
+        } catch (e) {
+            console.log('Yjs bridge fuzz tests failed!')
             failedTests++
         }
     }
@@ -605,13 +615,22 @@ async function runBrowserMode() {
 async function main() {
     if (mode === 'browser') {
         await runBrowserMode()
-    } else if (args.includes('fuzz') && !args.includes('all')) {
+    } else if ((args.includes('fuzz') || args.includes('fuzz1') || args.includes('fuzz2')) && !args.includes('all')) {
         // Fuzz only — skip integration tests
-        console.log('Running fuzz tests...\n')
-        require('child_process').execSync('node test/fuzz-test.js', {
-            stdio: 'inherit',
-            cwd: __dirname + '/..'
-        })
+        if (args.includes('fuzz') || args.includes('fuzz1')) {
+            console.log('Running DT fuzz tests...\n')
+            require('child_process').execSync('node test/fuzz-test.js', {
+                stdio: 'inherit',
+                cwd: __dirname + '/..'
+            })
+        }
+        if (args.includes('fuzz') || args.includes('fuzz2')) {
+            console.log('\nRunning Yjs bridge fuzz tests...\n')
+            require('child_process').execSync('node test/yjs-fuzz-test.js', {
+                stdio: 'inherit',
+                cwd: __dirname + '/..'
+            })
+        }
     } else {
         await runConsoleTests()
     }

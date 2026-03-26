@@ -291,7 +291,7 @@ async function main() {
             doc.free()
             middle_doc.free()
             for (let p of Object.values(braid_text.cache))
-                (await p).dt.free()
+                { let r = await p; if (r.dt) r.dt.doc.free() }
             braid_text.cache = {}
         } catch (e) {
             if (console.log == og_log) throw e
@@ -303,6 +303,7 @@ async function main() {
     }
     og_log(`best_seed = ${best_seed}, best_n = ${best_n}`)
     og_log(`time = ${Date.now() - st}`)
+    og_log(`Run individually with: npm test -- fuzz1`)
 }
 
 function make_random_edit(doc) {
