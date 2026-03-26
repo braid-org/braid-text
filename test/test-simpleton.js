@@ -163,6 +163,48 @@ async function test_throttle_staleness() {
     return { stuck, a_state: a.state, b_state: b.state, server_state }
 }
 
+async function test_emoji_surrogate_pairs() {
+    // Regression test: simple_diff was splitting surrogate pairs when adjacent
+    // emoji share the same high surrogate (e.g. U+1F389 and U+1F38A both have
+    // high surrogate 0xD83C). The prefix scan would match the high surrogate
+    // and stop on the low surrogate, producing a diff range that starts in
+    // the middle of a codepoint.
+
+    const key = '/test-emoji-' + Math.random().toString(36).slice(2)
+    const url = `http://localhost:${PORT}${key}`
+
+    const a = make_client(url, 'A')
+    const b = make_client(url, 'B')
+    await wait_for(() => a.online && b.online)
+
+    // Set initial state with same-block emoji (all have high surrogate 0xD83C)
+    a.state = '\uD83C\uDF89\uD83C\uDF8A\uD83C\uDF88'  // 🎉🎊🎈
+    a.changed()
+    await wait(800)
+
+    if (b.state !== '\uD83C\uDF89\uD83C\uDF8A\uD83C\uDF88') {
+        a.stop(); b.stop()
+        return { ok: false, reason: 'initial sync failed', a: a.state, b: b.state }
+    }
+
+    // B deletes the middle emoji (🎊). Its local state becomes 🎉🎈.
+    // simple_diff compares old='🎉🎊🎈' vs new='🎉🎈'. Without the fix,
+    // the prefix scan matches 3 code units (high surrogates of 🎊 and 🎈
+    // are both 0xD83C), producing the wrong diff.
+    b.state = '\uD83C\uDF89\uD83C\uDF88'  // 🎉🎈
+    b.changed()
+    await wait(800)
+
+    const server_state = await braid_text.get(key)
+    const ok = a.state === '\uD83C\uDF89\uD83C\uDF88' &&
+               b.state === '\uD83C\uDF89\uD83C\uDF88' &&
+               server_state === '\uD83C\uDF89\uD83C\uDF88'
+
+    a.stop()
+    b.stop()
+    return { ok, a_state: a.state, b_state: b.state, server_state }
+}
+
 // ========================================================================
 // Fuzz Session
 // ========================================================================
@@ -287,6 +329,17 @@ async function main() {
     } else {
         console.log(`  ✗ A is stuck behind — throttled updates were lost`)
         console.log(`    A: "${result.a_state}", server: "${result.server_state}"`)
+        failed++
+    }
+
+    console.log('\n=== Test: emoji surrogate pair handling ===')
+    let emoji_result = await test_emoji_surrogate_pairs()
+    if (emoji_result.ok) {
+        console.log(`  ✓ Correct emoji deleted across clients`)
+    } else {
+        console.log(`  ✗ Wrong emoji deleted (surrogate pair split)`)
+        console.log(`    A: "${emoji_result.a_state}", B: "${emoji_result.b_state}", server: "${emoji_result.server_state}"`)
+        if (emoji_result.reason) console.log(`    Reason: ${emoji_result.reason}`)
         failed++
     }
 
