@@ -682,6 +682,25 @@ function create_braid_text() {
         var version = resource.version
 
         if (!options.subscribe) {
+            // yjs-text range unit: return current text or full history
+            if (options.range_unit === 'yjs-text') {
+                await ensure_yjs_exists(resource)
+                if (options.parents && options.parents.length === 0) {
+                    // Full history: root + initialization patch
+                    var init_patches = [{
+                        unit: 'yjs-text',
+                        range: '(:)',
+                        content: resource.val
+                    }]
+                    return {
+                        version: ['999999999-' + (Math.max(0, [...resource.val].length - 1))],
+                        parents: [],
+                        patches: init_patches
+                    }
+                }
+                return { version, body: resource.val }
+            }
+
             if (options.transfer_encoding === 'dt') {
                 // optimization: if requesting current version
                 // pretend as if they didn't set a version,
@@ -717,6 +736,31 @@ function create_braid_text() {
                     return { version, body: resource.val }
                 }
         } else {
+            // yjs-text subscribe: send full history first, then live updates
+            if (options.range_unit === 'yjs-text') {
+                await ensure_yjs_exists(resource)
+
+                // Send root
+                options.subscribe({version: [], parents: [], body: ""})
+
+                // Send initialization patch
+                if (resource.val) {
+                    options.subscribe({
+                        version: ['999999999-' + (Math.max(0, [...resource.val].length - 1))],
+                        parents: [],
+                        patches: [{unit: 'yjs-text', range: '(:)', content: resource.val}]
+                    })
+                }
+
+                // Register for live updates
+                if (!resource.yjs_clients) resource.yjs_clients = new Set()
+                resource.yjs_clients.add(options)
+                options.signal?.addEventListener('abort', () =>
+                    resource.yjs_clients.delete(options))
+
+                return
+            }
+
             options.my_subscribe_chain = Promise.resolve()
             options.my_subscribe = (x) =>
                 options.my_subscribe_chain =
@@ -915,6 +959,18 @@ function create_braid_text() {
                     }
                 }
 
+                // Broadcast to yjs-text subscribers (skip sender)
+                if (resource.yjs_clients) {
+                    for (var client of resource.yjs_clients) {
+                        if (!peer || client.peer !== peer) {
+                            client.subscribe({
+                                version: resource.version,
+                                patches: patches
+                            })
+                        }
+                    }
+                }
+
                 // Persist Yjs delta
                 if (resource.yjs.save_delta) await resource.yjs.save_delta(binary)
 
@@ -1100,6 +1156,11 @@ function create_braid_text() {
 
             // Sync to Yjs if it exists
             if (resource.yjs) {
+                var captured_yjs_update = null
+                var yjs_update_handler = (update, origin) => {
+                    if (origin === 'braid_text_dt_sync') captured_yjs_update = update
+                }
+                resource.yjs.doc.on('update', yjs_update_handler)
                 resource.yjs.doc.transact(() => {
                     var yjs_offset = 0
                     for (let p of patches) {
@@ -1109,6 +1170,23 @@ function create_braid_text() {
                         yjs_offset += (p.content_codepoints?.length || 0) - del
                     }
                 }, 'braid_text_dt_sync')
+                resource.yjs.doc.off('update', yjs_update_handler)
+
+                // Broadcast to yjs-text subscribers
+                if (resource.yjs_clients && captured_yjs_update) {
+                    var yjs_patches = braid_text.from_yjs_binary(captured_yjs_update)
+                    for (var client of resource.yjs_clients) {
+                        if (!peer || client.peer !== peer) {
+                            client.subscribe({
+                                version: resource.version,
+                                patches: yjs_patches
+                            })
+                        }
+                    }
+                }
+
+                // Persist Yjs delta
+                if (captured_yjs_update) await resource.yjs.save_delta(captured_yjs_update)
 
                 // Sanity check
                 if (braid_text.debug_sync_checks) {

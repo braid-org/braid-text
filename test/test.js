@@ -455,8 +455,6 @@ async function runConsoleTests() {
             var doc = new Y.Doc()
             doc.getText('text').insert(0, 'hello')
             var update = Y.encodeStateAsUpdate(doc)
-            // Apply same state — decode should show the insert but that's the full state
-            // An empty incremental update:
             var sv = Y.encodeStateVector(doc)
             var empty_update = Y.encodeStateAsUpdate(doc, sv)
             var patches = braid_text.from_yjs_binary(empty_update)
@@ -464,12 +462,45 @@ async function runConsoleTests() {
             return patches.length
         }, 0],
 
+        // Yjs persistence tests
+        ['yjs persistence: DT+Yjs round-trip through disk', async () => {
+            var key = 'persist-test-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = __dirname + '/test_db_folder'
+            await braid_text.put(key, {version: ['a-0'], body: 'A'})
+            var r = await braid_text.get_resource(key)
+            await braid_text.ensure_yjs_exists(r)
+            var yjsCid = r.yjs.text._start.id.client
+            await braid_text.put(key, {
+                patches: [{unit: 'yjs-text', range: '(' + yjsCid + '-0:)', content: 'B', id: {client: 888, clock: 0}}]
+            })
+            r.dt.doc.free(); r.yjs.doc.destroy(); delete braid_text.cache[key]
+            var r2 = await braid_text.get_resource(key)
+            var result = r2.val === 'AB' && r2.dt?.doc.get() === 'AB' && r2.yjs?.text.toString() === 'AB'
+            await r2.delete()
+            return result ? 'ok' : 'mismatch: ' + r2.val
+        }, 'ok'],
+
+        ['yjs persistence: Yjs-only round-trip through disk', async () => {
+            var key = 'persist-yjs-only-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = __dirname + '/test_db_folder'
+            var r = await braid_text.get_resource(key)
+            await braid_text.ensure_yjs_exists(r)
+            await braid_text.put(key, {
+                patches: [{unit: 'yjs-text', range: '(:)', content: 'hello', id: {client: 777, clock: 0}}]
+            })
+            r.yjs.doc.destroy(); delete braid_text.cache[key]
+            var r2 = await braid_text.get_resource(key)
+            var result = r2.val === 'hello' && !r2.dt && r2.yjs?.text.toString() === 'hello'
+            await r2.delete()
+            return result ? 'ok' : 'fail: val=' + r2.val + ' dt=' + !!r2.dt + ' yjs=' + r2.yjs?.text.toString()
+        }, 'ok'],
+
     ]
 
     for (var [name, fn, expected] of yjs_unit_tests) {
         totalTests++
         try {
-            var result = fn()
+            var result = await fn()
             if (result === expected) {
                 passedTests++
                 console.log(`✓ ${name}`)
