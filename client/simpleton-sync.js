@@ -447,12 +447,34 @@ function simpleton_client(url, {
         var min_len = Math.min(old_str.length, new_str.length)
         while (prefix_len < min_len && old_str[prefix_len] === new_str[prefix_len]) prefix_len++
 
+        // Don't split a surrogate pair: if prefix ends on a low surrogate,
+        // the preceding high surrogate only matched by coincidence (same
+        // Unicode block), so back up to include the whole pair in the diff.
+        if (prefix_len > 0 && is_low_surrogate(old_str, prefix_len))
+            prefix_len--
+
         // Find common suffix length (from what remains after prefix)
         var suffix_len = 0
         min_len -= prefix_len
         while (suffix_len < min_len && old_str[old_str.length - suffix_len - 1] === new_str[new_str.length - suffix_len - 1]) suffix_len++
 
+        // Same guard for suffixes: if the range end (old_str.length - suffix_len)
+        // lands on a low surrogate, the suffix consumed it without its high
+        // surrogate, so back up.
+        if (suffix_len > 0 && is_low_surrogate(old_str, old_str.length - suffix_len))
+            suffix_len--
+
         return {range: [prefix_len, old_str.length - suffix_len], content: new_str.slice(prefix_len, new_str.length - suffix_len)}
+    }
+
+    function is_low_surrogate(str, i) {
+        var c = str.charCodeAt(i)
+        return c >= 0xdc00 && c <= 0xdfff
+    }
+
+    function is_high_surrogate(str, i) {
+        var c = str.charCodeAt(i)
+        return c >= 0xd800 && c <= 0xdbff
     }
 
     // ── apply_patches ───────────────────────────────────────────────────
