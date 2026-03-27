@@ -3514,7 +3514,7 @@ runTest(
                         {method: 'PUT', url: '/' + key, headers,
                          on(e, cb) { if (e === 'data') cb(Buffer.from(body)); if (e === 'end') cb() },
                          pause() {}, resume() {}},
-                        {setHeader(){}, getHeader(){return ''}, hasHeader(){return false},
+                        {setHeader(){}, appendHeader(){}, getHeader(){return ''}, hasHeader(){return false},
                          writeHead(){}, write(){}, end(){}, on(){}},
                         {put_cb: (k, v, params) => results.push(params)}
                     )

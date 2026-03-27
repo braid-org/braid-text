@@ -1,6 +1,6 @@
 {
   "name": "braid-text",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Library for collaborative text over http using braid.",
   "author": "Braid Working Group",
   "repository": "braid-org/braid-text",
@@ -16,7 +16,6 @@
     "simpleton-client.js",
     "client/simpleton-sync.js",
     "client/cursor-sync.js",
-    "client/cursor-highlights.js",
     "client/textarea-highlights.js",
     "client/web-utils.js",
     "README.md",
