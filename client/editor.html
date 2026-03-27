@@ -7,14 +7,27 @@
 <script src="/simpleton-sync.js"></script>
 <script src="/cursor-highlights.js"></script>
 <script src="/cursor-sync.js"></script>
+<script src="/undo-sync.js"></script>
 <script>
 
   var cursors = cursor_highlights(the_editor, location.pathname)
+
+  // undo_manager applies undo/redo patches by writing them to the textarea
+  // and telling simpleton to pick up the change.
+  var um = undo_manager(
+    () => the_editor.value,
+    (patches) => {
+      apply_patches_and_update_selection(the_editor, patches)
+      simpleton.changed()
+    }
+  )
 
   var simpleton = simpleton_client(location.pathname, {
     on_online: (online) => { online ? cursors.online() : cursors.offline() },
     on_patches: (patches) => {
       the_editor.disabled = false
+      // Keep undo/redo stacks valid against the incoming remote edit.
+      um.transform(patches)
       apply_patches_and_update_selection(the_editor, patches)
       cursors.on_patches(patches)
     },
@@ -26,7 +39,20 @@
 
   the_editor.oninput = (e) => {
     set_acked_state(the_editor, false)
-    cursors.on_edit(simpleton.changed())
+    var text_before = simpleton.client_state
+    var patches = simpleton.changed()
+    cursors.on_edit(patches)
+    if (patches) um.record(patches, text_before)
   }
+
+  the_editor.addEventListener('keydown', (e) => {
+    var is_undo = (e.key === 'z' && !e.shiftKey) && (e.ctrlKey || e.metaKey)
+    var is_redo = (e.key === 'y' && (e.ctrlKey || e.metaKey)) ||
+                  (e.key === 'z' && e.shiftKey && (e.ctrlKey || e.metaKey))
+    if (!is_undo && !is_redo) return
+    e.preventDefault()
+    if (is_undo) um.undo()
+    else um.redo()
+  })
 
 </script>

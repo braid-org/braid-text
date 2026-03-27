@@ -5,6 +5,7 @@ const http = require('http')
 const {fetch: braid_fetch} = require('braid-http')
 const defineTests = require('./tests.js')
 const defineCursorTests = require('./cursor-tests.js')
+const defineUndoTests = require('./undo-tests.js')
 
 // Parse command line arguments
 const args = process.argv.slice(2)
@@ -226,9 +227,14 @@ async function runConsoleTests() {
     global.AbortController = AbortController
     global.crypto = require('crypto').webcrypto
 
+    // Expose undo_manager so undo-tests.js can call it as a global
+    eval(require('fs').readFileSync(`${__dirname}/../client/undo-sync.js`, 'utf8'))
+    global.undo_manager = undo_manager
+
     // Run all tests
     defineTests(runTest, testBraidFetch)
     defineCursorTests(runTest, testBraidFetch)
+    defineUndoTests(runTest, testBraidFetch)
 
     // Run tests sequentially (not in parallel) to avoid conflicts
     var test_timeout_ms = 15000
