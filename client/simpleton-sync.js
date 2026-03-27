@@ -248,6 +248,13 @@ function simpleton_client(url, {
       // ── abort() — cancel the subscription ─────────────────────────
       abort: () => ac.abort(),
 
+      // ── version — the text version the client is currently at ─────
+      // Returns the sorted version strings the client has seen, the
+      // same value the server uses for Version/Parents headers.
+      // Useful for tagging cursor PUTs so the server knows which text
+      // state the cursor position refers to.
+      get version() { return client_version },
+
       // ── changed() — call when local edits occur ───────────────────
       // This is the entry point for sending local edits. It:
       // 1. Diffs client_state vs current state

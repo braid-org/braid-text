@@ -15,7 +15,7 @@
 //   cursors.changed(patches)
 //   cursors.destroy()
 //
-async function cursor_client(url, { peer, get_text, on_change, headers: custom_headers }) {
+async function cursor_client(url, { peer, get_text, get_version, on_change, headers: custom_headers }) {
     // --- feature detection: HEAD probe ---
     try {
         var head_res = await braid_fetch(url, {
@@ -121,14 +121,24 @@ async function cursor_client(url, { peer, get_text, on_change, headers: custom_h
                 to: js_index_to_code_point(text, r.to),
             }
         })
+        // Tag the PUT with the text version the cursor position refers to.
+        // The server uses this to transform positions from the client's
+        // version to the current version via DT's version DAG, preventing
+        // the cursor from jumping when the server is ahead of the client.
+        var put_headers = {
+            ...custom_headers,
+            'Content-Type': 'application/text-cursors+json',
+            Peer: peer,
+            'Content-Range': 'json [' + JSON.stringify(peer) + ']',
+        }
+        if (get_version) {
+            var v = get_version()
+            if (v && v.length)
+                put_headers.Version = v.map(function(s) { return JSON.stringify(s) }).join(', ')
+        }
         braid_fetch(url, {
             method: 'PUT',
-            headers: {
-                ...custom_headers,
-                'Content-Type': 'application/text-cursors+json',
-                Peer: peer,
-                'Content-Range': 'json [' + JSON.stringify(peer) + ']',
-            },
+            headers: put_headers,
             body: JSON.stringify(cp_ranges),
             retry: function(res) { return res.status === 425 },
             signal: put_ac.signal,
@@ -326,6 +336,7 @@ function cursor_highlights(textarea, url, options) {
     var hl = textarea_highlights(textarea)
     var applying_remote = false
     var client = null
+    var sc = null         // simpleton client, set by caller via .attach()
     var online = false
     var destroyed = false
 
@@ -333,6 +344,9 @@ function cursor_highlights(textarea, url, options) {
         peer,
         headers: options?.headers,
         get_text: () => textarea.value,
+        // Pass the simpleton client's current version so the server can
+        // transform cursor positions when it is ahead of this client.
+        get_version: () => sc?.version,
         on_change: function(sels) {
             for (var [id, ranges] of Object.entries(sels)) {
                 // Skip own cursor when textarea is focused (browser draws it)
@@ -396,6 +410,11 @@ function cursor_highlights(textarea, url, options) {
                 client.set(textarea.selectionStart, textarea.selectionEnd)
             }
         },
+
+        // attach(simpleton_client) — wire a simpleton client so cursor PUTs
+        // are tagged with the text version this client is currently at.
+        // Call this after creating the simpleton client for the same URL.
+        attach: function(simpleton) { sc = simpleton },
 
         destroy: function() {
             destroyed = true
