@@ -202,6 +202,7 @@ This will render each peer's cursor and selection with colored highlights.  Just
     },
     get_state: () => my_textarea.value
   })
+  cursors.attach(simpleton)              // <-- tag cursor PUTs with text version
 
   my_textarea.oninput = () => {
     cursors.on_edit(simpleton.changed())  // <-- send local cursor
@@ -278,6 +279,7 @@ The following options are deprecated and should be replaced with the new API:
 `cursor_highlights(textarea, url)` returns an object with:
 - `cursors.on_patches(patches)` — call after applying remote patches to transform and re-render remote cursors
 - `cursors.on_edit(patches)` — call after local edits; pass the patches from `simpleton.changed()` to update cursor positions and broadcast your selection
+- `cursors.attach(simpleton_client)` — wire a simpleton client so cursor PUTs are tagged with its current text version; the server uses this to transform stale positions before storing
 - `cursors.destroy()` — tear down listeners and DOM elements
 
 Colors are auto-assigned per peer ID. See `?editor` and `?markdown-editor` in the demo server for working examples.
