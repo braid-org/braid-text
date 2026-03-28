@@ -8,7 +8,7 @@
 //
 // Usage:
 //   var hl = textarea_highlights(textarea)
-//   hl.set('peer-1', [{ from: 5, to: 10, color: 'rgba(97,175,239,0.25)' }])
+//   hl.set('peer-1', [{ from: 5, to: 10, color: '#61afef', bg_color: 'rgba(97,175,239,0.25)' }])
 //   hl.render()
 //   hl.remove('peer-1')
 //   hl.destroy()
@@ -134,38 +134,33 @@ function textarea_highlights(textarea) {
     }
 
     function build_html(text, highlights) {
-        var cursors = highlights.filter(h => h.from === h.to)
-        var sels = highlights.filter(h => h.from !== h.to)
+        var items = highlights.map(h => ({
+            ...h,
+            start: Math.min(h.from, h.to),
+            end: Math.max(h.from, h.to)
+        }))
 
-        var items = []
-        for (var s of sels)
-            items.push({ type: 'selection', start: s.from, end: s.to, color: s.color })
-        for (var c of cursors)
-            items.push({ type: 'cursor', pos: c.from, color: c.color })
-
-        items.sort((a, b) => {
-            var pa = a.type === 'cursor' ? a.pos : a.start
-            var pb = b.type === 'cursor' ? b.pos : b.start
-            return pa - pb
-        })
+        items.sort((a, b) => a.start - b.start)
 
         var result = ''
         var last = 0
 
         for (var item of items) {
-            if (item.type === 'selection') {
-                if (item.start < last) continue
-                result += escape_html(text.substring(last, item.start))
-                var sel_text = text.substring(item.start, item.end)
-                var sel_html = escape_html(sel_text).replace(/\n/g, ' \n')
-                result += '<span class="sel" style="background-color:' + item.color + ';">' + sel_html + '</span>'
-                last = item.end
+            if (item.start < last) continue
+            result += escape_html(text.substring(last, item.start))
+
+            var cursor_html = '<span class="cursor" style="--cursor-color:' + item.color + ';"></span>'
+
+            if (item.start === item.end) {
+                result += cursor_html
             } else {
-                if (item.pos < last) continue
-                result += escape_html(text.substring(last, item.pos))
-                result += '<span class="cursor" style="--cursor-color:' + item.color + ';"></span>'
-                last = item.pos
+                var sel_html = escape_html(text.substring(item.start, item.end)).replace(/\n/g, ' \n')
+                var before = item.to === item.start ? cursor_html : ''
+                var after  = item.to === item.start ? '' : cursor_html
+                result += '<span class="sel" style="background-color:' + item.bg_color + ';">' + before + sel_html + '</span>' + after
             }
+
+            last = item.end
         }
 
         result += escape_html(text.substring(last))
@@ -191,9 +186,9 @@ function textarea_highlights(textarea) {
         // Render each layer
         for (var id of Object.keys(layer_data)) {
             var highlights = layer_data[id].map(h => ({
+                ...h,
                 from: Math.min(h.from, len),
                 to: Math.min(h.to, len),
-                color: h.color
             }))
 
             if (!layer_divs[id]) {

@@ -343,7 +343,8 @@ function cursor_highlights(textarea, url, options) {
                 if (!ranges.length) { hl.remove(id); continue }
                 hl.set(id, ranges.map(r => ({
                     from: r.from, to: r.to,
-                    color: r.from === r.to ? peer_color(id) : peer_bg_color(id)
+                    color: peer_color(id),
+                    bg_color: peer_bg_color(id)
                 })))
             }
             hl.render()
@@ -354,16 +355,21 @@ function cursor_highlights(textarea, url, options) {
         if (destroyed) client.destroy()
     })
 
+    var get_selection_range = () =>
+        textarea.selectionDirection === 'backward' ?
+            [textarea.selectionEnd, textarea.selectionStart] :
+            [textarea.selectionStart, textarea.selectionEnd]
+
     function on_selectionchange() {
         if (applying_remote) return
         if (document.activeElement !== textarea) return
-        if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
+        if (client) client.set(...get_selection_range())
     }
     document.addEventListener('selectionchange', on_selectionchange)
 
     // Show own cursor when blurred, hide when focused
     function on_blur() {
-        if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
+        if (client) client.set(...get_selection_range())
     }
     function on_focus() {
         hl.remove(peer)
