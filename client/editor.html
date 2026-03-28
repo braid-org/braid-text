@@ -23,6 +23,7 @@
     on_error: (e) => set_error_state(the_editor),
     on_ack: () => set_acked_state(the_editor)
   })
+  cursors.attach(simpleton)
 
   the_editor.oninput = (e) => {
     set_acked_state(the_editor, false)

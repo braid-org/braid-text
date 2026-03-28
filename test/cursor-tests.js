@@ -981,6 +981,162 @@ runTest(
     'ok'
 )
 
+runTest(
+    "cursor: version-aware PUT transforms stale position",
+    async () => {
+        var key = 'cursor-vtest-' + Math.random().toString(36).slice(2)
+        var cursor_peer = 'cursor-' + Math.random().toString(36).slice(2)
+        var edit_peer = 'edit-' + Math.random().toString(36).slice(2)
+
+        // 1. Set initial text: "hello world"
+        await braid_fetch(`/${key}`, { method: 'PUT', body: 'hello world' })
+
+        // 2. Get the initial version via a one-shot subscribe
+        var version_ac = new AbortController()
+        var initial_version = null
+        var ver_r = await braid_fetch(`/${key}`, {
+            subscribe: true,
+            signal: version_ac.signal,
+            headers: { 'Merge-Type': 'simpleton' }
+        })
+        await new Promise(resolve => {
+            ver_r.subscribe(update => {
+                initial_version = update.version
+                version_ac.abort()
+                resolve()
+            })
+        })
+        if (!initial_version || !initial_version.length)
+            return 'failed to get initial version'
+
+        // 3. Insert "dear " at position 6 => "hello dear world"
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            headers: { 'Peer': edit_peer },
+            patches: [{unit: 'text', range: '[6:6]', content: 'dear '}]
+        })
+
+        var r2 = await braid_fetch(`/${key}`)
+        var text = await r2.text()
+        if (text !== 'hello dear world')
+            return 'unexpected text: ' + text
+
+        // 4. Subscribe cursor peer
+        var ac = await subscribe_peer(key, cursor_peer)
+
+        // 5. PUT cursor at position 6 tagged with the OLD version.
+        //    In the old text "hello world", position 6 = 'w'.
+        //    Server should transform to 11 ('w' in "hello dear world").
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: initial_version,
+            headers: {
+                'Content-Type': 'application/text-cursors+json',
+                'Content-Range': 'json [' + JSON.stringify(cursor_peer) + ']',
+                'Peer': cursor_peer
+            },
+            body: JSON.stringify([{from: 6, to: 6}])
+        })
+
+        var r3 = await braid_fetch(`/${key}`, {
+            headers: { 'Accept': 'application/text-cursors+json' }
+        })
+        ac.abort()
+        var body = JSON.parse(await r3.text())
+        if (!body[cursor_peer])
+            return 'cursor missing from snapshot'
+        if (body[cursor_peer][0].from !== 11)
+            return 'expected 11 (transformed), got ' + body[cursor_peer][0].from
+
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
+    "cursor: version-aware PUT with no version stores as-is",
+    async () => {
+        var key = 'cursor-noversion-' + Math.random().toString(36).slice(2)
+        var cursor_peer = 'cursor-' + Math.random().toString(36).slice(2)
+
+        await braid_fetch(`/${key}`, { method: 'PUT', body: 'hello world' })
+
+        var ac = await subscribe_peer(key, cursor_peer)
+
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/text-cursors+json',
+                'Content-Range': 'json [' + JSON.stringify(cursor_peer) + ']',
+                'Peer': cursor_peer
+            },
+            body: JSON.stringify([{from: 6, to: 6}])
+        })
+
+        var r = await braid_fetch(`/${key}`, {
+            headers: { 'Accept': 'application/text-cursors+json' }
+        })
+        ac.abort()
+        var body = JSON.parse(await r.text())
+        if (!body[cursor_peer]) return 'cursor missing'
+        if (body[cursor_peer][0].from !== 6)
+            return 'expected 6 (as-is), got ' + body[cursor_peer][0].from
+
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
+    "cursor: version-aware PUT at current version is no-op",
+    async () => {
+        var key = 'cursor-curver-' + Math.random().toString(36).slice(2)
+        var cursor_peer = 'cursor-' + Math.random().toString(36).slice(2)
+
+        await braid_fetch(`/${key}`, { method: 'PUT', body: 'hello world' })
+
+        var version_ac = new AbortController()
+        var ver_r = await braid_fetch(`/${key}`, {
+            subscribe: true,
+            signal: version_ac.signal,
+            headers: { 'Merge-Type': 'simpleton' }
+        })
+        var current_version = null
+        await new Promise(resolve => {
+            ver_r.subscribe(update => {
+                current_version = update.version
+                version_ac.abort()
+                resolve()
+            })
+        })
+
+        var ac = await subscribe_peer(key, cursor_peer)
+
+        await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: current_version,
+            headers: {
+                'Content-Type': 'application/text-cursors+json',
+                'Content-Range': 'json [' + JSON.stringify(cursor_peer) + ']',
+                'Peer': cursor_peer
+            },
+            body: JSON.stringify([{from: 6, to: 6}])
+        })
+
+        var r2 = await braid_fetch(`/${key}`, {
+            headers: { 'Accept': 'application/text-cursors+json' }
+        })
+        ac.abort()
+        var body = JSON.parse(await r2.text())
+        if (!body[cursor_peer]) return 'cursor missing'
+        if (body[cursor_peer][0].from !== 6)
+            return 'expected 6 (no-op), got ' + body[cursor_peer][0].from
+
+        return 'ok'
+    },
+    'ok'
+)
+
 }
 
 if (typeof module !== 'undefined' && module.exports) {

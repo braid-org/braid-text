@@ -383,7 +383,39 @@ function create_braid_text() {
         let peer = req.headers["peer"]
 
         // Implement Multiplayer Text Cursors
-        if (await handle_cursors(resource, req, res))
+        // Build a version-transform callback for cursor PUTs.
+        // This closure captures get_xf_patches and OpLog_remote_to_local
+        // which are scoped inside create_braid_text.
+        var cursor_version_xf = null
+        if (resource.dt) {
+            cursor_version_xf = function(cursor_data, version) {
+                var local_v = OpLog_remote_to_local(resource.dt.doc, version)
+                if (!local_v) return cursor_data
+                var cur_local_v = resource.dt.doc.getLocalVersion()
+                if (local_v.length === cur_local_v.length && local_v.every((x, i) => x === cur_local_v[i]))
+                    return cursor_data
+                var xf = get_xf_patches(resource.dt.doc, local_v)
+                if (!xf.length) return cursor_data
+                // Parse string ranges into arrays and compute codepoint lengths
+                var parsed = xf.map(function(p) {
+                    var m = p.range.match(/\d+/g).map(Number)
+                    return {start: m[0], end: m[1], ins_len: [...(p.content || '')].length}
+                })
+                return cursor_data.map(function(sel) {
+                    var from = sel.from, to = sel.to
+                    var offset = 0
+                    for (var p of parsed) {
+                        var del_start = p.start + offset
+                        var del_len = p.end - p.start
+                        from = transform_pos(from, del_start, del_len, p.ins_len)
+                        to = transform_pos(to, del_start, del_len, p.ins_len)
+                        offset += p.ins_len - del_len
+                    }
+                    return {from, to}
+                })
+            }
+        }
+        if (await handle_cursors(resource, req, res, cursor_version_xf))
             return
 
         let merge_type = req.headers["merge-type"]
@@ -3789,7 +3821,7 @@ class cursor_state {
 
 // Handle cursor requests routed by content negotiation.
 // Returns true if the request was handled, false to fall through.
-async function handle_cursors(resource, req, res) {
+async function handle_cursors(resource, req, res, cursor_version_xf) {
     var accept = req.headers['accept'] || ''
     var content_type = req.headers['content-type'] || ''
 
@@ -3837,7 +3869,14 @@ async function handle_cursors(resource, req, res) {
             return true
         }
         var cursor_peer = JSON.parse(range.slice(5))[0]
-        var accepted = cursors.put(cursor_peer, JSON.parse(raw_body))
+        var cursor_data = JSON.parse(raw_body)
+
+        // If the client sent a Version header and we have a transform
+        // callback, rebase cursor positions from client's version to current.
+        if (cursor_version_xf && req.version && req.version.length)
+            cursor_data = cursor_version_xf(cursor_data, req.version)
+
+        var accepted = cursors.put(cursor_peer, cursor_data)
         if (accepted) {
             res.writeHead(200)
             res.end()
