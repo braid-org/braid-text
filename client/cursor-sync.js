@@ -355,14 +355,29 @@ function cursor_highlights(textarea, url, options) {
         if (destroyed) client.destroy()
     })
 
-    var get_selection_range = () =>
-        textarea.selectionDirection === 'backward' ?
-            [textarea.selectionEnd, textarea.selectionStart] :
-            [textarea.selectionStart, textarea.selectionEnd]
+    // Track the anchor (non-moving end) of selections. We record the cursor
+    // position whenever the selection is collapsed; when it later expands,
+    // the anchor tells us which end the caret is on. This works for both
+    // mouse drags and keyboard selections, and avoids relying on
+    // selectionDirection which returns "none" for mouse drags on macOS.
+    var anchor = null
+
+    function get_selection_range() {
+        var start = textarea.selectionStart
+        var end = textarea.selectionEnd
+        if (textarea.selectionDirection === 'backward')
+            return [end, start]
+        if (anchor === start || anchor === end)
+            return [anchor, (anchor === start) ? end : start]
+        return [start, end]
+    }
 
     function on_selectionchange() {
         if (applying_remote) return
         if (document.activeElement !== textarea) return
+        var start = textarea.selectionStart
+        var end = textarea.selectionEnd
+        if (start === end) anchor = start
         if (client) client.set(...get_selection_range())
     }
     document.addEventListener('selectionchange', on_selectionchange)
