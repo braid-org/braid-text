@@ -343,7 +343,8 @@ function cursor_highlights(textarea, url, options) {
                 if (!ranges.length) { hl.remove(id); continue }
                 hl.set(id, ranges.map(r => ({
                     from: r.from, to: r.to,
-                    color: r.from === r.to ? peer_color(id) : peer_bg_color(id)
+                    color: peer_color(id),
+                    bg_color: peer_bg_color(id)
                 })))
             }
             hl.render()
@@ -354,16 +355,36 @@ function cursor_highlights(textarea, url, options) {
         if (destroyed) client.destroy()
     })
 
+    // Track the anchor (non-moving end) of selections. We record the cursor
+    // position whenever the selection is collapsed; when it later expands,
+    // the anchor tells us which end the caret is on. This works for both
+    // mouse drags and keyboard selections, and avoids relying on
+    // selectionDirection which returns "none" for mouse drags on macOS.
+    var anchor = null
+
+    function get_selection_range() {
+        var start = textarea.selectionStart
+        var end = textarea.selectionEnd
+        if (textarea.selectionDirection === 'backward')
+            return [end, start]
+        if (anchor === start || anchor === end)
+            return [anchor, (anchor === start) ? end : start]
+        return [start, end]
+    }
+
     function on_selectionchange() {
         if (applying_remote) return
         if (document.activeElement !== textarea) return
-        if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
+        var start = textarea.selectionStart
+        var end = textarea.selectionEnd
+        if (start === end) anchor = start
+        if (client) client.set(...get_selection_range())
     }
     document.addEventListener('selectionchange', on_selectionchange)
 
     // Show own cursor when blurred, hide when focused
     function on_blur() {
-        if (client) client.set(textarea.selectionStart, textarea.selectionEnd)
+        if (client) client.set(...get_selection_range())
     }
     function on_focus() {
         hl.remove(peer)

@@ -21,7 +21,7 @@ var server = require("http").createServer(async (req, res) => {
     }
 
     if (req.url === '/simpleton-sync.js' || req.url === '/web-utils.js'
-        || req.url === '/cursor-highlights.js' || req.url === '/cursor-sync.js') {
+        || req.url === '/textarea-highlights.js' || req.url === '/cursor-sync.js') {
         res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-cache" })
         require("fs").createReadStream("./client" + req.url).pipe(res)
         return
