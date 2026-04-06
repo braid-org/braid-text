@@ -1,0 +1,142 @@
+<body style="margin: 0px; padding: 0px; box-sizing: border-box; display: flex; flex-direction: column; height: 100vh;">
+  <textarea id="the_editor" style="width: 100%; flex: 1; resize: none;" disabled></textarea>
+  <div id="network_log" style="width: 100%; flex: 1; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 12px; white-space: pre-wrap; padding: 8px; box-sizing: border-box; border-top: 2px solid #444;"></div>
+</body>
+<script type="importmap">
+{
+  "imports": {
+    "yjs": "https://cdn.jsdelivr.net/npm/yjs@13/+esm",
+    "lib0/encoding": "https://cdn.jsdelivr.net/npm/lib0@0.2/encoding.js/+esm"
+  }
+}
+</script>
+<script type="module">
+  import * as Y from 'yjs'
+  import * as lib0_encoding from 'lib0/encoding'
+  window.Y = Object.assign({}, Y, {lib0_encoding})
+</script>
+<script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
+<script src="/yjs-sync.js"></script>
+<script>
+  var decoder = new TextDecoder()
+
+  function log_network(direction, text) {
+    var entry = document.createElement('div')
+    entry.style.marginBottom = '4px'
+    entry.style.borderBottom = '1px solid #333'
+    entry.style.paddingBottom = '4px'
+
+    var color = direction === 'out' ? '#569cd6' : '#6a9955'
+    if (direction === 'out') entry.style.marginTop = '12px'
+    entry.innerHTML = '<span style="color:' + color + '">' + escapeHtml(text) + '</span>'
+    network_log.appendChild(entry)
+    network_log.scrollTop = network_log.scrollHeight
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  // Wait for the module import to complete
+  var check = setInterval(() => {
+    if (typeof Y === 'undefined' || !Y.Doc) return
+    clearInterval(check)
+    start()
+  }, 50)
+
+  function start() {
+    var ydoc = new Y.Doc()
+    var ytext = ydoc.getText('text')
+
+    // Apply remote changes to textarea, adjusting cursor through the delta
+    ytext.observe(event => {
+      if (event.transaction.origin === 'local') return
+      var cursor = the_editor.selectionStart
+      var pos = 0
+      for (var d of event.changes.delta) {
+        if (d.retain) { pos += d.retain; continue }
+        if (d.insert) {
+          var len = d.insert.length
+          if (pos <= cursor) cursor += len
+          pos += len
+        }
+        if (d.delete) {
+          var len = d.delete
+          if (pos < cursor) cursor -= Math.min(len, cursor - pos)
+        }
+      }
+      the_editor.value = ytext.toString()
+      the_editor.selectionStart = the_editor.selectionEnd = cursor
+      the_editor.disabled = false
+    })
+
+    // Connect to server
+    var client = yjs_client(location.pathname, {
+      ydoc,
+      channel: 'text',
+      on_error: (e) => {
+        console.error('yjs_client error:', e)
+        the_editor.style.background = 'pink'
+      },
+      onFetch: (url, params) => {
+        var method = params.method || 'GET'
+        var lines = method + ' ' + url + ' HTTP/1.1'
+        if (params.headers) {
+          // params.headers can be a Headers object or plain object
+          var h = params.headers
+          if (h instanceof Headers) {
+            h.forEach((v, k) => { lines += '\n' + k + ': ' + v })
+          } else {
+            for (var k in h) lines += '\n' + k + ': ' + h[k]
+          }
+        }
+        if (params.body) {
+          if (typeof params.body === 'string') {
+            log_network('out', lines + '\n\n' + params.body)
+          } else if (params.body instanceof Blob) {
+            log_network('out', lines + '\n\n...')
+            params.body.text().then(t => {
+              // update the last log entry with actual body
+              var last = network_log.lastElementChild
+              if (last) last.innerHTML = '<span style="color:#569cd6">' + escapeHtml(lines + '\n\n' + t) + '</span>'
+            })
+          } else if (params.body instanceof ArrayBuffer || params.body instanceof Uint8Array) {
+            log_network('out', lines + '\n\n' + decoder.decode(params.body))
+          } else {
+            log_network('out', lines + '\n\n' + String(params.body))
+          }
+        } else {
+          log_network('out', lines)
+        }
+      },
+      onBytes: (chunk) => {
+        var text = decoder.decode(chunk, {stream: true})
+        if (text.trim()) log_network('in', text)
+      }
+    })
+
+    // Send local edits
+    the_editor.oninput = () => {
+      var new_text = the_editor.value
+      var old_text = ytext.toString()
+      if (new_text === old_text) return
+
+      // Simple diff: find common prefix and suffix
+      var prefix = 0
+      while (prefix < old_text.length && prefix < new_text.length
+             && old_text[prefix] === new_text[prefix]) prefix++
+      var suffix = 0
+      while (suffix < old_text.length - prefix
+             && suffix < new_text.length - prefix
+             && old_text[old_text.length - 1 - suffix] === new_text[new_text.length - 1 - suffix]) suffix++
+
+      var del_len = old_text.length - prefix - suffix
+      var ins_text = new_text.slice(prefix, new_text.length - suffix)
+
+      ydoc.transact(() => {
+        if (del_len > 0) ytext.delete(prefix, del_len)
+        if (ins_text.length > 0) ytext.insert(prefix, ins_text)
+      }, 'local')
+    }
+  }
+</script>
