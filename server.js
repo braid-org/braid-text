@@ -1231,6 +1231,7 @@ function create_braid_text() {
                 // Each patch's .version is a Yjs item ID (clientID-clock).
                 if (resource.yjs && captured_yjs_update) {
                     var yjs_updates = braid_text.from_yjs_binary(captured_yjs_update)
+                    if (braid_text.verbose) console.log('DT→Yjs broadcast:', yjs_updates.length, 'updates to', resource.yjs.clients.size, 'yjs clients')
                     for (var yjs_update of yjs_updates)
                         for (var client of resource.yjs.clients)
                             if (!peer || client.peer !== peer)
@@ -3073,9 +3074,13 @@ function create_braid_text() {
             update instanceof Uint8Array ? update : new Uint8Array(update))
         var updates = []
 
-        // Each inserted struct becomes one update with one insert patch
+        // Each inserted struct becomes one update with one insert patch.
+        // GC'd structs (deleted items) have content.len but no content.str —
+        // we emit placeholder text since the delete set will remove it anyway.
         for (var struct of decoded.structs) {
-            if (!struct.content?.str) continue  // skip non-text items
+            var text = struct.content?.str
+            if (!text && struct.content?.len) text = '_'.repeat(struct.content.len)
+            if (!text) continue  // skip non-text items (e.g. format, embed)
             var id = struct.id
             var origin = struct.origin
             var rightOrigin = struct.rightOrigin
@@ -3086,7 +3091,7 @@ function create_braid_text() {
                 patches: [{
                     unit: 'yjs-text',
                     range: `(${left}:${right})`,
-                    content: struct.content.str,
+                    content: text,
                 }]
             })
         }
