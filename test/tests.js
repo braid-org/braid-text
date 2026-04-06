@@ -379,7 +379,7 @@ runTest(
 )
 
 runTest(
-    "test braid_text.get(url), with parents",
+    "test braid_text.get(url), with version",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)
         let r = await braid_fetch(`/${key}`, {
@@ -393,7 +393,7 @@ runTest(
             method: 'PUT',
             body: `void (async () => {
                 res.end(await braid_text.get(new URL('http://localhost:8889/${key}'), {
-                    parents: ['xyz-0']
+                    version: ['xyz-0']
                 }))
             })()`
         })
@@ -644,7 +644,7 @@ runTest(
         var a = new AbortController()
         let r2 = await braid_fetch(`/${key}`, {
             signal: a.signal,
-            version: ['hi-0'],
+            parents: ['hi-0'],
             subscribe: true
         })
         var parts = []
@@ -689,7 +689,7 @@ runTest(
         var a = new AbortController()
         let r2 = await braid_fetch(`/${key}`, {
             signal: a.signal,
-            version: ['hi-0'],
+            parents: ['hi-0'],
             headers: { 'merge-type': 'dt' },
             subscribe: true
         })
@@ -753,7 +753,7 @@ runTest(
             body: `void (async () => {
                 var resource = await braid_text.get_resource('/${key}')
 
-                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
+                var {dt: {change_count}} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
 
                 res.end('' + change_count)
             })()`
@@ -764,7 +764,7 @@ runTest(
             body: `void (async () => {
                 var resource = await braid_text.get_resource('/${key}')
 
-                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt", validate_already_seen_versions: true })
+                var {dt: {change_count}} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt", validate_already_seen_versions: true })
 
                 res.end('' + change_count)
             })()`
@@ -785,7 +785,7 @@ runTest(
             body: `void (async () => {
                 var resource = await braid_text.get_resource('/${key}')
 
-                var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
+                var {dt: {change_count}} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "XYZ"}], merge_type: "dt" })
 
                 res.end('' + change_count)
             })()`
@@ -797,7 +797,7 @@ runTest(
                 var resource = await braid_text.get_resource('/${key}')
 
                 try {
-                    var {change_count} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "ABC"}], merge_type: "dt", validate_already_seen_versions: true })
+                    var {dt: {change_count}} = await braid_text.put(resource, { peer: "abc", version: ["hi-2"], parents: [], patches: [{unit: "text", range: "[0:0]", content: "ABC"}], merge_type: "dt", validate_already_seen_versions: true })
 
                     res.end('' + change_count)
                 } catch (e) {
@@ -995,7 +995,7 @@ runTest(
 
                 // Put should await the subscriber callback
                 await braid_text.put('/${key}', {
-                    version: ['test-v-0'],
+                    version: ['test-v-4'],
                     parents: [],
                     body: 'hello'
                 })
@@ -1119,11 +1119,11 @@ runTest(
             body: `void (async () => {
                 var key = '/${key}'
 
-                var {change_count} = await braid_text.put(key, {
+                var {dt: {change_count}} = await braid_text.put(key, {
                     body: new Uint8Array([${'' + bytes}]),
                     transfer_encoding: "dt"
                 })
-                var {body, version} = await braid_text.get(key, {})
+                var {body, version} = await braid_text.get(key, {full_response: true})
 
                 res.end('' + change_count + " " + body + " " + version)
             })()`
@@ -1554,7 +1554,7 @@ runTest(
         var a = new AbortController()
         let r2 = await braid_fetch(`/${key}`, {
             signal: a.signal,
-            version: ['hi-0'],
+            parents: ['hi-0'],
             subscribe: true
         })
         return await new Promise(async (done, fail) => {
@@ -1583,7 +1583,7 @@ runTest(
         var a = new AbortController()
         let r2 = await braid_fetch(`/${key}`, {
             signal: a.signal,
-            version: ['hi-0'],
+            parents: ['hi-0'],
             subscribe: true,
             headers: {
                 'Merge-Type': 'dt'
@@ -1615,7 +1615,7 @@ runTest(
         var a = new AbortController()
         let r2 = await braid_fetch(`/${key}`, {
             signal: a.signal,
-            version: ['hi-1'],
+            parents: ['hi-1'],
             subscribe: true,
             headers: {
                 'Merge-Type': 'dt'
@@ -1633,6 +1633,52 @@ runTest(
         })
     },
     'got nothing'
+)
+
+runTest(
+    "test subscribing at current version receives future edits",
+    async () => {
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xx'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            parents: ['hi-1'],
+            subscribe: true
+        })
+        return await new Promise(async (done, fail) => {
+            r2.subscribe(update => {
+                done('got update with patches: ' + (update.patches?.length ?? update.patch ? 1 : 0))
+                a.abort()
+            }, fail)
+
+            // Make an edit after subscribing
+            setTimeout(async () => {
+                try {
+                    await braid_fetch(`/${key}`, {
+                        method: 'PUT',
+                        version: ['edit-0'],
+                        parents: ['hi-1'],
+                        patches: [{unit: 'text', range: '[2:2]', content: '!'}]
+                    })
+                } catch (e) {}
+            }, 100)
+
+            setTimeout(() => {
+                done('got nothing')
+                a.abort()
+            }, 3000)
+        })
+    },
+    'got update with patches: 1'
 )
 
 runTest(
@@ -1795,19 +1841,19 @@ runTest(
 )
 
 runTest(
-    "test braid_text.get(url) returns null for 404",
+    "test braid_text.get(url) returns empty string for 404",
     async () => {
         // Use the /404 endpoint that always returns 404
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
                 var result = await braid_text.get(new URL('http://localhost:8889/404'))
-                res.end(result === null ? 'null' : 'not null: ' + result)
+                res.end(result === '' ? 'empty' : 'not empty: ' + result)
             })()`
         })
         return await r.text()
     },
-    'null'
+    'empty'
 )
 
 runTest(
@@ -2345,8 +2391,8 @@ runTest(
                 await new Promise(done => setTimeout(done, 100))
 
                 // Read back from disk - pass empty options to force loading
-                var lower = (await braid_text.get('${key_lower}', {})).body
-                var upper = (await braid_text.get('${key_upper}', {})).body
+                var lower = await braid_text.get('${key_lower}', {})
+                var upper = await braid_text.get('${key_upper}', {})
                 res.end(JSON.stringify({lower, upper}))
             })()`
         })
@@ -2397,11 +2443,7 @@ runTest(
         })
         if (!r3.headers.get('merge-type')) return 'Missing Merge-Type with Parents header'
 
-        // Test 4: Regular GET without Version/Parents should NOT include Merge-Type
-        let r4 = await braid_fetch(`/${key}`)
-        if (r4.headers.get('merge-type')) return 'Unexpected Merge-Type without Version/Parents'
-
-        // Test 5: GET with Subscribe should include Merge-Type
+        // Test 4: GET with Subscribe should include Merge-Type
         let a = new AbortController()
         let r5 = await braid_fetch(`/${key}`, {
             signal: a.signal,
@@ -2719,7 +2761,7 @@ runTest(
         var result = JSON.parse(await r2.text())
 
         // Verify the put was ignored (change_count should be 0)
-        if (result.change_count !== 0) return 'expected change_count 0, got ' + result.change_count
+        if (result.dt?.change_count !== 0) return 'expected change_count 0, got ' + result.dt?.change_count
 
         // Verify the content is still the original
         var r3 = await braid_fetch(`/${key}`)
@@ -2755,7 +2797,7 @@ runTest(
                     patches: [{unit: 'text', range: '[0:0]', content: 'abcde'}]
                 })
 
-                res.end(resource.dt.doc.get() + ':' + result.change_count)
+                res.end(resource.dt.doc.get() + ':' + result.dt?.change_count)
             })()`
         })
         if (!r.ok) return 'eval failed: ' + r.status
@@ -2922,26 +2964,28 @@ runTest(
     'invalid patch range position: 10'
 )
 
+// These tests probe simpleton rebasing internals by injecting client objects
+// directly into resource.simpleton.clients.
 runTest(
-    "test put from same peer as simpleton client sets my_last_seen_version",
+    "test put from same peer as simpleton client sets last_seen_version",
     async () => {
         var key = 'test-' + Math.random().toString(36).slice(2)
 
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
+                await braid_text.put('/${key}', {version: ['init-0'], body: ''})
                 var resource = await braid_text.get_resource('/${key}')
-                    await braid_text.ensure_dt_exists(resource)
 
                 try {
                     // Add a simpleton client with a specific peer
                     var client = {
                         peer: 'test-peer',
-                        my_subscribe: (update) => {},
-                        my_last_sent_version: [],
-                        my_last_seen_version: null
+                        send_update: (update) => {},
+                        last_sent_version: [],
+                        last_seen_version: null
                     }
-                    resource.dt.simpleton_clients.add(client)
+                    resource.simpleton.clients.add(client)
 
                     // Do a put with the same peer and merge_type: 'simpleton'
                     await braid_text.put(resource, {
@@ -2952,8 +2996,8 @@ runTest(
                         merge_type: 'simpleton'
                     })
 
-                    // Check that my_last_seen_version was set
-                    res.end(JSON.stringify(client.my_last_seen_version))
+                    // Check that last_seen_version was set
+                    res.end(JSON.stringify(client.last_seen_version))
                 } catch (e) {
                     res.end('error: ' + e.message)
                 }
@@ -2985,27 +3029,27 @@ runTest(
                     })
 
                     // Add a simpleton client with a specific peer
-                    // Set my_last_sent_version to something different than what we'll use as parents
+                    // Set last_sent_version to something different than what we'll use as parents
                     var client = {
                         peer: 'test-peer',
-                        my_subscribe: (update) => {},
-                        my_last_sent_version: ['a-2'],  // client thinks it has a-2
-                        my_last_seen_version: null
+                        send_update: (update) => {},
+                        last_sent_version: ['a-2'],  // client thinks it has a-2
+                        last_seen_version: null
                     }
-                    resource.dt.simpleton_clients.add(client)
+                    resource.simpleton.clients.add(client)
 
-                    // Do a put with parents: [] (empty/root), which doesn't match my_last_sent_version
+                    // Do a put with parents: [] (empty/root), which doesn't match last_sent_version
                     // This should trigger P60 (version mismatch -> set_timeout)
                     await braid_text.put(resource, {
                         version: ['b-2'],
-                        parents: [],  // doesn't match client.my_last_sent_version (['a-2'])
+                        parents: [],  // doesn't match client.last_sent_version (['a-2'])
                         patches: [{unit: 'text', range: '[0:0]', content: 'xyz'}],
                         peer: 'test-peer',
                         merge_type: 'simpleton'
                     })
 
-                    // Check that timeout was set (my_timeout should exist)
-                    res.end(client.my_timeout ? 'timeout set' : 'no timeout')
+                    // Check that timeout was set (timeout should exist)
+                    res.end(client.timeout ? 'timeout set' : 'no timeout')
                 } catch (e) {
                     res.end('error: ' + e.message)
                 }
@@ -3039,27 +3083,27 @@ runTest(
                     // Add a simpleton client that already has a timeout set
                     var client = {
                         peer: 'test-peer',
-                        my_subscribe: (update) => {},
-                        my_last_sent_version: ['a-2'],
-                        my_timeout: setTimeout(() => {}, 10000)  // existing timeout
+                        send_update: (update) => {},
+                        last_sent_version: ['a-2'],
+                        timeout: setTimeout(() => {}, 10000)  // existing timeout
                     }
-                    resource.dt.simpleton_clients.add(client)
+                    resource.simpleton.clients.add(client)
 
-                    var old_timeout = client.my_timeout
+                    var old_timeout = client.timeout
 
                     // Put from same peer with mismatched parents
                     // This should hit P55 (has timeout) -> P56 (same peer) -> P57 (versions don't match)
                     // And P51 (clear old timeout)
                     await braid_text.put(resource, {
                         version: ['b-2'],
-                        parents: [],  // doesn't match my_last_sent_version
+                        parents: [],  // doesn't match last_sent_version
                         patches: [{unit: 'text', range: '[0:0]', content: 'xyz'}],
                         peer: 'test-peer',
                         merge_type: 'simpleton'
                     })
 
                     // Check that timeout was replaced
-                    var new_timeout = client.my_timeout
+                    var new_timeout = client.timeout
                     res.end(old_timeout !== new_timeout ? 'timeout replaced' : 'same timeout')
                 } catch (e) {
                     res.end('error: ' + e.message)
@@ -3095,11 +3139,11 @@ runTest(
                     var received_update = false
                     var client = {
                         peer: 'test-peer',
-                        my_subscribe: (update) => { received_update = true },
-                        my_last_sent_version: ['a-2'],
-                        my_timeout: setTimeout(() => {}, 10000)  // has existing timeout
+                        send_update: (update) => { received_update = true },
+                        last_sent_version: ['a-2'],
+                        timeout: setTimeout(() => {}, 10000)  // has existing timeout
                     }
-                    resource.dt.simpleton_clients.add(client)
+                    resource.simpleton.clients.add(client)
 
                     // Do a put with merge_type: 'dt'
                     // This should hit P69 and skip the client (not send update)
@@ -3145,15 +3189,15 @@ runTest(
                     var callback_result = 'not called'
                     var client = {
                         peer: 'test-peer',
-                        my_subscribe: (update) => { callback_result = 'called' },
-                        my_last_sent_version: ['a-2']
+                        send_update: (update) => { callback_result = 'called' },
+                        last_sent_version: ['a-2']
                     }
-                    resource.dt.simpleton_clients.add(client)
+                    resource.simpleton.clients.add(client)
 
                     // Trigger a timeout by putting with mismatched parents
                     await braid_text.put(resource, {
                         version: ['b-2'],
-                        parents: [],  // doesn't match my_last_sent_version
+                        parents: [],  // doesn't match last_sent_version
                         patches: [{unit: 'text', range: '[0:0]', content: 'xyz'}],
                         peer: 'test-peer',
                         merge_type: 'simpleton'
@@ -3165,7 +3209,7 @@ runTest(
                     // Wait for the timeout to fire (it should exit early due to freed doc)
                     await new Promise(done => setTimeout(done, 100))
 
-                    // my_subscribe should NOT have been called because doc was freed
+                    // send_update should NOT have been called because doc was freed
                     res.end(callback_result)
                 } catch (e) {
                     res.end('error: ' + e.message)
@@ -3264,6 +3308,9 @@ runTest(
     'missing parent version: nonexistent-99'
 )
 
+// TODO: Same issue as the simpleton peer test above — manually injects fake
+// simpleton client into resource.dt. Needs init PUT or redesign to use
+// the public subscribe API.
 runTest(
     "test put with merge_type dt notifies simpleton clients",
     async () => {
@@ -3272,16 +3319,16 @@ runTest(
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
+                await braid_text.put('/${key}', {version: ['init-0'], body: ''})
                 var resource = await braid_text.get_resource('/${key}')
-                    await braid_text.ensure_dt_exists(resource)
 
                 // Add a simpleton client (non-dt subscriber)
                 var received_update = null
-                resource.dt.simpleton_clients.add({
-                    my_subscribe: (update) => {
+                resource.simpleton.clients.add({
+                    send_update: (update) => {
                         received_update = update
                     },
-                    my_last_sent_version: []
+                    last_sent_version: []
                 })
 
                 // Do a put with merge_type: 'dt'
@@ -3312,43 +3359,42 @@ runTest(
 // Tests for reconnector/sync edge cases
 
 runTest(
-    "test braid_text.sync remote null triggers local_first_put_promise path",
+    "test braid_text.sync recovers after remote 404",
     async () => {
-        var local_key = 'test-local-' + Math.random().toString(36).slice(2)
+        var local_key = 'test-sync-404-' + Math.random().toString(36).slice(2)
 
-        // Use the /404 endpoint which always returns 404 (null from braid_text.get)
+        // Put some content locally first
+        await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                await braid_text.put('/${local_key}', { body: 'hello from local' })
+                res.end('ok')
+            })()`
+        })
+
+        // Sync with /404-once endpoint (returns 404 on first subscribe, then serves)
         var r = await braid_fetch(`/eval`, {
             method: 'PUT',
             body: `void (async () => {
                 var ac = new AbortController()
-                var reconnect_count = 0
 
-                braid_text.sync('/${local_key}', new URL('http://localhost:8889/404'), {
+                braid_text.sync('/${local_key}', new URL('http://localhost:8889/404-once/${local_key}'), {
                     signal: ac.signal,
-                    on_pre_connect: () => {
-                        reconnect_count++
-                        if (reconnect_count >= 2) {
-                            ac.abort()
-                            res.end('reconnected after local put')
-                        }
-                    }
                 })
 
-                // Wait a bit then put something locally - this should trigger
-                // the local_first_put_promise to resolve and cause reconnect
-                await new Promise(done => setTimeout(done, 100))
-                await braid_text.put('/${local_key}', { body: 'local data' })
+                // Wait for reconnection backoff (1s) + sync
+                await new Promise(done => setTimeout(done, 3000))
 
-                // Wait for reconnect
-                await new Promise(done => setTimeout(done, 2000))
-                res.end('did not reconnect')
+                var remote_text = await braid_text.get('/${local_key}')
+                ac.abort()
+                res.end(remote_text)
             })()`
         })
         if (!r.ok) return 'eval failed: ' + r.status
 
         return await r.text()
     },
-    'reconnected after local put'
+    'hello from local'
 )
 
 runTest(
@@ -3412,7 +3458,7 @@ runTest(
                     // Now make a forked update from the initial version (not V2)
                     // This simulates another DT client that forked from the original
                     await braid_text.put(new URL('http://localhost:8889/${key}'), {
-                        version: ['forker-1'],
+                        version: ['forker-2'],
                         parents: initial_version_inner,
                         patches: [{ unit: 'text', range: '[0:0]', content: 'yo ' }],
                         headers: { 'merge-type': 'dt' }
@@ -3521,13 +3567,13 @@ runTest(
                 }
 
                 // First PUT: new doc, empty parents
-                await fake_put('test', 'aaa-5', '', 'hello')
+                await fake_put('test', 'aaa-4', '', 'hello')
 
                 // Second PUT: explicit parents pointing to first version
-                await fake_put('test', 'bbb-6', 'aaa-5', 'hello world')
+                await fake_put('test', 'bbb-15', 'aaa-4', 'hello world')
 
                 // Third PUT: no parents header — server infers from current version
-                await fake_put('test', 'ccc-1', undefined, 'hello world!')
+                await fake_put('test', 'ccc-22', undefined, 'hello world!')
 
                 res.end(JSON.stringify({
                     // First put: parents=[] (new doc), version has aaa

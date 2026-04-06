@@ -18,7 +18,7 @@ async function test_db() {
     await braid_text.put(key, {version: ['a-0'], body: 'A'})
     await braid_text.put(key, {version: ['a-2'], parents: ['a-0'], patches: [{range: '[1:1]', content: 'B'}]})
     delete braid_text.cache[key]
-    var {version, body} = await braid_text.get(key, {})
+    var {version, body} = await braid_text.get(key, {full_response: true})
 
     if (body != 'AB') throw new Error('db error')
 

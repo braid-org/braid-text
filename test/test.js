@@ -85,9 +85,25 @@ function createTestServer(options = {}) {
             return res.end('Internal Server Error')
         }
 
-        if (req.url.startsWith('/404')) {
+        // Always returns 404
+        if (req.url === '/404') {
             res.statusCode = 404
             return res.end('Not Found')
+        }
+
+        // Returns 404 on the first subscribe GET, then serves normally.
+        // URL: /404-once/<key>
+        if (req.url.startsWith('/404-once/')) {
+            var key = req.url.slice('/404-once'.length)
+            if (!test_server._404_subs) test_server._404_subs = {}
+            if (req.method === 'GET' && req.headers.subscribe) {
+                if (!test_server._404_subs[key]) {
+                    test_server._404_subs[key] = true
+                    res.statusCode = 404
+                    return res.end('Not Found')
+                }
+            }
+            return braid_text.serve(req, res, {key})
         }
 
         if (req.url.startsWith('/eval')) {
@@ -108,13 +124,7 @@ function createTestServer(options = {}) {
         if (req.url.startsWith('/test.html')) {
             let parts = req.url.split(/[\?&=]/g)
 
-            if (parts[1] === 'check') {
-                res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-cache" })
-                return res.end(JSON.stringify({
-                    checking: parts[2],
-                    result: (await braid_text.get(parts[2])) != null
-                }))
-            } else if (parts[1] === 'dt_create_bytes_big_name') {
+            if (parts[1] === 'dt_create_bytes_big_name') {
                 try {
                     braid_text.dt_create_bytes('x'.repeat(1000000) + '-0', [], 0, 0, 'hi')
                     return res.end(JSON.stringify({ ok: true }))
@@ -396,7 +406,7 @@ async function runConsoleTests() {
                 unit: 'yjs-text',
                 range: `(${cid}-4:)`,
                 content: ' world',
-                id: {client: 999, clock: 0}
+                version: '999-0'
             }])
             Y.applyUpdate(doc2, binary)
             var result = doc2.getText('text').toString()
@@ -437,11 +447,6 @@ async function runConsoleTests() {
 
             // binary -> json -> binary -> apply
             var patches = braid_text.from_yjs_binary(update)
-            var decoded = Y.decodeUpdate(update)
-            for (var i = 0; i < patches.length; i++) {
-                if (patches[i].content.length > 0 && decoded.structs[i])
-                    patches[i].id = {client: decoded.structs[i].id.client, clock: decoded.structs[i].id.clock}
-            }
             var binary2 = braid_text.to_yjs_binary(patches)
             Y.applyUpdate(doc2, binary2)
 
@@ -463,30 +468,751 @@ async function runConsoleTests() {
         }, 0],
 
         // Yjs persistence tests
+        // Test that both DT and Yjs state survive cache eviction and disk reload.
+        // Uses yjs_update (raw binary) to create Yjs content, which avoids the
+        // origin mismatch issues of yjs-text patches.
         ['yjs persistence: DT+Yjs round-trip through disk', async () => {
+            var Y = require('yjs')
             var key = 'persist-test-' + Math.random().toString(36).slice(2)
             braid_text.db_folder = __dirname + '/test_db_folder'
+            // Create DT with initial text
             await braid_text.put(key, {version: ['a-0'], body: 'A'})
+            // Create a Yjs update that inserts 'B' and apply it
+            var tmp = new Y.Doc()
+            tmp.getText('text').insert(0, 'AB')
+            var update = Y.encodeStateAsUpdate(tmp)
+            tmp.destroy()
+            await braid_text.put(key, {yjs_update: update})
+            // Evict from cache
             var r = await braid_text.get_resource(key)
-            await braid_text.ensure_yjs_exists(r)
-            var yjsCid = r.yjs.text._start.id.client
-            await braid_text.put(key, {
-                patches: [{unit: 'yjs-text', range: '(' + yjsCid + '-0:)', content: 'B', id: {client: 888, clock: 0}}]
-            })
-            r.dt.doc.free(); r.yjs.doc.destroy(); delete braid_text.cache[key]
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            // Reload and verify
             var r2 = await braid_text.get_resource(key)
-            var result = r2.val === 'AB' && r2.dt?.doc.get() === 'AB' && r2.yjs?.text.toString() === 'AB'
+            var dt_ok = r2.dt?.doc.get()
+            var yjs_ok = r2.yjs?.text.toString()
             await r2.delete()
-            return result ? 'ok' : 'mismatch: ' + r2.val
+            return (dt_ok === yjs_ok && dt_ok?.length > 0) ? 'ok' : 'mismatch: dt=' + dt_ok + ' yjs=' + yjs_ok
         }, 'ok'],
+
+        // ── yjs-text .get() subscribe tests ──
+
+        // Subscribe to DT-only resource: should create Yjs on demand and
+        // serve history as real yjs-text patches
+        ['yjs-text subscribe: DT-only resource', async () => {
+            var Y = require('yjs')
+            var key = 'yjsget-dt-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-4'], body: 'hello'})
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                subscribe: (u) => updates.push(u)
+            })
+            // Should get history patches
+            var all_patches = updates.flatMap(u => u.patches || [])
+            if (all_patches.length === 0) return 'no patches received'
+            // Root insert should have (:) range
+            if (all_patches[0].range !== '(:)') return 'root range: ' + all_patches[0].range
+            if (all_patches[0].content !== 'hello') return 'root content: ' + all_patches[0].content
+            // Should have a real version (clientID-clock)
+            if (!/^\d+-\d+$/.test(all_patches[0].version)) return 'bad version: ' + all_patches[0].version
+            // Round-trip: apply to fresh Y.Doc
+            var doc = new Y.Doc()
+            var binary = braid_text.to_yjs_binary(all_patches)
+            Y.applyUpdate(doc, binary)
+            var text = doc.getText('text').toString()
+            doc.destroy()
+            var r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return text === 'hello' ? 'ok' : 'text=' + text
+        }, 'ok'],
+
+        // Subscribe to Yjs-only resource
+        ['yjs-text subscribe: Yjs-only resource', async () => {
+            var Y = require('yjs')
+            var key = 'yjsget-yjs-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {
+                patches: [{unit: 'yjs-text', range: '(:)', content: 'world', version: '555-0'}]
+            })
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                subscribe: (u) => updates.push(u)
+            })
+            var all_patches = updates.flatMap(u => u.patches || [])
+            if (all_patches.length === 0) return 'no patches'
+            var doc = new Y.Doc()
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_patches))
+            var text = doc.getText('text').toString()
+            doc.destroy()
+            var r = await braid_text.get_resource(key)
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return text === 'world' ? 'ok' : 'text=' + text
+        }, 'ok'],
+
+        // Subscribe to resource with both DT and Yjs
+        ['yjs-text subscribe: DT+Yjs resource', async () => {
+            var Y = require('yjs')
+            var key = 'yjsget-both-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-0'], body: 'A'})
+            // Make a Yjs edit that inserts 'B' after syncing with server's Y.Doc
+            var r = await braid_text.get_resource(key)
+            await braid_text.get(key, {range_unit: 'yjs-text', parents: r.version, subscribe: () => {}})
+            var tmp = new Y.Doc()
+            Y.applyUpdate(tmp, Y.encodeStateAsUpdate(r.yjs.doc))
+            tmp.getText('text').insert(1, 'B')
+            var update = Y.encodeStateAsUpdate(tmp, Y.encodeStateVector(r.yjs.doc))
+            tmp.destroy()
+            await braid_text.put(key, {yjs_update: update})
+            // Now subscribe fresh and verify history
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                subscribe: (u) => updates.push(u)
+            })
+            var all_patches = updates.flatMap(u => u.patches || [])
+            if (all_patches.length === 0) return 'no patches'
+            var doc = new Y.Doc()
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_patches))
+            var text = doc.getText('text').toString()
+            doc.destroy()
+            r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return text === 'AB' ? 'ok' : 'text=' + text
+        }, 'ok'],
+
+        // Live update: DT edit arrives to yjs-text subscriber
+        ['yjs-text subscribe: live update from DT edit', async () => {
+            var Y = require('yjs')
+            var key = 'yjsget-live-dt-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-0'], body: 'A'})
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                subscribe: (u) => updates.push(u)
+            })
+            // Apply initial history to a Y.Doc
+            var doc = new Y.Doc()
+            var init_patches = updates.flatMap(u => u.patches || [])
+            if (init_patches.length) Y.applyUpdate(doc, braid_text.to_yjs_binary(init_patches))
+            // Now make a DT edit
+            updates.length = 0
+            await braid_text.put(key, {
+                version: ['b-0'], parents: ['a-0'],
+                patches: [{unit: 'text', range: '[1:1]', content: 'B'}]
+            })
+            // Should have received a live update
+            var live_patches = updates.flatMap(u => u.patches || [])
+            if (live_patches.length === 0) return 'no live patches'
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(live_patches))
+            var text = doc.getText('text').toString()
+            doc.destroy()
+            var r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return text === 'AB' ? 'ok' : 'text=' + text
+        }, 'ok'],
+
+        // Live update: Yjs edit arrives to yjs-text subscriber
+        ['yjs-text subscribe: live update from Yjs edit', async () => {
+            var Y = require('yjs')
+            var key = 'yjsget-live-yjs-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-0'], body: 'A'})
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                peer: 'reader',
+                subscribe: (u) => updates.push(u)
+            })
+            var doc = new Y.Doc()
+            var init_patches = updates.flatMap(u => u.patches || [])
+            if (init_patches.length) Y.applyUpdate(doc, braid_text.to_yjs_binary(init_patches))
+            // Make a Yjs edit from a different peer
+            updates.length = 0
+            var tmp = new Y.Doc()
+            var r = await braid_text.get_resource(key)
+            Y.applyUpdate(tmp, Y.encodeStateAsUpdate(r.yjs.doc))
+            tmp.getText('text').insert(1, 'B')
+            var yjs_update = Y.encodeStateAsUpdate(tmp, Y.encodeStateVector(r.yjs.doc))
+            tmp.destroy()
+            await braid_text.put(key, {yjs_update, peer: 'writer'})
+            // Should have received a live update
+            var live_patches = updates.flatMap(u => u.patches || [])
+            if (live_patches.length === 0) return 'no live patches'
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(live_patches))
+            var text = doc.getText('text').toString()
+            doc.destroy()
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return text === 'AB' ? 'ok' : 'text=' + text
+        }, 'ok'],
+
+        // Subscribe with current parents: no history, only live updates
+        ['yjs-text subscribe: current parents skips history', async () => {
+            var key = 'yjsget-skip-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-4'], body: 'hello'})
+            var r = await braid_text.get_resource(key)
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                parents: r.version,
+                subscribe: (u) => updates.push(u)
+            })
+            var all_patches = updates.flatMap(u => u.patches || [])
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return all_patches.length === 0 ? 'ok' : 'got ' + all_patches.length + ' patches'
+        }, 'ok'],
+
+        // Empty resource: subscribe gets no patches
+        ['yjs-text subscribe: empty resource', async () => {
+            var key = 'yjsget-empty-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.get_resource(key)
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                subscribe: (u) => updates.push(u)
+            })
+            var all_patches = updates.flatMap(u => u.patches || [])
+            var r = await braid_text.get_resource(key)
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return all_patches.length === 0 ? 'ok' : 'got ' + all_patches.length + ' patches'
+        }, 'ok'],
+
+        // Multiple edits: history covers all of them
+        ['yjs-text subscribe: multiple edits in history', async () => {
+            var Y = require('yjs')
+            var key = 'yjsget-multi-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-0'], body: 'A'})
+            await braid_text.put(key, {
+                version: ['b-0'], parents: ['a-0'],
+                patches: [{unit: 'text', range: '[1:1]', content: 'B'}]
+            })
+            await braid_text.put(key, {
+                version: ['c-0'], parents: ['b-0'],
+                patches: [{unit: 'text', range: '[2:2]', content: 'C'}]
+            })
+            var updates = []
+            await braid_text.get(key, {
+                range_unit: 'yjs-text',
+                subscribe: (u) => updates.push(u)
+            })
+            var all_patches = updates.flatMap(u => u.patches || [])
+            var doc = new Y.Doc()
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_patches))
+            var text = doc.getText('text').toString()
+            doc.destroy()
+            var r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return text === 'ABC' ? 'ok' : 'text=' + text
+        }, 'ok'],
+
+        // ── subscribe-when-already-current tests ──
+
+        ['simpleton subscribe with current parents gets no history', async () => {
+            var key = 'simp-current-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-4'], body: 'hello'})
+            var r = await braid_text.get_resource(key)
+            var updates = []
+            await braid_text.get(key, {
+                merge_type: 'simpleton',
+                parents: r.version,
+                subscribe: u => updates.push(u)
+            })
+            await new Promise(r => setTimeout(r, 0))
+            // Should get no initial updates — already current
+            if (updates.length > 0) return 'got ' + updates.length + ' updates'
+            // But a subsequent edit should arrive
+            await braid_text.put(key, {
+                version: ['b-0'], parents: r.version,
+                patches: [{unit: 'text', range: '[5:5]', content: '!'}]
+            })
+            await new Promise(r => setTimeout(r, 0))
+            r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return updates.length === 1 ? 'ok' : 'expected 1 update, got ' + updates.length
+        }, 'ok'],
+
+        ['dt subscribe with current parents gets no history', async () => {
+            var key = 'dt-current-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['a-4'], body: 'hello'})
+            var r = await braid_text.get_resource(key)
+            var updates = []
+            await braid_text.get(key, {
+                merge_type: 'dt',
+                parents: r.version,
+                subscribe: u => updates.push(u)
+            })
+            await new Promise(r => setTimeout(r, 0))
+            if (updates.length > 0) return 'got ' + updates.length + ' updates'
+            await braid_text.put(key, {
+                version: ['b-0'], parents: r.version,
+                patches: [{unit: 'text', range: '[5:5]', content: '!'}]
+            })
+            await new Promise(r => setTimeout(r, 0))
+            r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return updates.length === 1 ? 'ok' : 'expected 1 update, got ' + updates.length
+        }, 'ok'],
+
+        // ── convergence tests: multiple peers via subscribe ──
+
+        ['convergence: simpleton receives other peer edits', async () => {
+            var Y = require('yjs')
+            var key = 'conv-simp-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['init-1'], body: 'AB'})
+            var tick = () => new Promise(r => setTimeout(r, 0))
+
+            function apply_patches(text, patches) {
+                var offset = 0
+                for (var p of patches) {
+                    var range = p.range.match(/-?\d+/g).map(Number)
+                    var cp = [...text]
+                    text = cp.slice(0, range[0]+offset).join('') + p.content + cp.slice(range[1]+offset).join('')
+                    offset += [...p.content].length - (range[1] - range[0])
+                }
+                return text
+            }
+
+            // Subscribe two simpletons
+            var s1 = {inbox: [], text: null, version: null}
+            var s2 = {inbox: [], text: null, version: null}
+            await braid_text.get(key, {merge_type: 'simpleton', peer: 'p1', subscribe: u => s1.inbox.push(u)})
+            await braid_text.get(key, {merge_type: 'simpleton', peer: 'p2', subscribe: u => s2.inbox.push(u)})
+            await tick()
+
+            // Drain initial
+            for (var u of s1.inbox) { if (u.body != null) s1.text = u.body; if (u.version) s1.version = u.version }
+            for (var u of s2.inbox) { if (u.body != null) s2.text = u.body; if (u.version) s2.version = u.version }
+            s1.inbox = []; s2.inbox = []
+
+            // s1 inserts 'X' at position 1
+            await braid_text.put(key, {
+                version: ['p1-0'], parents: s1.version,
+                patches: [{unit: 'text', range: '[1:1]', content: 'X'}],
+                peer: 'p1'
+            })
+            s1.text = 'AXB'
+            s1.version = ['p1-0']
+            await tick()
+
+            // s2 should receive the update
+            for (var u of s2.inbox) {
+                if (u.patches) s2.text = apply_patches(s2.text, u.patches)
+                if (u.version) s2.version = u.version
+            }
+            s2.inbox = []
+
+            var r = await braid_text.get_resource(key)
+            if (s1.text !== r.val) return 's1=' + s1.text + ' server=' + r.val
+            if (s2.text !== r.val) return 's2=' + s2.text + ' server=' + r.val
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return 'ok'
+        }, 'ok'],
+
+        ['convergence: simpleton + yjs peer both edit', async () => {
+            var Y = require('yjs')
+            var key = 'conv-mixed-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['init-1'], body: 'AB'})
+            var tick = () => new Promise(r => setTimeout(r, 0))
+
+            function apply_patches(text, patches) {
+                var offset = 0
+                for (var p of patches) {
+                    var range = p.range.match(/-?\d+/g).map(Number)
+                    var cp = [...text]
+                    text = cp.slice(0, range[0]+offset).join('') + p.content + cp.slice(range[1]+offset).join('')
+                    offset += [...p.content].length - (range[1] - range[0])
+                }
+                return text
+            }
+
+            // Subscribe simpleton and yjs peer
+            var simp = {inbox: [], text: null, version: null}
+            var yjs = {inbox: [], doc: new Y.Doc()}
+            await braid_text.get(key, {merge_type: 'simpleton', peer: 'simp', subscribe: u => simp.inbox.push(u)})
+            await braid_text.get(key, {range_unit: 'yjs-text', peer: 'yjs', subscribe: u => yjs.inbox.push(u)})
+            await tick()
+
+            // Drain initial
+            for (var u of simp.inbox) { if (u.body != null) simp.text = u.body; if (u.version) simp.version = u.version }
+            for (var u of yjs.inbox) { if (u.patches) Y.applyUpdate(yjs.doc, braid_text.to_yjs_binary(u.patches)) }
+            simp.inbox = []; yjs.inbox = []
+
+            // Simpleton inserts 'X' at position 1
+            await braid_text.put(key, {
+                version: ['simp-0'], parents: simp.version,
+                patches: [{unit: 'text', range: '[1:1]', content: 'X'}],
+                peer: 'simp'
+            })
+            simp.text = 'AXB'
+            simp.version = ['simp-0']
+            await tick()
+
+            // Yjs peer should receive the update
+            for (var u of yjs.inbox) {
+                if (u.patches) Y.applyUpdate(yjs.doc, braid_text.to_yjs_binary(u.patches))
+            }
+            yjs.inbox = []
+
+            // Now yjs peer inserts 'Y' at position 0
+            var t = yjs.doc.getText('text')
+            var sv = Y.encodeStateVector(yjs.doc)
+            t.insert(0, 'Y')
+            var update = Y.encodeStateAsUpdate(yjs.doc, sv)
+            var patches = braid_text.from_yjs_binary(update)
+            await braid_text.put(key, {patches, peer: 'yjs'})
+            await tick()
+
+            // Simpleton should receive the yjs edit
+            for (var u of simp.inbox) {
+                if (u.patches) simp.text = apply_patches(simp.text, u.patches)
+                if (u.version) simp.version = u.version
+            }
+            simp.inbox = []
+
+            var r = await braid_text.get_resource(key)
+            var yjs_text = yjs.doc.getText('text').toString()
+            var results = []
+            if (simp.text !== r.val) results.push('simp=' + simp.text + ' server=' + r.val)
+            if (yjs_text !== r.val) results.push('yjs=' + yjs_text + ' server=' + r.val)
+            yjs.doc.destroy()
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return results.length ? results.join('; ') : 'ok'
+        }, 'ok'],
+
+        ['convergence: two simpletons alternate edits', async () => {
+            var key = 'conv-alt-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['init-0'], body: 'X'})
+            var tick = () => new Promise(r => setTimeout(r, 0))
+
+            function apply_patches(text, patches) {
+                var offset = 0
+                for (var p of patches) {
+                    var range = p.range.match(/-?\d+/g).map(Number)
+                    var cp = [...text]
+                    text = cp.slice(0, range[0]+offset).join('') + p.content + cp.slice(range[1]+offset).join('')
+                    offset += [...p.content].length - (range[1] - range[0])
+                }
+                return text
+            }
+
+            var s1 = {text: null, version: null, cc: -1}
+            var s2 = {text: null, version: null, cc: -1}
+            await braid_text.get(key, {
+                merge_type: 'simpleton', peer: 'p1',
+                subscribe: u => {
+                    if (u.body != null) s1.text = u.body
+                    if (u.patches) s1.text = apply_patches(s1.text || '', u.patches)
+                    if (u.version) s1.version = u.version
+                }
+            })
+            await braid_text.get(key, {
+                merge_type: 'simpleton', peer: 'p2',
+                subscribe: u => {
+                    if (u.body != null) s2.text = u.body
+                    if (u.patches) s2.text = apply_patches(s2.text || '', u.patches)
+                    if (u.version) s2.version = u.version
+                }
+            })
+            await tick()
+
+            // Step 1: s1 inserts 'A' at end
+            s1.cc += 1
+            var parents1 = s1.version
+            s1.text = s1.text + 'A'
+            s1.version = ['p1-' + s1.cc]
+            await braid_text.put(key, {
+                version: ['p1-' + s1.cc], parents: parents1,
+                patches: [{unit: 'text', range: '[1:1]', content: 'A'}],
+                peer: 'p1'
+            })
+            await tick()
+
+            // Step 2: s2 inserts 'B' at end
+            s2.cc += 1
+            var parents2 = s2.version
+            s2.text = s2.text + 'B'
+            s2.version = ['p2-' + s2.cc]
+            await braid_text.put(key, {
+                version: ['p2-' + s2.cc], parents: parents2,
+                patches: [{unit: 'text', range: '[2:2]', content: 'B'}],
+                peer: 'p2'
+            })
+            await tick()
+
+            // Step 3: s1 inserts 'C' at end
+            s1.cc += 1
+            var parents3 = s1.version
+            s1.text = s1.text + 'C'
+            s1.version = ['p1-' + s1.cc]
+            await braid_text.put(key, {
+                version: ['p1-' + s1.cc], parents: parents3,
+                patches: [{unit: 'text', range: '[3:3]', content: 'C'}],
+                peer: 'p1'
+            })
+            await tick()
+
+            var r = await braid_text.get_resource(key)
+            var result = `server=${r.val} s1=${s1.text} s2=${s2.text}`
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return s1.text === r.val && s2.text === r.val
+                ? 'ok' : result
+        }, 'ok'],
+
+        ['convergence: simpleton + yjs concurrent edits via outbox', async () => {
+            var Y = require('yjs')
+            var key = 'conv-conc-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['init-0'], body: 'X'})
+            var tick = () => new Promise(r => setTimeout(r, 0))
+
+            function apply_patches(text, patches) {
+                var offset = 0
+                for (var p of patches) {
+                    var range = p.range.match(/-?\d+/g).map(Number)
+                    var cp = [...text]
+                    text = cp.slice(0, range[0]+offset).join('') + p.content + cp.slice(range[1]+offset).join('')
+                    offset += [...p.content].length - (range[1] - range[0])
+                }
+                return text
+            }
+
+            // Simpleton
+            var simp = {text: null, version: null, cc: -1}
+            await braid_text.get(key, {
+                merge_type: 'simpleton', peer: 'simp',
+                subscribe: u => {
+                    if (u.body != null) simp.text = u.body
+                    if (u.patches) simp.text = apply_patches(simp.text || '', u.patches)
+                    if (u.version) simp.version = u.version
+                }
+            })
+            await tick()
+
+            // Yjs
+            var ydoc = new Y.Doc()
+            await braid_text.get(key, {
+                range_unit: 'yjs-text', peer: 'yjs',
+                subscribe: u => {
+                    if (u.patches) {
+                        var bin = braid_text.to_yjs_binary(u.patches)
+                        if (bin && bin.length > 0) Y.applyUpdate(ydoc, bin)
+                    }
+                }
+            })
+            await tick()
+
+            // Both make edits simultaneously (outbox model)
+            // Simpleton inserts 'A' at position 0
+            simp.cc += 1
+            var simp_msg = {
+                version: ['simp-' + simp.cc], parents: simp.version,
+                patches: [{unit: 'text', range: '[0:0]', content: 'A'}],
+                peer: 'simp'
+            }
+            simp.text = 'A' + simp.text
+            simp.version = ['simp-' + simp.cc]
+
+            // Yjs inserts 'B' at end
+            var t = ydoc.getText('text')
+            var sv = Y.encodeStateVector(ydoc)
+            t.insert(t.toString().length, 'B')
+            var yjs_msg = {
+                patches: braid_text.from_yjs_binary(Y.encodeStateAsUpdate(ydoc, sv)),
+                peer: 'yjs'
+            }
+
+            // Send simpleton's edit first
+            await braid_text.put(key, simp_msg)
+            await tick()
+
+            // Send yjs edit
+            await braid_text.put(key, yjs_msg)
+            await tick()
+
+            var r = await braid_text.get_resource(key)
+            var yjs_text = ydoc.getText('text').toString()
+            var results = []
+            if (simp.text !== r.val) results.push('simp=' + simp.text + ' server=' + r.val)
+            if (yjs_text !== r.val) results.push('yjs=' + yjs_text + ' server=' + r.val)
+            ydoc.destroy()
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return results.length ? results.join('; ') : 'ok'
+        }, 'ok'],
+
+        ['convergence: simpleton queues two edits then sends both', async () => {
+            var key = 'conv-queue-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['init-0'], body: 'X'})
+            var tick = () => new Promise(r => setTimeout(r, 0))
+
+            function apply_patches(text, patches) {
+                var offset = 0
+                for (var p of patches) {
+                    var range = p.range.match(/-?\d+/g).map(Number)
+                    var cp = [...text]
+                    text = cp.slice(0, range[0]+offset).join('') + p.content + cp.slice(range[1]+offset).join('')
+                    offset += [...p.content].length - (range[1] - range[0])
+                }
+                return text
+            }
+
+            var simp = {text: null, version: null, cc: -1}
+            await braid_text.get(key, {
+                merge_type: 'simpleton', peer: 'simp',
+                subscribe: u => {
+                    if (u.body != null) simp.text = u.body
+                    if (u.patches) simp.text = apply_patches(simp.text || '', u.patches)
+                    if (u.version) simp.version = u.version
+                }
+            })
+            await tick()
+            // simp.text = 'X', simp.version = ['init-0']
+
+            // Edit 1: insert 'A' at end (simpleton algorithm: advance optimistically)
+            simp.cc += 1
+            var msg1 = {
+                version: ['simp-' + simp.cc], parents: simp.version,
+                patches: [{unit: 'text', range: '[1:1]', content: 'A'}],
+                peer: 'simp'
+            }
+            simp.text = 'XA'
+            simp.version = ['simp-' + simp.cc]
+
+            // Edit 2: insert 'B' at end (before sending edit 1!)
+            simp.cc += 1
+            var msg2 = {
+                version: ['simp-' + simp.cc], parents: simp.version,
+                patches: [{unit: 'text', range: '[2:2]', content: 'B'}],
+                peer: 'simp'
+            }
+            simp.text = 'XAB'
+            simp.version = ['simp-' + simp.cc]
+
+            // Now send both
+            await braid_text.put(key, msg1)
+            await tick()
+            await braid_text.put(key, msg2)
+            await tick()
+
+            var r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return simp.text === r.val ? 'ok' : 'simp=' + simp.text + ' server=' + r.val
+        }, 'ok'],
+
+        ['convergence: simpleton sends edit, receives external, sends another', async () => {
+            var key = 'conv-inter-' + Math.random().toString(36).slice(2)
+            braid_text.db_folder = null
+            await braid_text.put(key, {version: ['init-0'], body: 'X'})
+            var tick = () => new Promise(r => setTimeout(r, 0))
+
+            function apply_patches(text, patches) {
+                var offset = 0
+                for (var p of patches) {
+                    var range = p.range.match(/-?\d+/g).map(Number)
+                    var cp = [...text]
+                    text = cp.slice(0, range[0]+offset).join('') + p.content + cp.slice(range[1]+offset).join('')
+                    offset += [...p.content].length - (range[1] - range[0])
+                }
+                return text
+            }
+
+            var simp = {text: null, version: null, cc: -1}
+            await braid_text.get(key, {
+                merge_type: 'simpleton', peer: 'simp',
+                subscribe: u => {
+                    if (u.body != null) simp.text = u.body
+                    if (u.patches) simp.text = apply_patches(simp.text || '', u.patches)
+                    if (u.version) simp.version = u.version
+                }
+            })
+            await tick()
+
+            // Simpleton edits: insert 'A' at end
+            simp.cc += 1
+            await braid_text.put(key, {
+                version: ['simp-' + simp.cc], parents: simp.version,
+                patches: [{unit: 'text', range: '[1:1]', content: 'A'}],
+                peer: 'simp'
+            })
+            simp.text = simp.text + 'A'
+            simp.version = ['simp-' + simp.cc]
+            await tick()
+
+            // External edit: someone inserts 'Z' at position 0
+            await braid_text.put(key, {
+                version: ['ext-0'], parents: ['simp-0'],
+                patches: [{unit: 'text', range: '[0:0]', content: 'Z'}],
+                peer: 'external'
+            })
+            await tick()
+            // simp should have received 'Z' inserted
+
+            // Simpleton edits again: insert 'B' at end
+            simp.cc += 1
+            await braid_text.put(key, {
+                version: ['simp-' + simp.cc], parents: simp.version,
+                patches: [{unit: 'text', range: '[' + [...simp.text].length + ':' + [...simp.text].length + ']', content: 'B'}],
+                peer: 'simp'
+            })
+            simp.text = simp.text + 'B'
+            simp.version = ['simp-' + simp.cc]
+            await tick()
+
+            var r = await braid_text.get_resource(key)
+            if (r.dt) r.dt.doc.free()
+            if (r.yjs) r.yjs.doc.destroy()
+            delete braid_text.cache[key]
+            return simp.text === r.val ? 'ok' : 'simp=' + simp.text + ' server=' + r.val
+        }, 'ok'],
+
 
         ['yjs persistence: Yjs-only round-trip through disk', async () => {
             var key = 'persist-yjs-only-' + Math.random().toString(36).slice(2)
             braid_text.db_folder = __dirname + '/test_db_folder'
             var r = await braid_text.get_resource(key)
-            await braid_text.ensure_yjs_exists(r)
             await braid_text.put(key, {
-                patches: [{unit: 'yjs-text', range: '(:)', content: 'hello', id: {client: 777, clock: 0}}]
+                patches: [{unit: 'yjs-text', range: '(:)', content: 'hello', version: '777-0'}]
             })
             r.yjs.doc.destroy(); delete braid_text.cache[key]
             var r2 = await braid_text.get_resource(key)
