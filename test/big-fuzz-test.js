@@ -242,7 +242,11 @@ async function run_fuzz(seed, num_steps) {
             peer.text = t.toString()
 
             var yjs_updates = braid_text.from_yjs_binary(update)
-            return { version: yjs_updates[0]?.version, patches: yjs_updates[0]?.patches, peer: peer.id }
+            // Push additional updates to outbox (first one is returned directly)
+            for (var i = 1; i < yjs_updates.length; i++)
+                peer.outbox.push({ version: yjs_updates[i].version, patches: yjs_updates[i].patches, peer: peer.id })
+            if (!yjs_updates.length) return null
+            return { version: yjs_updates[0].version, patches: yjs_updates[0].patches, peer: peer.id }
 
         } else {
             // Simpleton or DT: use the simpleton algorithm
