@@ -1456,6 +1456,7 @@ function create_braid_text() {
             file_number: 0,
             file_size: 0,
             threshold: 0,
+            save: () => {},  // placeholder until fully initialized below
         }
         resource[type].log = log
 
