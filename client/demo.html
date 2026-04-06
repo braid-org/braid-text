@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
+  .top { display: flex; flex: 1; min-height: 0; }
+  .pane { flex: 1; display: flex; flex-direction: column; border-right: 2px solid #ccc; }
+  .pane:last-child { border-right: none; }
+  .pane-label { padding: 4px 8px; background: #eee; font-weight: bold; font-size: 13px; border-bottom: 1px solid #ccc; }
+  .pane textarea { flex: 1; resize: none; border: none; outline: none; padding: 8px; font-size: 14px; }
+  .pane .network { flex: 1; overflow-y: auto; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 11px; white-space: pre-wrap; padding: 6px; border-top: 1px solid #444; }
+  .bottom { height: 40%; border-top: 2px solid #ccc; }
+  .bottom iframe { width: 100%; height: 100%; border: none; }
+  .bottom .pane-label { background: #eee; border-bottom: 1px solid #ccc; }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <!-- Simpleton pane -->
+  <div class="pane" id="simpleton_pane">
+    <div class="pane-label">Simpleton (merge-type: simpleton)</div>
+    <textarea id="simpleton_editor" disabled></textarea>
+    <div class="network" id="simpleton_log"></div>
+  </div>
+
+  <!-- Yjs pane -->
+  <div class="pane" id="yjs_pane">
+    <div class="pane-label">Yjs (merge-type: yjs)</div>
+    <textarea id="yjs_editor" disabled></textarea>
+    <div class="network" id="yjs_log"></div>
+  </div>
+</div>
+
+<div class="bottom">
+  <div class="pane-label">HedgeDoc (WebSocket + Yjs)</div>
+  <iframe id="hedgedoc_frame"></iframe>
+</div>
+
+<!-- Simpleton dependencies -->
+<script src="https://braid.org/code/myers-diff1.js"></script>
+<script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
+<script src="/web-utils.js"></script>
+<script src="/simpleton-sync.js"></script>
+
+<!-- Yjs dependencies (via import map) -->
+<script type="importmap">
+{
+  "imports": {
+    "yjs": "https://cdn.jsdelivr.net/npm/yjs@13/+esm",
+    "lib0/encoding": "https://cdn.jsdelivr.net/npm/lib0@0.2/encoding.js/+esm"
+  }
+}
+</script>
+<script type="module">
+  import * as Y from 'yjs'
+  import * as lib0_encoding from 'lib0/encoding'
+  window.Y = Object.assign({}, Y, {lib0_encoding})
+</script>
+<script src="/yjs-sync.js"></script>
+
+<script>
+  var decoder = new TextDecoder()
+  var resource = '/demo'
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  }
+
+  function log_network(pane_id, direction, text) {
+    var el = document.getElementById(pane_id)
+    var entry = document.createElement('div')
+    entry.style.marginBottom = '4px'
+    entry.style.borderBottom = '1px solid #333'
+    entry.style.paddingBottom = '4px'
+    if (direction === 'out') entry.style.marginTop = '12px'
+    var color = direction === 'out' ? '#569cd6' : '#6a9955'
+    entry.innerHTML = '<span style="color:' + color + '">' + escapeHtml(text) + '</span>'
+    el.appendChild(entry)
+    el.scrollTop = el.scrollHeight
+  }
+
+  // ══════════════════════════════════════════════════
+  // Simpleton editor
+  // ══════════════════════════════════════════════════
+
+  // Wrap braid_fetch to capture network messages for simpleton
+  var real_braid_fetch = braid_fetch
+  var simpleton_intercept = false
+
+  window.braid_fetch = function(url, params) {
+    if (simpleton_intercept) {
+      params.onFetch = (u, p) => {
+        var method = p.method || 'GET'
+        var lines = method + ' ' + u + ' HTTP/1.1'
+        if (p.headers instanceof Headers) {
+          p.headers.forEach((v, k) => { lines += '\n' + k + ': ' + v })
+        } else if (p.headers) {
+          for (var k in p.headers) lines += '\n' + k + ': ' + p.headers[k]
+        }
+        if (p.body) {
+          if (typeof p.body === 'string') lines += '\n\n' + p.body
+          else if (p.body instanceof Uint8Array) lines += '\n\n' + decoder.decode(p.body)
+          else if (p.body instanceof Blob) {
+            var snap = lines
+            p.body.text().then(t => {
+              var last = simpleton_log.lastElementChild
+              if (last) last.innerHTML = '<span style="color:#569cd6">' + escapeHtml(snap + '\n\n' + t) + '</span>'
+            })
+            lines += '\n\n...'
+          }
+        }
+        log_network('simpleton_log', 'out', lines)
+      }
+      params.onBytes = (chunk) => {
+        var text = decoder.decode(chunk, {stream: true})
+        if (text.trim()) log_network('simpleton_log', 'in', text)
+      }
+    }
+    return real_braid_fetch(url, params)
+  }
+  // Copy over any properties from the original
+  for (var k in real_braid_fetch) window.braid_fetch[k] = real_braid_fetch[k]
+
+  simpleton_intercept = true
+  var simpleton = simpleton_client(resource, {
+    on_online: () => {},
+    on_patches: (patches) => {
+      simpleton_editor.disabled = false
+      apply_patches_and_update_selection(simpleton_editor, patches)
+    },
+    get_patches: (prev_state) => diff(prev_state, simpleton_editor.value),
+    get_state: () => simpleton_editor.value,
+    on_error: (e) => set_error_state(simpleton_editor),
+    on_ack: () => set_acked_state(simpleton_editor)
+  })
+  simpleton_intercept = false
+  // Restore original braid_fetch so yjs_client uses it directly
+  window.braid_fetch = real_braid_fetch
+
+  simpleton_editor.oninput = () => {
+    set_acked_state(simpleton_editor, false)
+    simpleton.changed()
+  }
+
+  // ══════════════════════════════════════════════════
+  // Yjs editor
+  // ══════════════════════════════════════════════════
+
+  var check = setInterval(() => {
+    if (typeof Y === 'undefined' || !Y.Doc) return
+    clearInterval(check)
+    start_yjs()
+  }, 50)
+
+  function start_yjs() {
+    var ydoc = new Y.Doc()
+    var ytext = ydoc.getText('text')
+
+    ytext.observe(event => {
+      if (event.transaction.origin === 'local') return
+      var cursor = yjs_editor.selectionStart
+      var pos = 0
+      for (var d of event.changes.delta) {
+        if (d.retain) { pos += d.retain; continue }
+        if (d.insert) {
+          var len = d.insert.length
+          if (pos <= cursor) cursor += len
+          pos += len
+        }
+        if (d.delete) {
+          var len = d.delete
+          if (pos < cursor) cursor -= Math.min(len, cursor - pos)
+        }
+      }
+      yjs_editor.value = ytext.toString()
+      yjs_editor.selectionStart = yjs_editor.selectionEnd = cursor
+      yjs_editor.disabled = false
+    })
+
+    var client = yjs_client(resource, {
+      ydoc,
+      channel: 'text',
+      on_error: (e) => {
+        console.error('yjs_client error:', e)
+        yjs_editor.style.background = 'pink'
+      },
+      onFetch: (url, params) => {
+        var method = params.method || 'GET'
+        var lines = method + ' ' + url + ' HTTP/1.1'
+        if (params.headers instanceof Headers) {
+          params.headers.forEach((v, k) => { lines += '\n' + k + ': ' + v })
+        } else if (params.headers) {
+          for (var k in params.headers) lines += '\n' + k + ': ' + params.headers[k]
+        }
+        if (params.body) {
+          if (typeof params.body === 'string') lines += '\n\n' + params.body
+          else if (params.body instanceof Uint8Array) lines += '\n\n' + decoder.decode(params.body)
+          else if (params.body instanceof Blob) {
+            var snap = lines
+            params.body.text().then(t => {
+              var last = yjs_log.lastElementChild
+              if (last) last.innerHTML = '<span style="color:#569cd6">' + escapeHtml(snap + '\n\n' + t) + '</span>'
+            })
+            lines += '\n\n...'
+          }
+        }
+        log_network('yjs_log', 'out', lines)
+      },
+      onBytes: (chunk) => {
+        var text = decoder.decode(chunk, {stream: true})
+        if (text.trim()) log_network('yjs_log', 'in', text)
+      }
+    })
+
+    yjs_editor.oninput = () => {
+      var new_text = yjs_editor.value
+      var old_text = ytext.toString()
+      if (new_text === old_text) return
+      var prefix = 0
+      while (prefix < old_text.length && prefix < new_text.length
+             && old_text[prefix] === new_text[prefix]) prefix++
+      var suffix = 0
+      while (suffix < old_text.length - prefix
+             && suffix < new_text.length - prefix
+             && old_text[old_text.length - 1 - suffix] === new_text[new_text.length - 1 - suffix]) suffix++
+      var del_len = old_text.length - prefix - suffix
+      var ins_text = new_text.slice(prefix, new_text.length - suffix)
+      ydoc.transact(() => {
+        if (del_len > 0) ytext.delete(prefix, del_len)
+        if (ins_text.length > 0) ytext.insert(prefix, ins_text)
+      }, 'local')
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // HedgeDoc iframe
+  // ══════════════════════════════════════════════════
+
+  // Configure the hedgedoc URL here
+  var hedgedoc_base = '' // e.g. 'https://hedge.braid.org'
+  if (hedgedoc_base) {
+    hedgedoc_frame.src = hedgedoc_base + resource
+  } else {
+    hedgedoc_frame.parentElement.querySelector('.pane-label').textContent =
+      'HedgeDoc (not configured \u2014 set hedgedoc_base in demo.html)'
+  }
+</script>
+</body>
+</html>
