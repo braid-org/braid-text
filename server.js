@@ -353,8 +353,7 @@ function create_braid_text() {
 
         var peer = req.headers['peer'],
             merge_type = req.headers['merge-type'] || 'simpleton'
-        // TODO: accept 'yjs' merge_type here for Braid-HTTP yjs clients
-        if (merge_type !== 'simpleton' && merge_type !== 'dt')
+        if (merge_type !== 'simpleton' && merge_type !== 'dt' && merge_type !== 'yjs')
             return my_end(400, `Unknown merge type: ${merge_type}`)
 
         var is_read  = req.method === 'GET' || req.method === 'HEAD',
@@ -744,16 +743,14 @@ function create_braid_text() {
                 if (getting.history === 'since-parents')
                     throw new Error('yjs-text from arbitrary parents not yet implemented')
 
-                var patches = braid_text.from_yjs_binary(
+                var yjs_updates = braid_text.from_yjs_binary(
                     Y.encodeStateAsUpdate(resource.yjs.doc))
 
                 if (!getting.subscribe)
-                    return { version: resource.version, parents: [], patches }
+                    return yjs_updates
 
-                if (patches.length)
-                    options.subscribe({
-                        version: resource.version, parents: [], patches
-                    })
+                for (var u of yjs_updates)
+                    options.subscribe(u)
             }
 
             if (getting.subscribe) {
@@ -911,7 +908,10 @@ function create_braid_text() {
                     ? options.yjs_update : new Uint8Array(options.yjs_update)
             } else if (patches && patches.length && patches[0].unit === 'yjs-text') {
                 yjs_text_patches = patches
-                yjs_binary = braid_text.to_yjs_binary(patches)
+                yjs_binary = braid_text.to_yjs_binary([{
+                    version: options.version?.[0],
+                    patches
+                }])
             }
 
             if (yjs_binary) {
@@ -986,18 +986,15 @@ function create_braid_text() {
 
                 // Broadcast to yjs-text subscribers (skip sender)
                 if (resource.yjs) {
-                    // If we received yjs-text patches, reuse them; otherwise
+                    // If we received yjs-text updates, reuse them; otherwise
                     // derive them from the binary update
-                    var yjs_patches = yjs_text_patches
-                        || braid_text.from_yjs_binary(yjs_binary)
-                    if (yjs_patches.length) {
+                    var yjs_updates = yjs_text_patches
+                        ? [{version: options.version, patches: yjs_text_patches}]
+                        : braid_text.from_yjs_binary(yjs_binary)
+                    for (var yjs_update of yjs_updates) {
                         for (var client of resource.yjs.clients) {
-                            if (!peer || client.peer !== peer) {
-                                await client.send_update({
-                                    version: resource.version,
-                                    patches: yjs_patches
-                                })
-                            }
+                            if (!peer || client.peer !== peer)
+                                await client.send_update(yjs_update)
                         }
                     }
                 }
@@ -1233,15 +1230,11 @@ function create_braid_text() {
                 // and we are mixing them. The update-level .version is the DT frontier.
                 // Each patch's .version is a Yjs item ID (clientID-clock).
                 if (resource.yjs && captured_yjs_update) {
-                    var yjs_patches = braid_text.from_yjs_binary(captured_yjs_update)
-                    for (var client of resource.yjs.clients) {
-                        if (!peer || client.peer !== peer) {
-                            await client.send_update({
-                                version: resource.version,   // DT version space
-                                patches: yjs_patches         // patches[].version: Yjs version space
-                            })
-                        }
-                    }
+                    var yjs_updates = braid_text.from_yjs_binary(captured_yjs_update)
+                    for (var yjs_update of yjs_updates)
+                        for (var client of resource.yjs.clients)
+                            if (!peer || client.peer !== peer)
+                                await client.send_update(yjs_update)
                 }
 
                 // Persist Yjs delta
@@ -3072,13 +3065,15 @@ function create_braid_text() {
     // Convert a Yjs binary update to yjs-text range patches.
     // Decodes the binary without needing a Y.Doc.
     // Returns array of {unit: 'yjs-text', range: '...', content: '...'}
+    // Convert a Yjs binary update to an array of braid updates,
+    // each with a version and patches in yjs-text format.
     braid_text.from_yjs_binary = function(update) {
         require_yjs()
         var decoded = Y.decodeUpdate(
             update instanceof Uint8Array ? update : new Uint8Array(update))
-        var patches = []
+        var updates = []
 
-        // Convert inserted structs to yjs-text patches
+        // Each inserted struct becomes one update with one insert patch
         for (var struct of decoded.structs) {
             if (!struct.content?.str) continue  // skip non-text items
             var id = struct.id
@@ -3086,34 +3081,40 @@ function create_braid_text() {
             var rightOrigin = struct.rightOrigin
             var left = origin ? `${origin.client}-${origin.clock}` : ''
             var right = rightOrigin ? `${rightOrigin.client}-${rightOrigin.clock}` : ''
-            patches.push({
-                unit: 'yjs-text',
-                range: `(${left}:${right})`,
-                content: struct.content.str,
-                version: `${id.client}-${id.clock}`
+            updates.push({
+                version: [`${id.client}-${id.clock}`],
+                patches: [{
+                    unit: 'yjs-text',
+                    range: `(${left}:${right})`,
+                    content: struct.content.str,
+                }]
             })
         }
 
-        // Convert delete set entries to yjs-text patches
+        // Each delete range becomes one update with one delete patch
         for (var [clientID, deleteItems] of decoded.ds.clients) {
             for (var item of deleteItems) {
                 var left = `${clientID}-${item.clock}`
                 var right = `${clientID}-${item.clock + item.len - 1}`
-                patches.push({
-                    unit: 'yjs-text',
-                    range: `[${left}:${right}]`,
-                    content: ''
+                updates.push({
+                    version: [`${clientID}-${item.clock}`],
+                    patches: [{
+                        unit: 'yjs-text',
+                        range: `[${left}:${right}]`,
+                        content: ''
+                    }]
                 })
             }
         }
 
-        return patches
+        return updates
     }
 
     // Convert yjs-text range patches to a Yjs binary update.
+    // Convert braid updates with yjs-text patches to a Yjs binary update.
     // This is the inverse of from_yjs_binary.
-    // Insert patches must have a .version field with the item ID as "client-clock".
-    braid_text.to_yjs_binary = function(patches) {
+    // Accepts an array of updates, each with {version, patches}.
+    braid_text.to_yjs_binary = function(updates) {
         require_yjs()
         var lib0_encoding = require('lib0/encoding')
         var encoder = new Y.UpdateEncoderV1()
@@ -3122,26 +3123,30 @@ function create_braid_text() {
         var inserts_by_client = new Map()
         var deletes_by_client = new Map()
 
-        for (var p of patches) {
-            var parsed = parse_yjs_range(p.range)
-            if (!parsed) throw new Error(`invalid yjs-text range: ${p.range}`)
+        for (var update of updates) {
+            if (!update.patches) continue
+            for (var p of update.patches) {
+                var parsed = parse_yjs_range(p.range)
+                if (!parsed) throw new Error(`invalid yjs-text range: ${p.range}`)
 
-            if (p.content.length > 0) {
-                // Insert — version is the item ID as "client-clock"
-                if (!p.version) throw new Error('insert patch requires .version = "client-clock"')
-                var v_parts = p.version.match(/^(\d+)-(\d+)$/)
-                if (!v_parts) throw new Error('invalid insert patch version: ' + p.version)
-                var item_id = { client: parseInt(v_parts[1]), clock: parseInt(v_parts[2]) }
-                var list = inserts_by_client.get(item_id.client) || []
-                list.push({ id: item_id, origin: parsed.left, rightOrigin: parsed.right, content: p.content })
-                inserts_by_client.set(item_id.client, list)
-            } else {
-                // Delete
-                if (!parsed.left) throw new Error('delete patch requires left ID')
-                var client = parsed.left.client
-                var list = deletes_by_client.get(client) || []
-                list.push({ clock: parsed.left.clock, len: parsed.right ? parsed.right.clock - parsed.left.clock + 1 : 1 })
-                deletes_by_client.set(client, list)
+                if (p.content.length > 0) {
+                    // Insert — version on the update is the item ID as ["client-clock"]
+                    var v_str = Array.isArray(update.version) ? update.version[0] : update.version
+                    if (!v_str) throw new Error('insert update requires .version = ["client-clock"]')
+                    var v_parts = v_str.match(/^(\d+)-(\d+)$/)
+                    if (!v_parts) throw new Error('invalid update version: ' + v_str)
+                    var item_id = { client: parseInt(v_parts[1]), clock: parseInt(v_parts[2]) }
+                    var list = inserts_by_client.get(item_id.client) || []
+                    list.push({ id: item_id, origin: parsed.left, rightOrigin: parsed.right, content: p.content })
+                    inserts_by_client.set(item_id.client, list)
+                } else {
+                    // Delete
+                    if (!parsed.left) throw new Error('delete patch requires left ID')
+                    var client = parsed.left.client
+                    var list = deletes_by_client.get(client) || []
+                    list.push({ clock: parsed.left.clock, len: parsed.right ? parsed.right.clock - parsed.left.clock + 1 : 1 })
+                    deletes_by_client.set(client, list)
+                }
             }
         }
 

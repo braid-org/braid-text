@@ -12,8 +12,10 @@ const mode = args.includes('--browser') || args.includes('-b') ? 'browser' : 'co
 const portArg = args.find(arg => arg.startsWith('--port='))?.split('=')[1]
     || args.find(arg => !arg.startsWith('-') && !isNaN(arg))
 const port = portArg || 8889
+const reservedArgs = new Set(['fuzz', 'fuzz1', 'fuzz2', 'all'])
 const filterArg = args.find(arg => arg.startsWith('--filter='))?.split('=')[1]
     || args.find(arg => arg.startsWith('--grep='))?.split('=')[1]
+    || args.find(arg => !arg.startsWith('-') && isNaN(arg) && !reservedArgs.has(arg))
 
 // Show help if requested
 if (args.includes('--help') || args.includes('-h')) {
@@ -24,12 +26,14 @@ Options:
   --browser, -b          Start server for browser testing (default: console mode)
   --port=PORT            Specify port number (default: 8889)
   PORT                   Port number as positional argument
+  PATTERN                Filter tests by name (positional, case-insensitive substring)
   --filter=PATTERN       Only run tests matching pattern (case-insensitive)
   --grep=PATTERN         Alias for --filter
   --help, -h             Show this help message
 
 Examples:
   node test.js                         # Run all tests in console
+  node test.js yjs                     # Run only tests with "yjs" in name
   node test.js --filter="sync"         # Run only tests with "sync" in name
   node test.js --grep="digest"         # Run only tests with "digest" in name
   node test.js --browser               # Start browser test server
@@ -212,6 +216,9 @@ async function runConsoleTests() {
     }
 
     console.log('Starting braid-text tests...\n')
+    if (filterArg) {
+        console.log(`Filtering tests matching: "${filterArg}"\n`)
+    }
 
     // Create and start the test server
     const testServer = createTestServer({
@@ -334,12 +341,14 @@ async function runConsoleTests() {
             var doc = new Y.Doc()
             doc.getText('text').insert(0, 'hello')
             var update = Y.encodeStateAsUpdate(doc)
-            var patches = braid_text.from_yjs_binary(update)
+            var updates = braid_text.from_yjs_binary(update)
             doc.destroy()
-            if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
-            if (patches[0].unit !== 'yjs-text') return 'wrong unit: ' + patches[0].unit
-            if (patches[0].content !== 'hello') return 'wrong content: ' + patches[0].content
-            if (patches[0].range !== '(:)') return 'wrong range: ' + patches[0].range
+            if (updates.length !== 1) return 'expected 1 update, got ' + updates.length
+            if (!updates[0].version) return 'missing version'
+            var p = updates[0].patches[0]
+            if (p.unit !== 'yjs-text') return 'wrong unit: ' + p.unit
+            if (p.content !== 'hello') return 'wrong content: ' + p.content
+            if (p.range !== '(:)') return 'wrong range: ' + p.range
             return 'ok'
         }, 'ok'],
 
@@ -351,13 +360,13 @@ async function runConsoleTests() {
             var cid = doc.clientID
             doc.getText('text').insert(5, ' ')
             var update = Y.encodeStateAsUpdate(doc, sv)
-            var patches = braid_text.from_yjs_binary(update)
+            var updates = braid_text.from_yjs_binary(update)
             doc.destroy()
-            if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
-            if (patches[0].content !== ' ') return 'wrong content: ' + patches[0].content
-            // Should have exclusive range with origins referencing clock 4 and clock 5
+            if (updates.length !== 1) return 'expected 1 update, got ' + updates.length
+            var p = updates[0].patches[0]
+            if (p.content !== ' ') return 'wrong content: ' + p.content
             var expected = `(${cid}-4:${cid}-5)`
-            if (patches[0].range !== expected) return 'wrong range: ' + patches[0].range + ' expected: ' + expected
+            if (p.range !== expected) return 'wrong range: ' + p.range + ' expected: ' + expected
             return 'ok'
         }, 'ok'],
 
@@ -369,12 +378,13 @@ async function runConsoleTests() {
             var sv = Y.encodeStateVector(doc)
             doc.getText('text').delete(5, 6)
             var update = Y.encodeStateAsUpdate(doc, sv)
-            var patches = braid_text.from_yjs_binary(update)
+            var updates = braid_text.from_yjs_binary(update)
             doc.destroy()
-            if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
-            if (patches[0].content !== '') return 'expected empty content'
+            if (updates.length !== 1) return 'expected 1 update, got ' + updates.length
+            var p = updates[0].patches[0]
+            if (p.content !== '') return 'expected empty content'
             var expected = '[' + cid + '-5:' + cid + '-10]'
-            if (patches[0].range !== expected) return 'wrong range: ' + patches[0].range
+            if (p.range !== expected) return 'wrong range: ' + p.range
             return 'ok'
         }, 'ok'],
 
@@ -386,10 +396,11 @@ async function runConsoleTests() {
             var sv = Y.encodeStateVector(doc)
             doc.getText('text').delete(1, 3)  // delete 'bcd'
             var update = Y.encodeStateAsUpdate(doc, sv)
-            var patches = braid_text.from_yjs_binary(update)
+            var updates = braid_text.from_yjs_binary(update)
             doc.destroy()
-            if (patches.length !== 1) return 'expected 1 patch, got ' + patches.length
-            if (patches[0].range !== `[${cid}-1:${cid}-3]`) return 'wrong range: ' + patches[0].range
+            if (updates.length !== 1) return 'expected 1 update, got ' + updates.length
+            var p = updates[0].patches[0]
+            if (p.range !== `[${cid}-1:${cid}-3]`) return 'wrong range: ' + p.range
             return 'ok'
         }, 'ok'],
 
@@ -403,10 +414,12 @@ async function runConsoleTests() {
             Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
 
             var binary = braid_text.to_yjs_binary([{
-                unit: 'yjs-text',
-                range: `(${cid}-4:)`,
-                content: ' world',
-                version: '999-0'
+                version: '999-0',
+                patches: [{
+                    unit: 'yjs-text',
+                    range: `(${cid}-4:)`,
+                    content: ' world',
+                }]
             }])
             Y.applyUpdate(doc2, binary)
             var result = doc2.getText('text').toString()
@@ -424,9 +437,12 @@ async function runConsoleTests() {
             Y.applyUpdate(doc2, Y.encodeStateAsUpdate(doc))
 
             var binary = braid_text.to_yjs_binary([{
-                unit: 'yjs-text',
-                range: `[${cid}-5:${cid}-10]`,
-                content: ''
+                version: `${cid}-5`,
+                patches: [{
+                    unit: 'yjs-text',
+                    range: `[${cid}-5:${cid}-10]`,
+                    content: ''
+                }]
             }])
             Y.applyUpdate(doc2, binary)
             var result = doc2.getText('text').toString()
@@ -445,9 +461,9 @@ async function runConsoleTests() {
             doc1.getText('text').insert(5, ' world')
             var update = Y.encodeStateAsUpdate(doc1, sv)
 
-            // binary -> json -> binary -> apply
-            var patches = braid_text.from_yjs_binary(update)
-            var binary2 = braid_text.to_yjs_binary(patches)
+            // binary -> updates -> binary -> apply
+            var updates = braid_text.from_yjs_binary(update)
+            var binary2 = braid_text.to_yjs_binary(updates)
             Y.applyUpdate(doc2, binary2)
 
             var result = doc2.getText('text').toString()
@@ -462,9 +478,9 @@ async function runConsoleTests() {
             var update = Y.encodeStateAsUpdate(doc)
             var sv = Y.encodeStateVector(doc)
             var empty_update = Y.encodeStateAsUpdate(doc, sv)
-            var patches = braid_text.from_yjs_binary(empty_update)
+            var updates = braid_text.from_yjs_binary(empty_update)
             doc.destroy()
-            return patches.length
+            return updates.length
         }, 0],
 
         // Yjs persistence tests
@@ -511,16 +527,16 @@ async function runConsoleTests() {
                 subscribe: (u) => updates.push(u)
             })
             // Should get history patches
-            var all_patches = updates.flatMap(u => u.patches || [])
-            if (all_patches.length === 0) return 'no patches received'
+            var all_updates = updates.filter(u => u.patches)
+            if (all_updates.length === 0) return 'no updates received'
             // Root insert should have (:) range
-            if (all_patches[0].range !== '(:)') return 'root range: ' + all_patches[0].range
-            if (all_patches[0].content !== 'hello') return 'root content: ' + all_patches[0].content
+            if (all_updates[0].patches[0].range !== '(:)') return 'root range: ' + all_updates[0].patches[0].range
+            if (all_updates[0].patches[0].content !== 'hello') return 'root content: ' + all_updates[0].patches[0].content
             // Should have a real version (clientID-clock)
-            if (!/^\d+-\d+$/.test(all_patches[0].version)) return 'bad version: ' + all_patches[0].version
+            if (!/^\d+-\d+$/.test(all_updates[0].version?.[0])) return 'bad version: ' + all_updates[0].version
             // Round-trip: apply to fresh Y.Doc
             var doc = new Y.Doc()
-            var binary = braid_text.to_yjs_binary(all_patches)
+            var binary = braid_text.to_yjs_binary(all_updates)
             Y.applyUpdate(doc, binary)
             var text = doc.getText('text').toString()
             doc.destroy()
@@ -537,17 +553,18 @@ async function runConsoleTests() {
             var key = 'yjsget-yjs-' + Math.random().toString(36).slice(2)
             braid_text.db_folder = null
             await braid_text.put(key, {
-                patches: [{unit: 'yjs-text', range: '(:)', content: 'world', version: '555-0'}]
+                version: ['555-0'],
+                patches: [{unit: 'yjs-text', range: '(:)', content: 'world'}]
             })
             var updates = []
             await braid_text.get(key, {
                 range_unit: 'yjs-text',
                 subscribe: (u) => updates.push(u)
             })
-            var all_patches = updates.flatMap(u => u.patches || [])
-            if (all_patches.length === 0) return 'no patches'
+            var all_updates = updates.filter(u => u.patches)
+            if (all_updates.length === 0) return 'no updates'
             var doc = new Y.Doc()
-            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_patches))
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_updates))
             var text = doc.getText('text').toString()
             doc.destroy()
             var r = await braid_text.get_resource(key)
@@ -577,10 +594,10 @@ async function runConsoleTests() {
                 range_unit: 'yjs-text',
                 subscribe: (u) => updates.push(u)
             })
-            var all_patches = updates.flatMap(u => u.patches || [])
-            if (all_patches.length === 0) return 'no patches'
+            var all_updates = updates.filter(u => u.patches)
+            if (all_updates.length === 0) return 'no updates'
             var doc = new Y.Doc()
-            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_patches))
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_updates))
             var text = doc.getText('text').toString()
             doc.destroy()
             r = await braid_text.get_resource(key)
@@ -603,8 +620,8 @@ async function runConsoleTests() {
             })
             // Apply initial history to a Y.Doc
             var doc = new Y.Doc()
-            var init_patches = updates.flatMap(u => u.patches || [])
-            if (init_patches.length) Y.applyUpdate(doc, braid_text.to_yjs_binary(init_patches))
+            var init_updates = updates.filter(u => u.patches)
+            if (init_updates.length) Y.applyUpdate(doc, braid_text.to_yjs_binary(init_updates))
             // Now make a DT edit
             updates.length = 0
             await braid_text.put(key, {
@@ -612,9 +629,9 @@ async function runConsoleTests() {
                 patches: [{unit: 'text', range: '[1:1]', content: 'B'}]
             })
             // Should have received a live update
-            var live_patches = updates.flatMap(u => u.patches || [])
-            if (live_patches.length === 0) return 'no live patches'
-            Y.applyUpdate(doc, braid_text.to_yjs_binary(live_patches))
+            var live_updates = updates.filter(u => u.patches)
+            if (live_updates.length === 0) return 'no live updates'
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(live_updates))
             var text = doc.getText('text').toString()
             doc.destroy()
             var r = await braid_text.get_resource(key)
@@ -637,8 +654,8 @@ async function runConsoleTests() {
                 subscribe: (u) => updates.push(u)
             })
             var doc = new Y.Doc()
-            var init_patches = updates.flatMap(u => u.patches || [])
-            if (init_patches.length) Y.applyUpdate(doc, braid_text.to_yjs_binary(init_patches))
+            var init_updates = updates.filter(u => u.patches)
+            if (init_updates.length) Y.applyUpdate(doc, braid_text.to_yjs_binary(init_updates))
             // Make a Yjs edit from a different peer
             updates.length = 0
             var tmp = new Y.Doc()
@@ -649,9 +666,9 @@ async function runConsoleTests() {
             tmp.destroy()
             await braid_text.put(key, {yjs_update, peer: 'writer'})
             // Should have received a live update
-            var live_patches = updates.flatMap(u => u.patches || [])
-            if (live_patches.length === 0) return 'no live patches'
-            Y.applyUpdate(doc, braid_text.to_yjs_binary(live_patches))
+            var live_updates = updates.filter(u => u.patches)
+            if (live_updates.length === 0) return 'no live updates'
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(live_updates))
             var text = doc.getText('text').toString()
             doc.destroy()
             if (r.dt) r.dt.doc.free()
@@ -672,11 +689,11 @@ async function runConsoleTests() {
                 parents: r.version,
                 subscribe: (u) => updates.push(u)
             })
-            var all_patches = updates.flatMap(u => u.patches || [])
+            var all_updates = updates.filter(u => u.patches)
             if (r.dt) r.dt.doc.free()
             if (r.yjs) r.yjs.doc.destroy()
             delete braid_text.cache[key]
-            return all_patches.length === 0 ? 'ok' : 'got ' + all_patches.length + ' patches'
+            return all_updates.length === 0 ? 'ok' : 'got ' + all_updates.length + ' updates'
         }, 'ok'],
 
         // Empty resource: subscribe gets no patches
@@ -689,11 +706,11 @@ async function runConsoleTests() {
                 range_unit: 'yjs-text',
                 subscribe: (u) => updates.push(u)
             })
-            var all_patches = updates.flatMap(u => u.patches || [])
+            var all_updates = updates.filter(u => u.patches)
             var r = await braid_text.get_resource(key)
             if (r.yjs) r.yjs.doc.destroy()
             delete braid_text.cache[key]
-            return all_patches.length === 0 ? 'ok' : 'got ' + all_patches.length + ' patches'
+            return all_updates.length === 0 ? 'ok' : 'got ' + all_updates.length + ' updates'
         }, 'ok'],
 
         // Multiple edits: history covers all of them
@@ -715,9 +732,9 @@ async function runConsoleTests() {
                 range_unit: 'yjs-text',
                 subscribe: (u) => updates.push(u)
             })
-            var all_patches = updates.flatMap(u => u.patches || [])
+            var all_updates = updates.filter(u => u.patches)
             var doc = new Y.Doc()
-            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_patches))
+            Y.applyUpdate(doc, braid_text.to_yjs_binary(all_updates))
             var text = doc.getText('text').toString()
             doc.destroy()
             var r = await braid_text.get_resource(key)
@@ -866,7 +883,7 @@ async function runConsoleTests() {
 
             // Drain initial
             for (var u of simp.inbox) { if (u.body != null) simp.text = u.body; if (u.version) simp.version = u.version }
-            for (var u of yjs.inbox) { if (u.patches) Y.applyUpdate(yjs.doc, braid_text.to_yjs_binary(u.patches)) }
+            for (var u of yjs.inbox) { if (u.patches) Y.applyUpdate(yjs.doc, braid_text.to_yjs_binary([u])) }
             simp.inbox = []; yjs.inbox = []
 
             // Simpleton inserts 'X' at position 1
@@ -881,7 +898,7 @@ async function runConsoleTests() {
 
             // Yjs peer should receive the update
             for (var u of yjs.inbox) {
-                if (u.patches) Y.applyUpdate(yjs.doc, braid_text.to_yjs_binary(u.patches))
+                if (u.patches) Y.applyUpdate(yjs.doc, braid_text.to_yjs_binary([u]))
             }
             yjs.inbox = []
 
@@ -890,8 +907,9 @@ async function runConsoleTests() {
             var sv = Y.encodeStateVector(yjs.doc)
             t.insert(0, 'Y')
             var update = Y.encodeStateAsUpdate(yjs.doc, sv)
-            var patches = braid_text.from_yjs_binary(update)
-            await braid_text.put(key, {patches, peer: 'yjs'})
+            var yjs_updates = braid_text.from_yjs_binary(update)
+            for (var yu of yjs_updates)
+                await braid_text.put(key, {version: yu.version, patches: yu.patches, peer: 'yjs'})
             await tick()
 
             // Simpleton should receive the yjs edit
@@ -1031,7 +1049,7 @@ async function runConsoleTests() {
                 range_unit: 'yjs-text', peer: 'yjs',
                 subscribe: u => {
                     if (u.patches) {
-                        var bin = braid_text.to_yjs_binary(u.patches)
+                        var bin = braid_text.to_yjs_binary([u])
                         if (bin && bin.length > 0) Y.applyUpdate(ydoc, bin)
                     }
                 }
@@ -1053,8 +1071,10 @@ async function runConsoleTests() {
             var t = ydoc.getText('text')
             var sv = Y.encodeStateVector(ydoc)
             t.insert(t.toString().length, 'B')
+            var yjs_updates = braid_text.from_yjs_binary(Y.encodeStateAsUpdate(ydoc, sv))
             var yjs_msg = {
-                patches: braid_text.from_yjs_binary(Y.encodeStateAsUpdate(ydoc, sv)),
+                version: yjs_updates[0]?.version,
+                patches: yjs_updates[0]?.patches,
                 peer: 'yjs'
             }
 
@@ -1212,7 +1232,8 @@ async function runConsoleTests() {
             braid_text.db_folder = __dirname + '/test_db_folder'
             var r = await braid_text.get_resource(key)
             await braid_text.put(key, {
-                patches: [{unit: 'yjs-text', range: '(:)', content: 'hello', version: '777-0'}]
+                version: ['777-0'],
+                patches: [{unit: 'yjs-text', range: '(:)', content: 'hello'}]
             })
             r.yjs.doc.destroy(); delete braid_text.cache[key]
             var r2 = await braid_text.get_resource(key)
@@ -1224,6 +1245,9 @@ async function runConsoleTests() {
     ]
 
     for (var [name, fn, expected] of yjs_unit_tests) {
+        if (filterArg && !name.toLowerCase().includes(filterArg.toLowerCase())) {
+            continue
+        }
         totalTests++
         try {
             var result = await fn()

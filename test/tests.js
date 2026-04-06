@@ -1682,6 +1682,72 @@ runTest(
 )
 
 runTest(
+    "test yjs merge-type subscribe and put over HTTP",
+    async () => {
+        let key = 'test-yjs-http-' + Math.random().toString(36).slice(2)
+
+        // First create the resource with some content
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['init-4'],
+            parents: [],
+            body: 'hello'
+        })
+        if (!r.ok) throw 'initial put failed: ' + r.status
+
+        // Subscribe with merge-type: yjs
+        var a = new AbortController()
+        let r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Merge-Type': 'yjs' }
+        })
+
+        var updates = []
+        var got_initial = new Promise((done, fail) => {
+            r2.subscribe(update => {
+                updates.push(update)
+                if (updates.length === 1) done()
+            }, fail)
+        })
+
+        // Wait for initial history
+        await got_initial
+
+        // Verify we got yjs-text patches with real item IDs
+        var first = updates[0]
+        if (!first.patches) return 'no patches in initial update'
+        var patch = first.patches[0] || first.patch
+        if (!patch) return 'no patch in initial update'
+        if (patch.unit !== 'yjs-text') return 'wrong unit: ' + patch.unit
+        if (patch.range !== '(:)') return 'expected root range (:), got: ' + patch.range
+        if (patch.content_text !== 'hello') return 'wrong content: ' + patch.content_text
+
+        // Now PUT a yjs-text patch via HTTP
+        var put_r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['999-0'],
+            headers: { 'Merge-Type': 'yjs' },
+            patches: [{
+                unit: 'yjs-text',
+                range: patch.range,
+                content: 'world',
+            }]
+        })
+
+        if (!put_r.ok) return 'PUT failed: ' + put_r.status + ' ' + await put_r.text()
+        // Wait for the live update
+        await new Promise(done => setTimeout(done, 500))
+
+        a.abort()
+
+        if (updates.length < 2) return 'did not receive live update, got ' + updates.length + ' updates'
+        return 'ok'
+    },
+    'ok'
+)
+
+runTest(
     "test subscribing starting at beginning using dt",
     async () => {
         let key = 'test-' + Math.random().toString(36).slice(2)

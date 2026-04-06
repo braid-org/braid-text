@@ -207,7 +207,7 @@ async function run_fuzz(seed, num_steps) {
             peer: peer.id,
             subscribe: (update) => {
                 if (!update.patches) throw new Error(`${peer.id}: yjs update missing patches`)
-                var binary = braid_text.to_yjs_binary(update.patches)
+                var binary = braid_text.to_yjs_binary([update])
                 if (!binary || binary.length === 0) throw new Error(`${peer.id}: to_yjs_binary returned empty`)
                 Y.applyUpdate(peer.doc, binary)
                 peer.text = peer.doc.getText('text').toString()
@@ -241,8 +241,8 @@ async function run_fuzz(seed, num_steps) {
             var update = Y.encodeStateAsUpdate(peer.doc, sv)
             peer.text = t.toString()
 
-            var patches = braid_text.from_yjs_binary(update)
-            return { patches, peer: peer.id }
+            var yjs_updates = braid_text.from_yjs_binary(update)
+            return { version: yjs_updates[0]?.version, patches: yjs_updates[0]?.patches, peer: peer.id }
 
         } else {
             // Simpleton or DT: use the simpleton algorithm
