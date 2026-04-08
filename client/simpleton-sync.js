@@ -248,6 +248,10 @@ function simpleton_client(url, {
       // ── abort() — cancel the subscription ─────────────────────────
       abort: () => ac.abort(),
 
+      // ── client_state — the text as of the last acknowledged version ─
+      // Useful for capturing text_before when recording undo entries.
+      get client_state() { return client_state },
+
       // ── changed() — call when local edits occur ───────────────────
       // This is the entry point for sending local edits. It:
       // 1. Diffs client_state vs current state
