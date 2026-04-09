@@ -959,7 +959,8 @@ function create_braid_text() {
                         }
                         for (var b of dt_bytes) resource.dt.doc.mergeBytes(b)
                         resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
-                        if (!resource.dt.known_versions[syn_actor]) resource.dt.known_versions[syn_actor] = new RangeSet()
+                        if (!resource.dt.known_versions[syn_actor])
+                            resource.dt.known_versions[syn_actor] = new RangeSet()
                         resource.dt.known_versions[syn_actor].add_range(0, syn_seq - 1)
                         await resource.dt.log.save(resource.dt.doc.getPatchSince(yjs_v_before))
 
@@ -977,8 +978,15 @@ function create_braid_text() {
                             if (!peer || client.peer !== peer)
                                 await client.send_update(
                                     client.accept_encoding_dt
-                                        ? { version: resource.version, parents: version_before_yjs_sync, body: resource.dt.doc.getPatchSince(yjs_v_before), encoding: 'dt' }
-                                    : { version: resource.version, parents: version_before_yjs_sync, patches: xf }
+                                        ? { version: resource.version,
+                                            parents: version_before_yjs_sync,
+                                            body: resource.dt.doc.getPatchSince(yjs_v_before),
+                                            encoding: 'dt'
+                                          }
+                                    : { version: resource.version,
+                                        parents: version_before_yjs_sync,
+                                        patches: xf
+                                      }
                                 )
                         }
                     }
@@ -1349,7 +1357,9 @@ function create_braid_text() {
             if (braid_text.db_folder) {
                 await db_folder_init()
                 var pages = new Set()
-                for (let x of await require('fs').promises.readdir(braid_text.db_folder)) if (/\.(dt|yjs)\.\d+$/.test(x)) pages.add(decode_filename(x.replace(/\.(dt|yjs)\.\d+$/, '')))
+                for (let x of await require('fs').promises.readdir(braid_text.db_folder))
+                    if (/\.(dt|yjs)\.\d+$/.test(x))
+                        pages.add(decode_filename(x.replace(/\.(dt|yjs)\.\d+$/, '')))
                 return [...pages.keys()]
             } else return Object.keys(braid_text.cache)
         } catch (e) { return [] }
