@@ -5,13 +5,13 @@
 const http = require('http')
 const fs = require('fs')
 const path = require('path')
-const {fetch: braid_fetch} = require('braid-http')
+const {fetch: braid_fetch, reliable_update_channel} = require('braid-http')
 
 // Load simpleton_client by evaluating the source (it has no module.exports)
 const simpleton_src = fs.readFileSync(
     path.join(__dirname, '..', 'client', 'simpleton-sync.js'), 'utf8')
-const simpleton_client = new Function('braid_fetch', 'crypto',
-    simpleton_src + '\nreturn simpleton_client;')(braid_fetch, require('crypto').webcrypto)
+const simpleton_client = new Function('braid_fetch', 'reliable_update_channel', 'crypto',
+    simpleton_src + '\nreturn simpleton_client;')(braid_fetch, reliable_update_channel, require('crypto').webcrypto)
 
 const PORT = 9877
 

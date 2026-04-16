@@ -55,6 +55,18 @@
 //
 // content_type: used for Accept and Content-Type headers
 //
+// on_error?: (error) => void
+//     called when an error occurs (e.g., network failure, digest mismatch)
+//
+// on_online?: (is_online) => void
+//     called when the connection status changes
+//
+// on_ack?: () => void
+//     called when all outstanding PUTs have been acknowledged
+//
+// send_digests?: boolean
+//     if truthy, includes a Repr-Digest header with each PUT
+//
 // returns { changed, abort }
 //     call changed() whenever there is a local change,
 //     and the system will call a combination of get_state and
@@ -106,10 +118,9 @@ function simpleton_client(url, {
     get_patches,
     get_state,
     content_type,
-    headers: custom_headers,    // The user can pass in custom headers
-                              // that are forwared into the fetch
+    headers,                  // The user can pass in custom headers
+                              // that are forwarded into fetches
     on_error,
-    on_res,
     on_online,
     on_ack,
     send_digests
@@ -122,38 +133,34 @@ function simpleton_client(url, {
     var max_outstanding_changes = 10 // throttle limit
     var throttled = false
     var throttled_updates = []
-    var ac = new AbortController()
 
-    // ── Subscription (GET) ──────────────────────────────────────────────
-    //
-    // Opens a long-lived GET subscription with retry: () => true, meaning
-    // any disconnection (network error, HTTP error) triggers automatic
-    // reconnection with backoff.
-    //
-    // The parents callback sends client_version on reconnect, so the
-    // server knows where we left off and can send patches from there.
-    //
-    // IMPORTANT: No changed() / flush is called on reconnect. The
-    // subscription simply resumes. Any queued PUTs are retried by
-    // braid_fetch independently.
-    braid_fetch(url, {
-        peer,
-        subscribe: true,
-        heartbeats: 20,
-        signal: ac.signal,
-        retry: () => true,
-        parents: () => client_version.length ? client_version : null,
-        onSubscriptionStatus: status => on_online && on_online(status.online),
-        headers: { ...custom_headers,
-                   "Merge-Type": "simpleton",
-                   ...content_type && {Accept: content_type} },
-    }).then(res => {
-        if (on_res) on_res(res)
-        res.subscribe(async update => {
+    // extend the headers with merge-type and peer
+    headers = {
+        ...headers,
+        "Merge-Type": "simpleton",
+        Peer: peer,
+    }
+
+    // Manages both the GET subscription and PUT requests through a single
+    // channel with automatic reconnection and PUT queuing.
+    var channel = reliable_update_channel(url, {
+        reconnect_from_parents: () => client_version.length ? client_version : null,
+        get_headers: {
+            ...headers,
+            ...content_type && {Accept: content_type}
+        },
+        put_headers: {
+            ...headers,
+            ...content_type && {"Content-Type": content_type}
+        },
+        on_update: async update => {
             // ── Parent check ────────────────────────────────────────
             // Core simpleton invariant: only accept updates whose
-            // parents match our client_version exactly. This ensures
-            // we stay on a single line of time.
+            // parents form a continuous chain. We compare against the
+            // last queued update's version (if throttled) or
+            // client_version. When throttled, matching updates are
+            // queued but not applied — they'll be applied later when
+            // the throttle clears (see changed()).
             update.parents.sort()
             var last_queued = throttled_updates.length
                 ? throttled_updates[throttled_updates.length - 1].version
@@ -161,8 +168,16 @@ function simpleton_client(url, {
             if (versions_eq(last_queued, update.parents))
                 if (throttled) throttled_updates.push(update)
                 else await apply_update(update)
-        }, on_error)
-    }).catch(on_error)
+        },
+        on_status: status => on_online && on_online(status.online),
+        on_error: err => on_error && on_error(err),
+
+        // this api is preliminary and undocumented;
+        // we use it to tell the reliable_update_channel to die,
+        // if there is a digest mismatch on the server,
+        // which will result in a 550 status code
+        no_retry_status_codes: [550]
+    })
 
     async function apply_update(update) {
         // ── Parse and convert patches ───────────────────────────────
@@ -246,7 +261,7 @@ function simpleton_client(url, {
     // ── Public interface ────────────────────────────────────────────────
     return {
       // ── abort() — cancel the subscription ─────────────────────────
-      abort: () => ac.abort(),
+      abort: () => channel.close(),
 
       // ── changed() — call when local edits occur ───────────────────
       // This is the entry point for sending local edits. It:
@@ -326,28 +341,15 @@ function simpleton_client(url, {
                 //   - HTTP 550 (Repr-Digest mismatch / out of sync):
                 //     give up, throw — client must be re-created
                 outstanding_changes++
-                try {
-                    var r = await braid_fetch(url, {
-                        method: "PUT",
-                        peer, version, parents, patches,
-                        retry: (res) => res.status !== 550,
-                        headers: {
-                            ...custom_headers,
-                            "Merge-Type": "simpleton",
-                            ...send_digests && {
-                                "Repr-Digest": await get_digest(client_state) },
-                            ...content_type && {
-                                "Content-Type": content_type }
-                        }
-                    })
-                    if (!r.ok) throw new Error(`bad http status: ${r.status}`)
-                } catch (e) {
-                    // A 550 means Repr-Digest check failed — we're out
-                    // of sync. The client must be torn down and
-                    // re-created from scratch.
-                    on_error(e)
-                    throw e
-                }
+
+                await channel.put({
+                    version, parents, patches,
+                    headers: {
+                        ...send_digests && {
+                            "Repr-Digest": await get_digest(client_state) }
+                    }
+                })
+                
                 throttled = false
                 outstanding_changes--
                 if (on_ack && !outstanding_changes) on_ack()
