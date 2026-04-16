@@ -14,7 +14,7 @@ var server = require("http").createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return res.end()
 
     var q = req.url.split('?').slice(-1)[0]
-    if (q === 'editor' || q === 'markdown-editor' || q === 'yjs-editor' || q === 'demo') {
+    if (q === 'editor' || q === 'markdown-editor' || q === 'yjs-editor') {
         res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-cache" })
         require("fs").createReadStream(`./client/${q}.html`).pipe(res)
         return
