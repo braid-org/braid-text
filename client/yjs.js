@@ -1,36 +1,19 @@
-// ************************************************************************
-// ******* Yjs Braid-HTTP Client — syncs a Y.Doc over Braid-HTTP *********
-// ************************************************************************
+// ******************************************************************
+// Sync a YJS client, with a Y.Doc, through Braid-HTTP to a server
 //
-// Connects to a Braid-HTTP server with Merge-Type: yjs.
-// Receives yjs-text patches, applies them to a local Y.Doc.
-// Sends local Y.Doc edits as yjs-text patches via PUT.
-//
-// Requires: yjs, lib0, braid-http-client (braid_fetch)
-//
-// --- API ---
-//
-// url: resource endpoint
-//
-// ydoc: Y.Doc instance to sync (caller creates and owns it)
-//
-// channel: Y.Text channel name (default: 'text')
-//
-// headers: custom headers forwarded into fetch
-//
-// on_update: () => void — called after applying a remote update
-//
-// returns { abort }
+// This library requires yjs, lib0, braid-http-client.js
 
-function yjs_client(url, {
-    ydoc,
-    channel = 'text',
-    headers: custom_headers,
-    on_update,
-    on_error,
-    onBytes,
-    onFetch,
-}) {
+
+// === yjs_client ==
+//
+// This is the main function!
+//
+//  - It connects a Y.Doc to a remote Braid-HTTP URL.
+//  - The "channel" is the channel of the ydoc that we are syncing.
+
+function yjs_client(url, { ydoc, channel = 'text', headers: custom_headers,
+                           on_update, on_error, onBytes, onFetch }) {
+
     if (typeof Y === 'undefined') throw new Error('yjs is not loaded')
     if (typeof braid_fetch === 'undefined') throw new Error('braid-http-client is not loaded')
 
@@ -41,18 +24,9 @@ function yjs_client(url, {
     var max_outstanding_puts = 10
 
     // ── Subscribe (GET) ──
-    braid_fetch(url, {
-        peer,
-        subscribe: true,
-        retry: () => true,
-        signal: ac.signal,
-        headers: {
-            ...custom_headers,
-            'Merge-Type': 'yjs',
-        },
-        onBytes,
-        onFetch,
-    }).then(res => {
+    braid_fetch(url, { peer, subscribe: true, retry: () => true, signal: ac.signal,
+                       headers: { ...custom_headers, 'Merge-Type': 'yjs', },
+                       onBytes, onFetch, }).then(res => {
         res.subscribe(async update => {
             if (!update.patches) return
 
@@ -63,13 +37,11 @@ function yjs_client(url, {
 
             // Convert yjs-text update to Yjs binary and apply
             try {
-                var binary = to_yjs_binary([{
-                    version: update.version,
-                    patches
-                }])
+                var binary = to_yjs_binary([{ version: update.version, patches }])
                 if (binary && binary.length > 0)
                     Y.applyUpdate(ydoc, binary, 'braid-http')
-                if (on_update) on_update()
+                if (on_update)
+                    on_update()
             } catch (e) {
                 console.error('yjs_client: failed to apply update:', e)
                 if (on_error) on_error(e)
@@ -91,25 +63,14 @@ function yjs_client(url, {
             var updates = from_yjs_binary(update)
             for (var u of updates) {
                 outstanding_puts++
-                braid_fetch(url, {
-                    method: 'PUT',
-                    peer,
-                    version: u.version,
-                    patches: u.patches,
-                    signal: ac.signal,
-                    retry: (res) => res.status !== 550,
-                    headers: {
-                        ...custom_headers,
-                        'Merge-Type': 'yjs',
-                    },
-                    onBytes,
-                    onFetch,
-                }).then(() => {
-                    outstanding_puts--
-                }).catch(e => {
-                    outstanding_puts--
-                    if (on_error) on_error(e)
-                })
+                braid_fetch(url, { method: 'PUT', peer,
+                                   version: u.version, patches: u.patches,
+                                   signal: ac.signal,
+                                   retry: (res) => res.status !== 550,
+                                   headers: { ...custom_headers, 'Merge-Type': 'yjs', },
+                                   onBytes, onFetch })
+                    .then(() => { outstanding_puts-- })
+                    .catch(e => { outstanding_puts--; if (on_error) on_error(e) })
             }
         } catch (e) {
             console.error('yjs_client: failed to encode update:', e)
@@ -117,9 +78,7 @@ function yjs_client(url, {
         }
     })
 
-    return {
-        abort: () => ac.abort()
-    }
+    return { abort: () => ac.abort() }
 }
 
 // ── from_yjs_binary: Yjs binary → yjs-text updates ──
@@ -165,13 +124,15 @@ function from_yjs_binary(update) {
     return updates
 }
 
-// ── to_yjs_binary: yjs-text updates → Yjs binary ──
+// Translates from Braid JSON updates into the YJS binary format 
 function to_yjs_binary(updates) {
-    var lib0_encoding = Y.lib0_encoding || (typeof lib0 !== 'undefined' ? lib0.encoding : require('lib0/encoding'))
-    var encoder = new Y.UpdateEncoderV1()
+    var lib0_encoding = Y.lib0_encoding || (typeof lib0 !== 'undefined'
+                                            ? lib0.encoding
+                                            : require('lib0/encoding')),
+        encoder = new Y.UpdateEncoderV1()
 
-    var inserts_by_client = new Map()
-    var deletes_by_client = new Map()
+    var inserts_by_client = new Map(),
+        deletes_by_client = new Map()
 
     for (var update of updates) {
         if (!update.patches) continue
@@ -234,7 +195,6 @@ function to_yjs_binary(updates) {
     return encoder.toUint8Array()
 }
 
-// ── parse_yjs_range ──
 function parse_yjs_range(range) {
     if (!range) return null
     var exclusive = range.match(/^\(([^)]*)\)$/)
