@@ -93,45 +93,55 @@ function create_braid_text() {
             resource.save_meta()
         }
 
-        // Given a version frontier, incorporate a new update (version + parents)
-        // to compute the new frontier.  Walks the DT version DAG if needed.
-        function extend_frontier(frontier, version, parents) {
-            var frontier_set = new Set(frontier)
-            // Fast path: if the frontier contains all the update's parents,
-            // just swap them out for the new version
-            if (parents.length &&
-                parents.every(p => frontier_set.has(p))) {
-                parents.forEach(p => frontier_set.delete(p))
-                for (var event of version) frontier_set.add(event)
-                frontier = [...frontier_set.values()]
-            } else {
-                // Slow path: walk the full DT history to compute the frontier
-                var looking_for = frontier_set
-                for (var event of version) looking_for.add(event)
-
-                frontier = []
-                var shadow = new Set()
-
-                var bytes = resource.dt.doc.toBytes()
-                var [_, events, parentss] = braid_text.dt_parse([...bytes])
-                for (var i = events.length - 1; i >= 0 && looking_for.size; i--) {
-                    var e = events[i].join('-')
-                    if (looking_for.has(e)) {
-                        looking_for.delete(e)
-                        if (!shadow.has(e)) frontier.push(e)
-                        shadow.add(e)
-                    }
-                    if (shadow.has(e))
-                        parentss[i].forEach(p => shadow.add(p.join('-')))
-                }
-            }
-            return frontier.sort()
-        }
-
+        // When we get an ackowledgement that a remote server has a version
+        // that we have:
+        //
+        //   - In a PUT acknowledgement
+        //   - Or a GET response
+        //
+        // ...then we extend our known fork point "frontier" to include that
+        // version.
         function extend_fork_point(update) {
-            resource.meta.fork_point =
-                extend_frontier(resource.meta.fork_point,
-                                update.version, update.parents)
+
+            // Given a version frontier, incorporate a new update (version +
+            // parents) to compute the new frontier.  Walks the DT version DAG
+            // if needed.
+            function extend_frontier(frontier, version, parents) {
+                var frontier_set = new Set(frontier)
+                // Fast path: if the frontier contains all the update's parents,
+                // just swap them out for the new version
+                if (parents.length &&
+                    parents.every(p => frontier_set.has(p))) {
+                    parents.forEach(p => frontier_set.delete(p))
+                    for (var event of version) frontier_set.add(event)
+                    frontier = [...frontier_set.values()]
+                } else {
+                    // Slow path: walk the full DT history to compute the frontier
+                    var looking_for = frontier_set
+                    for (var event of version) looking_for.add(event)
+
+                    frontier = []
+                    var shadow = new Set()
+
+                    var bytes = resource.dt.doc.toBytes()
+                    var [_, events, parentss] = braid_text.dt_parse([...bytes])
+                    for (var i = events.length - 1; i >= 0 && looking_for.size; i--) {
+                        var e = events[i].join('-')
+                        if (looking_for.has(e)) {
+                            looking_for.delete(e)
+                            if (!shadow.has(e)) frontier.push(e)
+                            shadow.add(e)
+                        }
+                        if (shadow.has(e))
+                            parentss[i].forEach(p => shadow.add(p.join('-')))
+                    }
+                }
+                return frontier.sort()
+            }
+
+            resource.meta.fork_point = extend_frontier(resource.meta.fork_point,
+                                                       update.version,
+                                                       update.parents)
             resource.save_meta()
         }
 
@@ -370,8 +380,8 @@ function create_braid_text() {
             res.setHeader('Content-Type', `${ct}; charset=utf-8`)
         else if (charset.toLowerCase() !== 'charset=utf-8')
             res.setHeader('Content-Type', ct_parts
-                .map(p => p.toLowerCase().startsWith('charset=') ? 'charset=utf-8' : p)
-                .join('; '))
+                          .map(p => p.toLowerCase().startsWith('charset=') ? 'charset=utf-8' : p)
+                          .join('; '))
 
         // ── Handle simple methods that don't need further processing ──
 
@@ -407,9 +417,9 @@ function create_braid_text() {
             var getting = {
                 subscribe: !!req.subscribe,
                 history:   (has_parents && v_eq(req.parents, resource.version)) ? false
-                         : has_parents ? 'since-parents'
-                         : (req.subscribe || req.parents || req.headers['accept-transfer-encoding']) ? 'up-to-version'
-                         : false,
+                    : has_parents ? 'since-parents'
+                    : (req.subscribe || req.parents || req.headers['accept-transfer-encoding']) ? 'up-to-version'
+                    : false,
                 transfer_encoding: req.headers['accept-transfer-encoding'],
             }
             getting.single_snapshot = !getting.subscribe && !getting.history
@@ -493,8 +503,7 @@ function create_braid_text() {
                         merge_type,
                         signal: aborter.signal,
                         accept_encoding:
-                            req.headers['x-accept-encoding'] ??
-                            req.headers['accept-encoding'],
+                            req.headers['x-accept-encoding'] ?? req.headers['accept-encoding'],
                         subscribe: update => {
                             // Add digest for integrity checking on the client
                             if (update.version && v_eq(update.version, resource.version))
@@ -688,9 +697,9 @@ function create_braid_text() {
             // 'up-to-version' = bring client up to current (from scratch)
             // false = no history needed
             history:   (has_parents && v_eq(options.parents, version)) ? false
-                     : has_parents ? 'since-parents'
-                     : (options.subscribe || options.parents || options.transfer_encoding) ? 'up-to-version'
-                     : false,
+                : has_parents ? 'since-parents'
+                : (options.subscribe || options.parents || options.transfer_encoding) ? 'up-to-version'
+                : false,
             transfer_encoding: options.transfer_encoding,
         }
         getting.single_snapshot = !getting.subscribe && !getting.history
@@ -733,6 +742,7 @@ function create_braid_text() {
             return { body: bytes }
         }
 
+        // Each merge-type has a different way of getting history
         switch (merge_type) {
 
         case 'yjs':
@@ -774,7 +784,7 @@ function create_braid_text() {
 
             if (getting.history && !getting.subscribe)
                 return dt_get_patches(resource.dt.doc,
-                    getting.history === 'since-parents' ? options.parents : undefined)
+                                      getting.history === 'since-parents' ? options.parents : undefined)
 
             if (getting.subscribe) {
                 var client = {
@@ -807,7 +817,7 @@ function create_braid_text() {
 
             if (getting.history && !getting.subscribe)
                 return dt_get_patches(resource.dt.doc,
-                    getting.history === 'since-parents' ? options.parents : undefined)
+                                      getting.history === 'since-parents' ? options.parents : undefined)
 
             if (getting.subscribe) {
                 var client = {
