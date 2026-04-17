@@ -131,9 +131,9 @@ class SyncedTextarea extends HTMLElement {
         // Local edits get relayed to the client and cursors.
         this.oninput_handler = () => {
             set_acked_state(textarea, false)
-            this.client.changed(textarea.value)
-            cursors?.on_edit()
-            this.dispatchEvent(new CustomEvent('update'))
+            var patches = this.client.changed(textarea.value)
+            cursors?.on_edit(patches)
+            this.dispatchEvent(new CustomEvent('update', { detail: { patches } }))
         }
         textarea.addEventListener('input', this.oninput_handler)
     }
