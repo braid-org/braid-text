@@ -9,7 +9,7 @@ const {fetch: braid_fetch, reliable_update_channel} = require('braid-http')
 
 // Load simpleton_client by evaluating the source (it has no module.exports)
 const text_clients_src = fs.readFileSync(
-    path.join(__dirname, '..', 'client', 'text-clients.js'), 'utf8')
+    path.join(__dirname, '..', 'client', 'text-client.js'), 'utf8')
 const simpleton_src = fs.readFileSync(
     path.join(__dirname, '..', 'client', 'simpleton.js'), 'utf8')
 const { simpleton_client, text_apply_patches } = new Function('braid_fetch', 'reliable_update_channel', 'crypto',

@@ -129,6 +129,10 @@ function simpleton_client(url, {
         var patches = get_patches ? get_patches(client_state) :
             [simple_diff(client_state, new_state)]
 
+        // Temporary: save JS-index patches to return for cursor support.
+        // We're thinking of removing this.
+        var js_patches = patches.map(p => ({range: [...p.range], content: p.content}))
+
         var prepared = text_prepare_put(patches, client_state)
         char_counter += prepared.version_count
 
@@ -144,13 +148,15 @@ function simpleton_client(url, {
                 channel.put({ ...update, headers: { "Repr-Digest": digest } }))
         else
             channel.put(update)
+
+        return js_patches // temporary, for cursor support
     }
 
     return {
         abort: () => channel.close(),
         changed: (new_state) => {
             if (is_online && outstanding_puts < 10)
-                try_send(new_state)
+                return try_send(new_state) // temporary, returns patches for cursor support
             else
                 pending_state = new_state
         }
