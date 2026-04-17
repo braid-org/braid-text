@@ -81,11 +81,7 @@ function simpleton_client(url, {
     var pending_state = null         // non-null means dirty (unsent local edits)
 
     // extend the headers with merge-type and peer
-    headers = {
-        ...headers,
-        "Merge-Type": "simpleton",
-        Peer: peer,
-    }
+    headers = { ...headers, "Merge-Type": "simpleton", Peer: peer }
 
     var channel = reliable_update_channel(url, {
         reconnect_from_parents: () => client_version.length ? client_version : null,
