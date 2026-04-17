@@ -1,18 +1,8 @@
-// ************************************************************************
-// ******* Reference Implementation of Simpleton Client Algorithm *********
-// ************************************************************************
+// Simpleton Javascript Client
 //
-// This is the canonical JS reference for implementing a simpleton client.
-// Other language implementations should mirror this logic exactly, with
-// adaptations only for language-specific details (e.g., string encoding).
-//
-// requires braid-http@~1.3/braid-http-client.js
-//
+//     requires braid-http@~1.3/braid-http-client.js
+
 // --- API ---
-//
-// url: resource endpoint
-//
-// headers:  custom headers that get forwarded through into the fetch
 //
 // on_patches?: (patches) => void
 //     processes incoming patches by applying them to the UI/textarea.
@@ -74,26 +64,6 @@
 //     get_patches is optional.)
 //     call abort() to abort the subscription.
 //
-// --- Retry and Reconnection Behavior ---
-//
-// Simpleton relies on braid_fetch for retry/reconnection:
-//
-// Subscription (GET):
-//   retry: () => true — always reconnect on any error (network failure,
-//   HTTP error, etc.). Reconnection backs off:
-//     delay = Math.min(retry_count + 1, 3) * 1000 ms
-//   i.e., 1s, 2s, 3s, 3s, 3s, ...
-//   On reconnect, sends Parents via the parents callback to resume
-//   from where the client left off.
-//
-// PUT requests:
-//   retry: (res) => res.status !== 550 — retry all errors EXCEPT
-//   HTTP 550 (Repr-Digest mismatch, meaning client is out of sync).
-//   This means:
-//     - Connection failure: retried with backoff
-//     - HTTP 401, 403, 408, 429, 500, 502, 503, 504, etc.: retried
-//     - HTTP 550: out of sync — stop retrying, throw error. The
-//       client must be torn down and restarted from scratch.
 //
 // --- Local Edit Absorption ---
 //
@@ -113,16 +83,18 @@
 // update; otherwise your UI will not reflect remote changes.
 //
 function simpleton_client(url, {
-    on_patches,
-    on_state,
     get_patches,
     get_state,
-    content_type,
-    headers,                  // The user can pass in custom headers
-                              // that are forwarded into fetches
+
+    on_patches,
+    on_state,
     on_error,
     on_online,
     on_ack,
+
+    headers,                  // The user can pass in custom headers
+                              // that are forwarded into fetches
+    content_type,
     send_digests
 }) {
     var peer = Math.random().toString(36).slice(2)
@@ -145,14 +117,8 @@ function simpleton_client(url, {
     // channel with automatic reconnection and PUT queuing.
     var channel = reliable_update_channel(url, {
         reconnect_from_parents: () => client_version.length ? client_version : null,
-        get_headers: {
-            ...headers,
-            ...content_type && {Accept: content_type}
-        },
-        put_headers: {
-            ...headers,
-            ...content_type && {"Content-Type": content_type}
-        },
+        get_headers: { ...headers, ...content_type && {Accept: content_type} },
+        put_headers: { ...headers, ...content_type && {"Content-Type": content_type} },
         on_update: async update => {
             // ── Parent check ────────────────────────────────────────
             // Core simpleton invariant: only accept updates whose
@@ -200,12 +166,12 @@ function simpleton_client(url, {
             // are natively indexed by code points (e.g., Emacs Lisp,
             // Python, Rust's char iterator).
             convert_ranges_codepoints_to_utf16(patches, client_state)
-        } else {
+        } else
             // Initial snapshot: convert body to a patch replacing
             // [0,0] so it follows the same code path as incremental
             // patches.
             patches = [{range: [0, 0], content: update.body_text}]
-        }
+
 
         // ── Apply the update ────────────────────────────────────────
         if (on_patches) {
@@ -216,11 +182,11 @@ function simpleton_client(url, {
             // changed() after every local edit to avoid this.
             on_patches(patches)
             client_state = get_state()
-        } else {
+        } else
             // Apply patches to our internal state; the
             // result is delivered via on_state below.
             client_state = apply_patches(client_state, patches)
-        }
+
 
         // ── Advance version ─────────────────────────────────────────
         // IMPORTANT: This must happen synchronously (before any await)
@@ -235,27 +201,9 @@ function simpleton_client(url, {
         // loop handles flushing accumulated edits.
         if (on_state) on_state(client_state)
 
-        // ── Digest verification ─────────────────────────────────────
-        // If the server sent a repr-digest, verify our state
-        // matches. On mismatch, THROW — this halts the
-        // subscription handler. The document is corrupted and
-        // continuing would compound the problem.
-        //
-        // This is placed after advancing client_version and calling
-        // on_state so that the await does not create a yield point
-        // between applying patches and advancing client_version.
-        // That yield point previously allowed the changed() PUT loop
-        // to interleave, capturing a stale client_version and causing
-        // edit loss.
-        if (update.extra_headers &&
-            update.extra_headers["repr-digest"] &&
-            update.extra_headers["repr-digest"].startsWith('sha-256=') &&
-            update.extra_headers["repr-digest"] !== await get_digest(client_state)) {
-            console.log('repr-digest mismatch!')
-            console.log('repr-digest: ' + update.extra_headers["repr-digest"])
-            console.log('state: ' + client_state)
-            throw new Error('repr-digest mismatch')
-        }
+        // Now verify that we did this correct, and are in sync.  We do this
+        // at the end, so the prior updating is atomic.
+        await check_digest(update, client_state)
     }
 
     // ── Public interface ────────────────────────────────────────────────
@@ -333,21 +281,11 @@ function simpleton_client(url, {
                 client_version = version   // optimistic advance
                 client_state = new_state   // update client_state
 
-                // ── Send PUT ────────────────────────────────────────
-                // Uses braid_fetch with retry: (res) => res.status !== 550
-                // This means:
-                //   - Network failures: retried with backoff
-                //   - HTTP 401, 403, 408, 429, 500, 502, 503, 504: retried
-                //   - HTTP 550 (Repr-Digest mismatch / out of sync):
-                //     give up, throw — client must be re-created
+                // Send Update
                 outstanding_changes++
-
                 await channel.put({
                     version, parents, patches,
-                    headers: {
-                        ...send_digests && {
-                            "Repr-Digest": await get_digest(client_state) }
-                    }
+                    headers: send_digests && { "Repr-Digest": await get_digest(client_state) }
                 })
                 
                 throttled = false
@@ -497,12 +435,24 @@ function simpleton_client(url, {
         return state
     }
 
-    // ── get_digest ──────────────────────────────────────────────────────
-    // Computes SHA-256 of the UTF-8 encoding of the state string,
-    // formatted as the Repr-Digest header value:
-    //   sha-256=:<base64-encoded-hash>:
+    // get_digest():
+    //  - Computes SHA-256 of the UTF-8 encoding of the string
+    //  - Formatted as Repr-Digest: sha-256=:<base64-encoded-hash>:
     async function get_digest(str) {
         var bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
         return `sha-256=:${btoa(String.fromCharCode(...new Uint8Array(bytes)))}:`
+    }
+    // check_digest():
+    //  - Makes sure the current state matches the digest in the update
+    async function check_digest(update, client_state) {
+        // If the server sent a repr-digest, verify our state matches.  Throw
+        // exception if it fails.
+        if (update.extra_headers?.["repr-digest"]?.startsWith('sha-256=')
+            && update.extra_headers["repr-digest"] !== await get_digest(client_state)) {
+            console.log('repr-digest mismatch!')
+            console.log('repr-digest: ' + update.extra_headers["repr-digest"])
+            console.log('state: ' + client_state)
+            throw new Error('repr-digest mismatch')
+        }
     }
 }

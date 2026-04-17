@@ -1,16 +1,15 @@
 
-function set_acked_state(textarea, binary = true) {
-    if (!binary) {
-        textarea.old_caretColor = textarea.style.caretColor
-
-        textarea.style.caretColor = 'red'
-    } else {
+function set_acked_state(textarea, on = true) {
+    if (on)
         textarea.style.caretColor = textarea.old_caretColor
+    else {
+        textarea.old_caretColor = textarea.style.caretColor
+        textarea.style.caretColor = 'red'
     }
 }
 
-function set_error_state(textarea, binary = true) {
-    if (binary) {
+function set_error_state(textarea, on = true) {
+    if (on) {
         textarea.old_disabled = textarea.disabled
         textarea.old_background = textarea.style.background
         textarea.old_border = textarea.style.border
@@ -25,6 +24,8 @@ function set_error_state(textarea, binary = true) {
     }
 }
 
+// A convenient wrapper around the myers-diff.js library's "diff_main()" function,
+// which is defined in https://braid.org/code/myers-diff1.js.
 function diff(before, after) {
     let diff = diff_main(before, after)
     let patches = []
