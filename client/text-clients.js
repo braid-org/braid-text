@@ -76,42 +76,6 @@ function convert_ranges_utf16_to_codepoints(patches, str) {
     }
 }
 
-
-// ── simple_diff ────────────────────────────────────────────────────────
-// Finds the longest common prefix and suffix between two strings,
-// returning the minimal edit that transforms `old_str` into `new_str`.
-//
-// Returns: { range: [prefix_len, old_str.length - suffix_len],
-//            content: new_str.slice(prefix_len, new_str.length - suffix_len) }
-//
-// This produces a single contiguous edit. For multi-cursor or
-// multi-region edits, supply a custom get_patches function instead.
-function simple_diff(old_str, new_str) {
-    var prefix_len = 0
-    var min_len = Math.min(old_str.length, new_str.length)
-    while (prefix_len < min_len && old_str[prefix_len] === new_str[prefix_len]) prefix_len++
-
-    // Don't split a surrogate pair: if prefix ends on a low surrogate,
-    // the preceding high surrogate only matched by coincidence (same
-    // Unicode block), so back up to include the whole pair in the diff.
-    if (prefix_len > 0 && is_low_surrogate(old_str, prefix_len))
-        prefix_len--
-
-    // Find common suffix length (from what remains after prefix)
-    var suffix_len = 0
-    min_len -= prefix_len
-    while (suffix_len < min_len && old_str[old_str.length - suffix_len - 1] === new_str[new_str.length - suffix_len - 1]) suffix_len++
-
-    // Same guard for suffixes: if the range end (old_str.length - suffix_len)
-    // lands on a low surrogate, the suffix consumed it without its high
-    // surrogate, so back up.
-    if (suffix_len > 0 && is_low_surrogate(old_str, old_str.length - suffix_len))
-        suffix_len--
-
-    return {range: [prefix_len, old_str.length - suffix_len], content: new_str.slice(prefix_len, new_str.length - suffix_len)}
-}
-
-
 // ── text_apply_patches ─────────────────────────────────────────────────
 // Applies patches to a string, tracking cumulative offset.
 //
@@ -229,6 +193,45 @@ function diff(before, after) {
     return patches
 }
 
+// ── simple_diff ────────────────────────────────────────────────────────
+// Finds the longest common prefix and suffix between two strings,
+// returning the minimal edit that transforms `old_str` into `new_str`.
+//
+// Returns: { range: [prefix_len, old_str.length - suffix_len],
+//            content: new_str.slice(prefix_len, new_str.length - suffix_len) }
+//
+// This produces a single contiguous edit. For multi-cursor or
+// multi-region edits, supply a custom get_patches function instead.
+function simple_diff(old_str, new_str) {
+    var prefix_len = 0
+    var min_len = Math.min(old_str.length, new_str.length)
+    while (prefix_len < min_len && old_str[prefix_len] === new_str[prefix_len]) prefix_len++
+
+    // Don't split a surrogate pair: if prefix ends on a low surrogate,
+    // the preceding high surrogate only matched by coincidence (same
+    // Unicode block), so back up to include the whole pair in the diff.
+    if (prefix_len > 0 && is_low_surrogate(old_str, prefix_len))
+        prefix_len--
+
+    // Find common suffix length (from what remains after prefix)
+    var suffix_len = 0
+    min_len -= prefix_len
+    while (suffix_len < min_len
+           && (old_str[old_str.length - suffix_len - 1]
+               === new_str[new_str.length - suffix_len - 1]))
+        suffix_len++
+
+    // Same guard for suffixes: if the range end (old_str.length - suffix_len)
+    // lands on a low surrogate, the suffix consumed it without its high
+    // surrogate, so back up.
+    if (suffix_len > 0 && is_low_surrogate(old_str, old_str.length - suffix_len))
+        suffix_len--
+
+    return {range: [prefix_len, old_str.length - suffix_len],
+            content: new_str.slice(prefix_len, new_str.length - suffix_len)}
+}
+
+
 function apply_patches_and_update_selection(textarea, patches) {
     let offset = 0
     for (let p of patches) {
@@ -246,12 +249,18 @@ function apply_patches_and_update_selection(textarea, patches) {
 
         for (let i = 0; i < sel.length; i++)
             if (sel[i] > range[0])
-                if (sel[i] > range[1]) sel[i] -= range[1] - range[0]
-                else sel[i] = range[0]
+                if (sel[i] > range[1])
+                    sel[i] -= range[1] - range[0]
+                else
+                    sel[i] = range[0]
 
-        for (let i = 0; i < sel.length; i++) if (sel[i] > range[0]) sel[i] += p.content.length
+        for (let i = 0; i < sel.length; i++)
+            if (sel[i] > range[0])
+                sel[i] += p.content.length
 
-        original = original.substring(0, range[0]) + p.content + original.substring(range[1])
+        original = original.substring(0, range[0])
+            + p.content
+            + original.substring(range[1])
     }
 
     textarea.value = original

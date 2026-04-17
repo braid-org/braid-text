@@ -37,7 +37,7 @@ class SyncedTextarea extends HTMLElement {
     static observedAttributes = [...CONNECTION_ATTRS, ...FORWARD_ATTRS, 'disabled']
 
     // DOM lifecycle hooks — dispatched to the methods in the sections below.
-    connectedCallback()    { this.connect() }
+    connectedCallback()    { this.connect()    }
     disconnectedCallback() { this.disconnect() }
     attributeChangedCallback(name, oldValue, newValue) {
         if (!this.isConnected || oldValue === newValue) return
