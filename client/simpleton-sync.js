@@ -101,10 +101,9 @@ function simpleton_client(url, {
     var client_version = []          // sorted version strings
     var client_state = ""            // text as of client_version
     var char_counter = -1            // char-delta for version IDs
-    var outstanding_changes = 0      // PUTs sent, not yet ACKed
-    var max_outstanding_changes = 10 // throttle limit
-    var throttled = false
-    var throttled_updates = []
+    var dirty = false                // true when local edits exist but haven't been sent
+    var is_online = false
+    var outstanding_puts = 0
 
     // extend the headers with merge-type and peer
     headers = {
@@ -122,20 +121,21 @@ function simpleton_client(url, {
         on_update: async update => {
             // ── Parent check ────────────────────────────────────────
             // Core simpleton invariant: only accept updates whose
-            // parents form a continuous chain. We compare against the
-            // last queued update's version (if throttled) or
-            // client_version. When throttled, matching updates are
-            // queued but not applied — they'll be applied later when
-            // the throttle clears (see changed()).
+            // parents match our current version. If we're dirty
+            // (have unsent local edits), skip — we'll reconnect
+            // once the edits are flushed.
             update.parents.sort()
-            var last_queued = throttled_updates.length
-                ? throttled_updates[throttled_updates.length - 1].version
-                : client_version
-            if (versions_eq(last_queued, update.parents))
-                if (throttled) throttled_updates.push(update)
-                else await apply_update(update)
+            if (!dirty && versions_eq(client_version, update.parents))
+                await apply_update(update)
         },
-        on_status: status => on_online && on_online(status.online),
+        on_status: status => {
+            is_online = status.online
+            outstanding_puts = status.outstanding_puts
+            if (on_online) on_online(status.online)
+            if (on_ack && outstanding_puts === 0) on_ack()
+            if (dirty && is_online && outstanding_puts < 10)
+                try_send()
+        },
         on_error: err => on_error && on_error(err),
 
         // this api is preliminary and undocumented;
@@ -206,102 +206,78 @@ function simpleton_client(url, {
         await check_digest(update, client_state)
     }
 
+    // ── try_send — attempt to flush local edits ───────────────────────
+    // Called from changed() and on_status. Diffs client_state vs current
+    // state and sends a PUT if there's a change. If dirty but no diff,
+    // we may have missed updates while dirty, so reconnect to re-sync.
+    function try_send() {
+        var new_state = get_state()
+        if (new_state === client_state) {
+            // No local diff — but we were dirty, meaning we may have
+            // skipped incoming updates. Reconnect to catch up.
+            dirty = false
+            channel.reconnect()
+            return
+        }
+
+        var patches = get_patches ? get_patches(client_state) :
+            [simple_diff(client_state, new_state)]
+
+        // Save JS-index patches before code-point conversion mutates them
+        var js_patches = patches.map(p => ({range: [...p.range], content: p.content}))
+
+        // ── JS-SPECIFIC: Convert JS UTF-16 ranges to code-points ────
+        // The wire protocol uses code-point offsets. See the
+        // inverse conversion in the receive path above.
+        //
+        // OTHER LANGUAGES: Skip this if your strings are
+        // natively code-point indexed.
+        convert_ranges_utf16_to_codepoints(patches, client_state)
+
+        for (let patch of patches) {
+            // ── Update char_counter ─────────────────────────────────
+            // Increment by deleted chars + inserted chars
+            char_counter += patch.range[1] - patch.range[0]
+            char_counter += count_code_points(patch.content)
+
+            patch.unit = "text"
+            patch.range = `[${patch.range[0]}:${patch.range[1]}]`
+        }
+
+        // ── Compute version and advance optimistically ──────────────
+        var version = [peer + "-" + char_counter]
+
+        var parents = client_version
+        client_version = version   // optimistic advance
+        client_state = new_state   // update client_state
+        dirty = false
+
+        // Send Update — when the PUT completes, on_status fires
+        // with updated outstanding_puts, which will call try_send
+        // again if dirty.
+        if (send_digests)
+            get_digest(client_state).then(digest =>
+                channel.put({ version, parents, patches,
+                    headers: { "Repr-Digest": digest } }))
+        else
+            channel.put({ version, parents, patches })
+
+        return js_patches
+    }
+
     // ── Public interface ────────────────────────────────────────────────
     return {
       // ── abort() — cancel the subscription ─────────────────────────
       abort: () => channel.close(),
 
       // ── changed() — call when local edits occur ───────────────────
-      // This is the entry point for sending local edits. It:
-      // 1. Diffs client_state vs current state
-      // 2. Checks the throttle (outstanding_changes >= max)
-      // 3. Sends a PUT with the diff
-      // 4. After the PUT completes, loops to check for MORE accumulated
-      //    edits (the async accumulation loop), sending them too.
-      //
-      // The async accumulation loop (while(true) {...}) is equivalent
-      // to a callback-driven flush: after each PUT ACK, re-diff and
-      // send again if changed. This ensures edits that accumulate
-      // during a PUT round-trip are eventually sent.
+      // If online and under the PUT limit, sends immediately.
+      // Otherwise marks dirty — on_status will flush later.
       changed: () => {
-        function get_change() {
-            var new_state = get_state()
-            if (new_state === client_state) return null
-            var patches = get_patches ? get_patches(client_state) :
-                [simple_diff(client_state, new_state)]
-            return {patches, new_state}
-        }
-
-        var change = get_change()
-        if (!change) {
-            if (throttled) {
-                throttled = false
-                for (var update of throttled_updates)
-                    if (versions_eq(client_version, update.parents))
-                        apply_update(update).catch(on_error)
-                throttled_updates = []
-            }
-            return
-        }
-
-        if (outstanding_changes >= max_outstanding_changes) {
-            throttled = true
-            return
-        }
-
-        var {patches, new_state} = change
-
-        // Save JS-index patches before code-point conversion mutates them
-        var js_patches = patches.map(p => ({range: [...p.range], content: p.content}))
-
-        ;(async () => {
-            while (true) {
-                // ── JS-SPECIFIC: Convert JS UTF-16 ranges to code-points ──
-                // The wire protocol uses code-point offsets. See the
-                // inverse conversion in the receive path above.
-                //
-                // OTHER LANGUAGES: Skip this if your strings are
-                // natively code-point indexed.
-                convert_ranges_utf16_to_codepoints(patches, client_state)
-
-                for (let patch of patches) {
-                    // ── Update char_counter ─────────────────────────
-                    // Increment by deleted chars + inserted chars
-                    char_counter += patch.range[1] - patch.range[0]
-                    char_counter += count_code_points(patch.content)
-
-                    patch.unit = "text"
-                    patch.range = `[${patch.range[0]}:${patch.range[1]}]`
-                }
-
-                // ── Compute version and advance optimistically ──────
-                var version = [peer + "-" + char_counter]
-
-                var parents = client_version
-                client_version = version   // optimistic advance
-                client_state = new_state   // update client_state
-
-                // Send Update
-                outstanding_changes++
-                await channel.put({
-                    version, parents, patches,
-                    headers: send_digests && { "Repr-Digest": await get_digest(client_state) }
-                })
-                
-                throttled = false
-                outstanding_changes--
-                if (on_ack && !outstanding_changes) on_ack()
-
-                // ── Check for accumulated edits ─────────────────────
-                // While the PUT was in flight, more local edits may
-                // have occurred. Diff again and loop if changed.
-                var more = get_change()
-                if (!more) return
-                ;({patches, new_state} = more)
-            }
-        })()
-
-        return js_patches
+        if (is_online && outstanding_puts < 10)
+            return try_send()
+        else
+            dirty = true
       }
     }
 

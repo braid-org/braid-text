@@ -99,10 +99,10 @@ function createTestServer(options = {}) {
         // URL: /404-once/<key>
         if (req.url.startsWith('/404-once/')) {
             var key = req.url.slice('/404-once'.length)
-            if (!test_server._404_subs) test_server._404_subs = {}
+            if (!server._404_subs) server._404_subs = {}
             if (req.method === 'GET' && req.headers.subscribe) {
-                if (!test_server._404_subs[key]) {
-                    test_server._404_subs[key] = true
+                if (!server._404_subs[key]) {
+                    server._404_subs[key] = true
                     res.statusCode = 404
                     return res.end('Not Found')
                 }
