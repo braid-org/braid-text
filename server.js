@@ -408,8 +408,8 @@ function create_braid_text() {
                     Version: ascii_ify(unknowns.map(e => JSON.stringify(e)).join(', '))
                 })
 
-            var has_parents = req.parents && req.parents.length > 0
-            var has_version = req.version && req.version.length > 0
+            var has_parents = Array.isArray(req.parents)
+            var has_version = Array.isArray(req.version)
 
             if (req.subscribe && has_version)
                 return my_end(400, 'Version header is not allowed with Subscribe — use Parents instead')
@@ -685,8 +685,8 @@ function create_braid_text() {
         var version = resource.version
         var merge_type = options.range_unit === 'yjs-text' ? 'yjs'
             : (options.merge_type || 'simpleton')
-        var has_parents = options.parents && options.parents.length > 0
-        var has_version = options.version && options.version.length > 0
+        var has_parents = Array.isArray(options.parents)
+        var has_version = Array.isArray(options.version)
 
         if (options.subscribe && has_version)
             throw new Error('version is not allowed with subscribe — use parents instead')
@@ -704,21 +704,9 @@ function create_braid_text() {
         }
         getting.single_snapshot = !getting.subscribe && !getting.history
 
-        // Single snapshot: return the text (optionally at a specific version)
-        if (getting.single_snapshot) {
-            if (has_version) {
-                await ensure_dt_exists(resource)
-                return options.full_response
-                    ? { version: options.version, body: dt_get_string(resource.dt.doc, options.version) }
-                    : dt_get_string(resource.dt.doc, options.version)
-            }
-            return options.full_response ? { version, body: resource.val } : resource.val
-        }
-
         // DT binary encoding: a transport optimization usable by any merge type.
         // Returns raw DT bytes instead of text.
-        if (getting.history && !getting.subscribe && getting.transfer_encoding === 'dt') {
-            // TODO: move this into the dt/simpleton merge_type cases below
+        if (!getting.subscribe && getting.transfer_encoding === 'dt') {
             await ensure_dt_exists(resource)
             // If requesting the current version, skip the version lookup
             // (faster than asking DT about a version we already have)
@@ -740,6 +728,17 @@ function create_braid_text() {
                 doc.free()
             } else bytes = resource.dt.doc.toBytes()
             return { body: bytes }
+        }
+
+        // Single snapshot: return the text (optionally at a specific version)
+        if (getting.single_snapshot) {
+            if (has_version) {
+                await ensure_dt_exists(resource)
+                return options.full_response
+                    ? { version: options.version, body: dt_get_string(resource.dt.doc, options.version) }
+                    : dt_get_string(resource.dt.doc, options.version)
+            }
+            return options.full_response ? { version, body: resource.val } : resource.val
         }
 
         // Each merge-type has a different way of getting history

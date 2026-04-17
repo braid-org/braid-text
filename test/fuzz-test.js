@@ -230,8 +230,8 @@ async function main() {
             let doc_v = doc.getRemoteVersion().map(x => x.join('-')).sort()
             console.log(`doc_v = `, doc_v)
 
-            console.log(`doc = `, await braid_text.get('doc', {version: middle_v}))
-            if (await braid_text.get('middle_doc') != (await braid_text.get('doc', {version: middle_v})).body) throw new Error('bad')
+            console.log(`doc = `, await braid_text.get('doc', {version: middle_v, full_response: true}))
+            if (await braid_text.get('middle_doc') != (await braid_text.get('doc', {version: middle_v, full_response: true})).body) throw new Error('bad')
 
             // test simplton
             var first_time = true
@@ -252,7 +252,8 @@ async function main() {
             var transfer_doc = new Doc()
 
             var r = await braid_text.get('middle_doc', {
-                transfer_encoding: 'dt'
+                transfer_encoding: 'dt',
+                full_response: true
             })
 
             transfer_doc.mergeBytes(r.body)
@@ -261,7 +262,8 @@ async function main() {
 
             var r = await braid_text.get('doc', {
                 transfer_encoding: 'dt',
-                parents: middle_v
+                parents: middle_v,
+                full_response: true
             })
 
             transfer_doc.mergeBytes(r.body)
