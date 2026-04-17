@@ -1,7 +1,7 @@
 // Simpleton Javascript Client
 //
 //     requires braid-http@~1.3/braid-http-client.js
-//     and      text-clients.js
+//     and      text-client.js
 
 // --- API ---
 //

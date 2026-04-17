@@ -6,7 +6,7 @@
 // braid-http resource.
 //
 // Depends on braid-http-client.js, simpleton.js, cursor-sync.js,
-// textarea-highlights.js, and text-clients.js.
+// textarea-highlights.js, and text-client.js.
 //
 // Attributes:
 //   src     — the URL to sync to

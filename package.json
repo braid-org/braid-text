@@ -17,7 +17,7 @@
     "client/simpleton.js",
     "client/cursor-sync.js",
     "client/textarea-highlights.js",
-    "client/text-clients.js",
+    "client/text-client.js",
     "client/syncarea.js",
     "client/myers-diff.js",
     "README.md",
