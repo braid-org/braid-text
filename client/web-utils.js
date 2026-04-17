@@ -65,9 +65,13 @@ function apply_patches_and_update_selection(textarea, patches) {
                 if (sel[i] > range[1]) sel[i] -= range[1] - range[0]
                 else sel[i] = range[0]
 
-        for (let i = 0; i < sel.length; i++) if (sel[i] > range[0]) sel[i] += p.content.length
+        for (let i = 0; i < sel.length; i++)
+            if (sel[i] > range[0])
+                sel[i] += p.content.length
 
-        original = original.substring(0, range[0]) + p.content + original.substring(range[1])
+        original = original.substring(0, range[0])
+            + p.content
+            + original.substring(range[1])
     }
 
     textarea.value = original
