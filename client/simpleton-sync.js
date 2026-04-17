@@ -106,11 +106,7 @@ function simpleton_client(url, {
     var outstanding_puts = 0
 
     // extend the headers with merge-type and peer
-    headers = {
-        ...headers,
-        "Merge-Type": "simpleton",
-        Peer: peer,
-    }
+    headers = { ...headers, "Merge-Type": "simpleton", Peer: peer }
 
     // Manages both the GET subscription and PUT requests through a single
     // channel with automatic reconnection and PUT queuing.
