@@ -21,8 +21,8 @@ var server = require("http").createServer(async (req, res) => {
     }
 
     var libs = new Set([
-        'simpleton-sync.js',
-        'web-utils.js',
+        'simpleton.js',
+        'text-clients.js',
         'yjs-sync.js',
         'cursor-sync.js',
         'textarea-highlights.js',

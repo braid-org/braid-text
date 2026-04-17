@@ -5,8 +5,8 @@
 // A drop-in replacement for <textarea> that stays in sync with a
 // braid-http resource.
 //
-// Depends on braid-http-client.js, simpleton-sync.js, cursor-sync.js,
-// textarea-highlights.js, and web-utils.js.
+// Depends on braid-http-client.js, simpleton.js, cursor-sync.js,
+// textarea-highlights.js, and text-clients.js.
 //
 // Attributes:
 //   src     — the URL to sync to
@@ -110,16 +110,16 @@ class SyncedTextarea extends HTMLElement {
         this.client = simpleton_client(url, {
             headers,
             on_online: (online) => { online ? cursors?.online() : cursors?.offline() },
-            on_patches: (patches) => {
+            on_update: (update) => {
                 this.waiting_for_first_update = false
                 this.update_disabled()
-                apply_patches_and_update_selection(textarea, patches)
-                cursors?.on_patches(patches)
-                this.dispatchEvent(new CustomEvent('remoteupdate', { detail: { patches } }))
-                this.dispatchEvent(new CustomEvent('update',       { detail: { patches } }))
+                apply_patches_and_update_selection(textarea, update.patches)
+                cursors?.on_patches(update.patches)
+                this.dispatchEvent(new CustomEvent('remoteupdate', { detail: { patches: update.patches } }))
+                this.dispatchEvent(new CustomEvent('update',       { detail: { patches: update.patches } }))
+                return textarea.value
             },
             get_patches: (prev) => diff(prev, textarea.value),
-            get_state:   () => textarea.value,
             on_error:    () => {
                 this.has_error = true
                 this.update_disabled()
@@ -131,9 +131,9 @@ class SyncedTextarea extends HTMLElement {
         // Local edits get relayed to the client and cursors.
         this.oninput_handler = () => {
             set_acked_state(textarea, false)
-            var patches = this.client.changed()
-            cursors?.on_edit(patches)
-            this.dispatchEvent(new CustomEvent('update', { detail: { patches } }))
+            this.client.changed(textarea.value)
+            cursors?.on_edit()
+            this.dispatchEvent(new CustomEvent('update'))
         }
         textarea.addEventListener('input', this.oninput_handler)
     }

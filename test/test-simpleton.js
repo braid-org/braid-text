@@ -8,10 +8,12 @@ const path = require('path')
 const {fetch: braid_fetch, reliable_update_channel} = require('braid-http')
 
 // Load simpleton_client by evaluating the source (it has no module.exports)
+const text_clients_src = fs.readFileSync(
+    path.join(__dirname, '..', 'client', 'text-clients.js'), 'utf8')
 const simpleton_src = fs.readFileSync(
-    path.join(__dirname, '..', 'client', 'simpleton-sync.js'), 'utf8')
-const simpleton_client = new Function('braid_fetch', 'reliable_update_channel', 'crypto',
-    simpleton_src + '\nreturn simpleton_client;')(braid_fetch, reliable_update_channel, require('crypto').webcrypto)
+    path.join(__dirname, '..', 'client', 'simpleton.js'), 'utf8')
+const { simpleton_client, text_apply_patches } = new Function('braid_fetch', 'reliable_update_channel', 'crypto',
+    text_clients_src + '\n' + simpleton_src + '\nreturn { simpleton_client, text_apply_patches };')(braid_fetch, reliable_update_channel, require('crypto').webcrypto)
 
 const PORT = 9877
 
@@ -79,8 +81,7 @@ function make_client(url, label) {
 
     function start() {
         sc = simpleton_client(url, {
-            get_state: () => doc,
-            on_state: (state) => { doc = state },
+            on_update: (update) => doc = update.state,
             on_error: (e) => {
                 if (e?.name === 'AbortError' || e?.message?.includes('abort')) return
             },
@@ -100,7 +101,7 @@ function make_client(url, label) {
         get state() { return doc },
         set state(v) { doc = v },
         get online() { return online },
-        changed() { sc.changed() },
+        changed() { sc.changed(doc) },
     }
 }
 
@@ -209,12 +210,19 @@ async function test_emoji_surrogate_pairs() {
 // Fuzz Session
 // ========================================================================
 
+// Command-line options: --fuzz-duration=N (seconds), --settle=N (seconds)
+const args = process.argv.slice(2)
+function arg(name, fallback) {
+    const m = args.find(a => a.startsWith('--' + name + '='))
+    return m ? Number(m.split('=')[1]) : fallback
+}
+
 const FUZZ_CLIENTS = 5
-const FUZZ_DURATION_MS = 10000
+const FUZZ_DURATION_MS = arg('fuzz-duration', 10) * 1000
 const FUZZ_EDIT_INTERVAL = [5, 50]
 const FUZZ_OFFLINE_CHANCE = 0.06
 const FUZZ_OFFLINE_DURATION = [100, 500]
-const FUZZ_SETTLE_MS = 6000
+const FUZZ_SETTLE_MS = arg('settle', 6) * 1000
 const CHARS = 'abcdefghij'
 
 async function run_fuzz() {
