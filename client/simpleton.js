@@ -63,8 +63,8 @@ function simpleton_client(url, {
     get_patches,
 
     on_update,
-    on_error,
-    on_online,
+    on_error,                 // (error) => 
+    on_online,                // (is_online) => 
     on_ack,
 
     headers,                  // The user can pass in custom headers
