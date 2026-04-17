@@ -20,9 +20,17 @@ var server = require("http").createServer(async (req, res) => {
         return
     }
 
-    if (req.url === '/simpleton-sync.js' || req.url === '/web-utils.js'
-        || req.url === '/textarea-highlights.js' || req.url === '/cursor-sync.js'
-        || req.url === '/yjs-sync.js') {
+    var libs = new Set([
+        'simpleton-sync.js',
+        'web-utils.js',
+        'yjs-sync.js',
+        'cursor-sync.js',
+        'textarea-highlights.js',
+        'myers-diff.js',
+        'syncarea.js'
+    ])
+
+    if (libs.has(req.url.substr(1))) {
         res.writeHead(200, { "Content-Type": "text/javascript", "Cache-Control": "no-cache" })
         require("fs").createReadStream("./client" + req.url).pipe(res)
         return

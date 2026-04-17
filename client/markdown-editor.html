@@ -1,43 +1,30 @@
 <meta name="viewport" content="width=device-width,initial-scale=.62"/>
 <script src="https://invisible.college/js/marked.min.js"></script>
-<script src="https://braid.org/code/myers-diff1.js"></script>
 <script src="https://unpkg.com/braid-http@~1.3/braid-http-client.js"></script>
+<script src="/myers-diff.js"></script>
 <script src="/web-utils.js"></script>
 <script src="/simpleton-sync.js"></script>
 <script src="/textarea-highlights.js"></script>
 <script src="/cursor-sync.js"></script>
+<script src="/syncarea.js"></script>
 <body>
   <div id="markdown_container" style="max-width: 750px; padding: 10px 60px"></div>
   <div id="bottom_spacer" style="height: 50vh; display: none;"></div>
-  <div id="editor_wrap" style="
-      position: fixed;
-      bottom: 0;
-      right: 0;
-      width: 45vw;
-      height: 100%;
-    ">
-    <textarea
+  <div id="editor_wrap" style="position: fixed; bottom: 0; right: 0; width: 45vw; height: 100%;">
+    <synced-textarea
       id="the_editor"
-      disabled
       style="
-        width: 100%;
-        height: 100%;
-        font-size: 15px;
+        width: 100%; height: 100%; font-size: 15px;
         font-family: helvetica, arial, avenir, lucida grande;
         hyphens: none;
-      "></textarea>
+      "></synced-textarea>
   </div>
-  <div 
+  <div
     id="edit-button"
     style="
-      position: fixed;
-      bottom: 0;
-      right: 0;
-      padding: 30px;
-      cursor: pointer;
-      text-decoration: none;
-      background-color: rgba(250, 250, 250, .5);
-    " onclick="toggle_editor()">edit</div>
+      position: fixed; bottom: 0; right: 0; padding: 30px; cursor: pointer;
+      text-decoration: none; background-color: rgba(250, 250, 250, .5); "
+    onclick="toggle_editor()">edit</div>
 </body>
 <script>
 
@@ -46,27 +33,8 @@ var first_time = true
 var render_timer = null
 var render_delay = 100
 
-var cursors = cursor_highlights(the_editor, location.pathname)
-
-var simpleton = simpleton_client(location.pathname, {
-  on_online: (online) => { online ? cursors.online() : cursors.offline() },
-  on_patches: (patches) => {
-    the_editor.disabled = false
-    apply_patches_and_update_selection(the_editor, patches)
-    cursors.on_patches(patches)
-    update_markdown_later()
-  },
-  get_patches: (prev_state) => diff(prev_state, the_editor.value),
-  get_state: () => the_editor.value,
-  on_error: (e) => set_error_state(the_editor),
-  on_ack: () => set_acked_state(the_editor)
-})
-
-the_editor.oninput = (e) => {
-  set_acked_state(the_editor, false)
-  cursors.on_edit(simpleton.changed())
-  update_markdown_later()
-}
+the_editor.setAttribute('src', location.pathname)
+the_editor.addEventListener('update', update_markdown_later)
 
 document.body.onkeydown = (e) => {
   if (e.keyCode === 27) { // Escape key
