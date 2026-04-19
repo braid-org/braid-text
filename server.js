@@ -329,9 +329,15 @@ function create_braid_text() {
     braid_text.serve = async (req, res, options = {}) => {
         options = {
             key: req.url.split('?')[0],
+            content_type: 'text/plain',
             put_cb: (key, val, params) => { },
             ...options
         }
+
+        // Ensure charset=utf-8 on the content type
+        var content_type = options.content_type
+        if (!content_type.includes('charset='))
+            content_type += '; charset=utf-8'
 
         // ── Setup: prepare the response and load the resource ──
 
@@ -369,19 +375,6 @@ function create_braid_text() {
         var is_read  = req.method === 'GET' || req.method === 'HEAD',
             is_write = req.method === 'PUT' || req.method === 'POST' || req.method === 'PATCH',
             is_head  = req.method === 'HEAD'
-
-        // ── Ensure the response is labeled as utf-8 text ──
-
-        if (!res.getHeader('content-type')) res.setHeader('Content-Type', 'text/plain')
-        var ct = res.getHeader('Content-Type'),
-            ct_parts = ct.split(';').map(p => p.trim())
-        var charset = ct_parts.find(p => p.toLowerCase().startsWith('charset='))
-        if (!charset)
-            res.setHeader('Content-Type', `${ct}; charset=utf-8`)
-        else if (charset.toLowerCase() !== 'charset=utf-8')
-            res.setHeader('Content-Type', ct_parts
-                          .map(p => p.toLowerCase().startsWith('charset=') ? 'charset=utf-8' : p)
-                          .join('; '))
 
         // ── Handle simple methods that don't need further processing ──
 
@@ -442,7 +435,7 @@ function create_braid_text() {
 
             // HEAD: headers only, no body needed
             if (is_head) {
-                // Always include the version of what would be returned
+                res.setHeader('Content-Type', content_type)
                 if (!getting.history)
                     res.setHeader('Version', current_version())
                 return my_end(200)
@@ -469,13 +462,25 @@ function create_braid_text() {
                     // Range of history: send as 209 Multiresponse
                     res.startSubscription()
                     for (var u of result)
-                        res.sendVersion({
+                        res.sendUpdate({
                             version: [u.version],
                             parents: u.parents,
                             patches: [{ unit: u.unit, range: u.range, content: u.content }],
+                            content_type,
                         })
                     return res.end()
+                } else if (false) {
+                    // New path: use sendUpdate (currently broken, investigating)
+                    res.sendUpdate({
+                        version: result.version,
+                        'Repr-Digest': get_digest(result.body),
+                        content_type,
+                        body: result.body,
+                    })
+                    return res.end()
                 } else {
+                    // Old path: explicit headers
+                    res.setHeader('Content-Type', content_type)
                     res.setHeader('Version', ascii_ify(result.version
                                                        .map(v => JSON.stringify(v))
                                                        .join(', ')))
@@ -514,7 +519,9 @@ function create_braid_text() {
                                 update.patch = update.patches[0]
                                 delete update.patches
                             }
-                            res.sendVersion(update)
+                            if (!update.encoding)
+                                update.content_type = content_type
+                            res.sendUpdate(update)
                         },
                     })
                     // Ensure headers are sent even if .get() didn't send

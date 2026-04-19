@@ -248,7 +248,7 @@ async function runConsoleTests() {
     defineCursorTests(runTest, testBraidFetch)
 
     // Run tests sequentially (not in parallel) to avoid conflicts
-    var test_timeout_ms = 15000
+    var test_timeout_ms = 5000
     for (const { testName, testFunction, expectedResult } of testsToRun) {
         try {
             const result = await Promise.race([
