@@ -59,7 +59,6 @@ class SyncArea extends HTMLElement {
     // Builds the inner textarea, wires up events, starts simpleton_client
     // and cursor_highlights if enabled.
     connect() {
-        console.log('DBG sync-area: connect', {src: this.getAttribute('src'), accept: this.getAttribute('accept')})
         if (this.firstChild)
             console.warn('<sync-area> ignoring existing child content')
         while (this.firstChild) this.removeChild(this.firstChild)
