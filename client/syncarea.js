@@ -1,5 +1,5 @@
 // ============================================================
-// <synced-textarea> — a textarea wired to a braid-http resource
+// <sync-area> — a textarea wired to a braid-http resource
 // ============================================================
 //
 // A drop-in replacement for <textarea> that stays in sync with a
@@ -12,19 +12,20 @@
 //   src     — the URL to sync to
 //   cursors — sync cursors too (default: true; set cursors="false" to disable)
 //   bearer  — Bearer token for servers using "Authorization: Bearer X" headers
+//   accept  — Accept (and Content-Type) for the resource (e.g. "text/markdown")
 //
 // The following attributes are relayed to the inner textarea:
 //   placeholder, readonly, rows, cols, wrap, spellcheck, autofocus,
 //   disabled, aria-label, aria-labelledby, aria-describedby
 //
-// Changes to src, cursors, or bearer restart the sync.
+// Changes to src, cursors, bearer, or accept restart the sync.
 // Changes to any other attribute are just forwarded to the inner textarea.
 //
 // You can always manipulate the inner textarea directly via the .textarea property.
 
 
 // Attributes in this list restart the sync when they change.
-const CONNECTION_ATTRS = ['src', 'bearer', 'cursors']
+const CONNECTION_ATTRS = ['src', 'bearer', 'cursors', 'accept']
 
 // Attributes in this list are relayed straight to the inner textarea.
 const FORWARD_ATTRS = ['placeholder', 'readonly', 'rows', 'cols',
@@ -32,7 +33,7 @@ const FORWARD_ATTRS = ['placeholder', 'readonly', 'rows', 'cols',
                        'aria-label', 'aria-labelledby', 'aria-describedby']
 
 
-class SyncedTextarea extends HTMLElement {
+class SyncArea extends HTMLElement {
 
     static observedAttributes = [...CONNECTION_ATTRS, ...FORWARD_ATTRS, 'disabled']
 
@@ -58,8 +59,9 @@ class SyncedTextarea extends HTMLElement {
     // Builds the inner textarea, wires up events, starts simpleton_client
     // and cursor_highlights if enabled.
     connect() {
+        console.log('DBG sync-area: connect', {src: this.getAttribute('src'), accept: this.getAttribute('accept')})
         if (this.firstChild)
-            console.warn('<synced-textarea> ignoring existing child content')
+            console.warn('<sync-area> ignoring existing child content')
         while (this.firstChild) this.removeChild(this.firstChild)
 
         // Create the inner textarea, and fill the outer element with it.
@@ -80,7 +82,7 @@ class SyncedTextarea extends HTMLElement {
         this.update_disabled()
 
         // Re-dispatch the inner textarea's focus/blur events on the outer,
-        // so listeners on <synced-textarea> see them.
+        // so listeners on <sync-area> see them.
         textarea.addEventListener('focus', () =>
             this.dispatchEvent(new FocusEvent('focus')))
         textarea.addEventListener('blur', () =>
@@ -109,6 +111,7 @@ class SyncedTextarea extends HTMLElement {
         // The main sync client.
         this.client = simpleton_client(url, {
             headers,
+            content_type: this.getAttribute('accept') || undefined,
             on_online: (online) => { online ? cursors?.online() : cursors?.offline() },
             on_update: (update) => {
                 this.waiting_for_first_update = false
@@ -218,4 +221,4 @@ class SyncedTextarea extends HTMLElement {
 }
 
 
-customElements.define('synced-textarea', SyncedTextarea)
+customElements.define('sync-area', SyncArea)
