@@ -148,12 +148,11 @@ function text_prepare_put(patches, client_state) {
 // ── UI helpers ─────────────────────────────────────────────────────────
 
 function set_acked_state(textarea, on = true) {
-    if (on)
-        textarea.style.caretColor = textarea.old_caretColor
-    else {
-        textarea.old_caretColor = textarea.style.caretColor
-        textarea.style.caretColor = 'red'
-    }
+    // Save the normal caret color, if we haven't already
+    textarea.saved_caret_color ??= textarea.style.caretColor || ''
+
+    // Now update it
+    textarea.style.caretColor = on ? textarea.saved_caret_color : 'red'
 }
 
 function set_error_state(textarea, on = true) {
