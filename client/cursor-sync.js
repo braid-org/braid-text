@@ -126,6 +126,7 @@ async function cursor_client(url, { peer, get_text, on_change, headers: custom_h
             headers: {
                 ...custom_headers,
                 'Content-Type': 'application/text-cursors+json',
+                'Repr-Type': 'application/text-cursors+json',
                 Peer: peer,
                 'Content-Range': 'json [' + JSON.stringify(peer) + ']',
             },

@@ -86,7 +86,7 @@ function simpleton_client(url, {
     var channel = reliable_update_channel(url, {
         reconnect_from_parents: () => client_version.length ? client_version : null,
         get_headers: { ...headers, ...content_type && {Accept: content_type} },
-        put_headers: { ...headers, ...content_type && {"Content-Type": content_type} },
+        put_headers: { ...headers, ...content_type && {"Content-Type": content_type, "Repr-Type": content_type} },
         on_update: async update => {
             update.parents.sort()
             if (pending_state === null && versions_eq(client_version, update.parents))
