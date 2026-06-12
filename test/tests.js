@@ -3706,6 +3706,118 @@ runTest(
     'true,false'
 )
 
+// head: true subscription tests (header-only updates)
+runTest(
+    "head subscription: initial frontier + header-only live updates",
+    async () => {
+        var key = 'head-sub-' + Math.random().toString(36).slice(2)
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                await braid_text.put('${key}', { body: 'hello' })
+                var updates = []
+                await braid_text.get('${key}', { head: true, subscribe: u => updates.push(u) })
+                await new Promise(done => setTimeout(done))
+                if (updates.length !== 1) return res.end('expected 1 initial update, got ' + updates.length)
+                if (!updates[0].version?.length || updates[0].body != null || updates[0].patches)
+                    return res.end('initial update should be header-only: ' + JSON.stringify(updates[0]))
+                await braid_text.put('${key}', { body: 'hello world' })
+                await new Promise(done => setTimeout(done))
+                if (updates.length !== 2) return res.end('expected 2 updates, got ' + updates.length)
+                var u = updates[1]
+                if (u.body != null || u.patches) return res.end('live update should be header-only: ' + JSON.stringify(u))
+                if (!u.version?.length || !u.parents) return res.end('live update missing version/parents')
+                await (await braid_text.get_resource('${key}')).delete()
+                res.end('ok')
+            })()`
+        })
+        return await r.text()
+    },
+    'ok'
+)
+
+runTest(
+    "head subscription: current parents → no initial update",
+    async () => {
+        var key = 'head-sub-' + Math.random().toString(36).slice(2)
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                await braid_text.put('${key}', { body: 'hi' })
+                var resource = await braid_text.get_resource('${key}')
+                var updates = []
+                await braid_text.get('${key}', { head: true, parents: resource.version, subscribe: u => updates.push(u) })
+                await new Promise(done => setTimeout(done))
+                var n = updates.length
+                await resource.delete()
+                res.end(n === 0 ? 'ok' : 'expected 0 updates, got ' + n)
+            })()`
+        })
+        return await r.text()
+    },
+    'ok'
+)
+
+runTest(
+    "head subscription: own-peer edits are filtered",
+    async () => {
+        var key = 'head-sub-' + Math.random().toString(36).slice(2)
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                await braid_text.put('${key}', { body: 'yo' })
+                var updates = []
+                await braid_text.get('${key}', { head: true, peer: 'me', subscribe: u => updates.push(u) })
+                await new Promise(done => setTimeout(done))
+                var n = updates.length
+                await braid_text.put('${key}', { body: 'yo!', peer: 'me' })
+                await new Promise(done => setTimeout(done))
+                if (updates.length !== n) return res.end('own edit should not notify')
+                await braid_text.put('${key}', { body: 'yo!!', peer: 'other' })
+                await new Promise(done => setTimeout(done))
+                var ok = updates.length === n + 1
+                await (await braid_text.get_resource('${key}')).delete()
+                res.end(ok ? 'ok' : 'other-peer edit should notify')
+            })()`
+        })
+        return await r.text()
+    },
+    'ok'
+)
+
+runTest(
+    "head subscription over HTTP: GET + Subscribe + Method-Override: HEAD",
+    async () => {
+        var key = 'head-http-' + Math.random().toString(36).slice(2)
+        var r = await braid_fetch(`/${key}`, { method: 'PUT', body: 'hello' })
+        if (!r.ok) return 'put got: ' + r.status
+
+        var a = new AbortController()
+        var r2 = await braid_fetch(`/${key}`, {
+            signal: a.signal,
+            subscribe: true,
+            headers: { 'Method-Override': 'HEAD' },
+        })
+        var updates = []
+        r2.subscribe(u => updates.push(u), () => {})
+        await new Promise(done => setTimeout(done, 300))
+        if (updates.length !== 1) { a.abort(); return 'expected 1 initial update, got ' + updates.length }
+
+        var r3 = await braid_fetch(`/${key}`, { method: 'PUT', body: 'hello world' })
+        if (!r3.ok) { a.abort(); return 'put 2 got: ' + r3.status }
+        await new Promise(done => setTimeout(done, 300))
+        a.abort()
+        if (updates.length !== 2) return 'expected 2 updates, got ' + updates.length
+        for (var u of updates)
+            if (u.body_text?.length || u.patches?.length)
+                return 'update should be header-only, got body=' + JSON.stringify(u.body_text) + ' patches=' + JSON.stringify(u.patches)
+        if (!updates[1].version?.length || !updates[1].parents?.length)
+            return 'live update missing version/parents'
+        return 'ok'
+    },
+    'ok'
+)
+
 }
 
 // Export for both Node.js and browser environments

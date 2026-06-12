@@ -77,6 +77,7 @@ http_server.on("request", (req, res) => {
       - `version` - The version after the PUT
       - `parents` - The version prior to the PUT
   - This is the main method of this library, and does all the work to handle Braid-HTTP `GET` and `PUT` requests concerned with a specific text resource.
+  - A `GET` with `Subscribe: true` and `Method-Override: HEAD` headers subscribes to header-only updates: each update carries just `Version` and `Parents` headers, with no body or patches — useful for cheaply knowing *that* something changed. (A `Method-Override: HEAD` on a `GET` without `Subscribe` acts like a normal `HEAD` request.)
 
 `await braid_text.get(key)`
   - `key`: ID of text resource.
@@ -86,10 +87,11 @@ http_server.on("request", (req, res) => {
   - `key`: ID of text resource.
   - `options`: An object containing additional options, like http headers:
     - `version`:  <small style="color:lightgrey">[optional]</small> The [version](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-2) to get, as an array of strings.  (The array is typically length 1.)
-    - `parents`:  <small style="color:lightgrey">[optional]</small> The version to start the subscription at, as an array of strings.
+    - `parents`:  <small style="color:lightgrey">[optional]</small> The version to start the subscription at, as an array of strings. If this is already the current version, no initial update is sent.
     - `subscribe: cb`:  <small style="color:lightgrey">[optional]</small> Instead of returning the state; [subscribes](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-4) to the state, and calls `cb` with the initial state and each update. The function `cb` will be called with a Braid [update](https://datatracker.ietf.org/doc/html/draft-toomim-httpbis-braid-http#section-3) of the form `cb({version, parents, body, patches})`.
     - `merge_type`: <small style="color:lightgrey">[optional]</small> The CRDT/OT [merge-type](https://raw.githubusercontent.com/braid-org/braid-spec/master/draft-toomim-httpbis-merge-types-00.txt) algorithm to emulate.  Currently supports `"simpleton"` (default) and `"dt"`.
     - `peer`: <small style="color:lightgrey">[optional]</small> Unique string ID that identifies the peer making the subscription. Mutations will not be echoed back to the same peer that `PUT`s them, for any `PUT` setting the same `peer` header.
+    - `head`: <small style="color:lightgrey">[optional]</small> If true, the subscription receives header-only updates of the form `{version, parents}` — no `body` or `patches`. Useful for cheaply knowing *that* something changed, without the cost of materializing history or patch content. On subscribe, `cb` is called once with the current version (or not at all, if `parents` is already current — as with any subscription); after that, once per update. Only meaningful with `subscribe`.
   - If NOT subscribing, returns `{version: <current_version>, body: <current-text>}`. If subscribing, returns nothing.
 
 `await braid_text.put(key, options)`

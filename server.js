@@ -372,9 +372,15 @@ function create_braid_text() {
         if (merge_type !== 'simpleton' && merge_type !== 'dt' && merge_type !== 'yjs')
             return my_end(400, `Unknown merge type: ${merge_type}`)
 
+        // Method-Override: HEAD makes a GET act like a HEAD request.
+        // Combined with Subscribe, it subscribes to header-only updates
+        // (Version/Parents, no body or patches) — which a real HEAD request
+        // can't do, since HEAD responses can't stream a body.
+        var head_override = /^head$/i.test(req.headers['method-override'] ?? '')
+
         var is_read  = req.method === 'GET' || req.method === 'HEAD',
             is_write = req.method === 'PUT' || req.method === 'POST' || req.method === 'PATCH',
-            is_head  = req.method === 'HEAD'
+            is_head  = req.method === 'HEAD' || (head_override && !req.subscribe)
 
         // ── Handle simple methods that don't need further processing ──
 
@@ -506,12 +512,16 @@ function create_braid_text() {
                         version: req.version,
                         parents: req.parents,
                         merge_type,
+                        head: head_override,
                         signal: aborter.signal,
                         accept_encoding:
                             req.headers['x-accept-encoding'] ?? req.headers['accept-encoding'],
                         subscribe: update => {
                             // Add digest for integrity checking on the client
-                            if (update.version && v_eq(update.version, resource.version))
+                            // (skipped for header-only updates, which carry
+                            // no content to check)
+                            if (!head_override
+                                && update.version && v_eq(update.version, resource.version))
                                 update['Repr-Digest'] = get_digest(resource.val)
 
                             // Collapse single-element patches array for HTTP
@@ -519,7 +529,7 @@ function create_braid_text() {
                                 update.patch = update.patches[0]
                                 delete update.patches
                             }
-                            if (!update.encoding)
+                            if (!update.encoding && !head_override)
                                 update.content_type = content_type
                             res.sendUpdate(update)
                         },
@@ -690,7 +700,11 @@ function create_braid_text() {
 
         var resource = (typeof key == 'string') ? await get_resource(key) : key
         var version = resource.version
-        var merge_type = options.range_unit === 'yjs-text' ? 'yjs'
+        // head: true = subscribe to header-only updates (version/parents,
+        // no body or patches). Cheap: never materializes history or patch
+        // content. Head clients live in the dt client list.
+        var merge_type = options.head ? 'dt'
+            : options.range_unit === 'yjs-text' ? 'yjs'
             : (options.merge_type || 'simpleton')
         var has_parents = Array.isArray(options.parents)
         var has_version = Array.isArray(options.version)
@@ -829,12 +843,20 @@ function create_braid_text() {
                 var client = {
                     merge_type: 'dt',
                     peer: options.peer,
+                    head: !!options.head,
                     send_update: one_at_a_time(options.subscribe),
                     accept_encoding_dt: !!options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1]?.split(',').map(x=>x.trim()).includes('dt'),
                 }
 
                 // Send initial history
-                if (client.accept_encoding_dt) {
+                if (client.head) {
+                    // Header-only: announce the current frontier in a single
+                    // update — or send nothing if the subscriber's parents
+                    // are already current (getting.history === false)
+                    if (getting.history)
+                        client.send_update({ version: resource.version,
+                                             parents: options.parents || [] })
+                } else if (client.accept_encoding_dt) {
                     if (!getting.history)
                         client.send_update({ encoding: 'dt', body: new Doc().toBytes() })
                     else {
@@ -993,7 +1015,11 @@ function create_braid_text() {
                         for (let client of resource.dt.clients) {
                             if (!peer || client.peer !== peer)
                                 await client.send_update(
-                                    client.accept_encoding_dt
+                                    client.head
+                                        ? { version: resource.version,
+                                            parents: version_before_yjs_sync
+                                          }
+                                    : client.accept_encoding_dt
                                         ? { version: resource.version,
                                             parents: version_before_yjs_sync,
                                             body: resource.dt.doc.getPatchSince(yjs_v_before),
@@ -1042,6 +1068,7 @@ function create_braid_text() {
 
             if (options.transfer_encoding === 'dt') {
                 await ensure_dt_exists(resource)
+                var version_before_dt_put = resource.version
                 var start_i = 1 + resource.dt.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
 
                 resource.dt.doc.mergeBytes(body)
@@ -1059,9 +1086,10 @@ function create_braid_text() {
 
                 // Notify non-simpleton clients with the dt-encoded update
                 var dt_update = { body, encoding: 'dt' }
+                var head_update = { version: resource.version, parents: version_before_dt_put }
                 for (let client of resource.dt.clients)
                     if (!peer || client.peer !== peer)
-                        await client.send_update(dt_update)
+                        await client.send_update(client.head ? head_update : dt_update)
 
                 return { dt: { change_count: end_i - start_i + 1 } }
             }
@@ -1355,9 +1383,10 @@ function create_braid_text() {
                     content: p.content
                 })),
             }
+            var x_head = { version: x.version, parents: x.parents }
             for (let client of resource.dt.clients) {
                 if (!peer || client.peer !== peer)
-                    post_commit_updates.push([client, x])
+                    post_commit_updates.push([client, client.head ? x_head : x])
             }
 
             await resource.dt.log.save(resource.dt.doc.getPatchSince(v_before))
