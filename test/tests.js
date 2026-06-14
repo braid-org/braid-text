@@ -63,6 +63,29 @@ runTest(
 )
 
 runTest(
+    "test braid_text.sync, on_disconnect receives the error",
+    async () => {
+        var key = 'test' + Math.random().toString(36).slice(2)
+
+        var r = await braid_fetch(`/eval`, {
+            method: 'PUT',
+            body: `void (async () => {
+                var ac = new AbortController()
+                braid_text.sync('/${key}', new URL('http://localhost:8889/drop-sub'), {
+                    signal: ac.signal,
+                    on_disconnect: (e) => {
+                        ac.abort()
+                        res.end(e ? 'got an error' : 'got no error')
+                    }
+                })
+            })()`
+        })
+        return await r.text()
+    },
+    'got an error'
+)
+
+runTest(
     "test braid_text.sync, url to key",
     async () => {
         var key_a = 'test-a-' + Math.random().toString(36).slice(2)

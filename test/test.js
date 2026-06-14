@@ -95,6 +95,18 @@ function createTestServer(options = {}) {
             return res.end('Not Found')
         }
 
+        // Serves everything normally, so the subscribe GET establishes a real
+        // subscription — but then abruptly destroys the socket mid-stream so the
+        // subscription errors out, exercising on_error / on_disconnect.
+        // URL: /drop-sub
+        if (req.url.startsWith('/drop-sub')) {
+            braid_text.serve(req, res, {key: '/drop-sub'})
+            // Let the subscription get fully established, then kill the
+            // connection mid-stream.
+            setTimeout(() => req.socket.destroy(), 50)
+            return
+        }
+
         // Returns 404 on the first subscribe GET, then serves normally.
         // URL: /404-once/<key>
         if (req.url.startsWith('/404-once/')) {

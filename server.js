@@ -311,7 +311,7 @@ function create_braid_text() {
                         }
                     },
                     on_error: e => {
-                        options.on_disconnect?.()
+                        options.on_disconnect?.(e)
                         handle_error(e)
                     }
                 })
