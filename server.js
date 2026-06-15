@@ -329,7 +329,7 @@ function create_braid_text() {
     braid_text.serve = async (req, res, options = {}) => {
         options = {
             key: req.url.split('?')[0],
-            content_type: 'text/plain',
+            content_type: res.getHeader('Content-Type') || 'text/plain',
             put_cb: (key, val, params) => { },
             ...options
         }
