@@ -1512,7 +1512,7 @@ runTest(
         var doc = new Doc('yo')
         return await new Promise(done => {
             r2.subscribe(u => {
-                if (u.extra_headers.encoding === 'dt') {
+                if (u.extra_headers['content-encoding'] === 'dt') {
                     doc.mergeBytes(u.body)
                     results.push(doc.get())
                     doc.free()
