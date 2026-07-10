@@ -1360,7 +1360,7 @@ runTest(
 )
 
 runTest(
-    "test accept-encoding updates(dt) (with parents)",
+    "test accept-multiresponse-encoding dt (with parents)",
     async () => {
         await dt_p
         let key = 'test-' + Math.random().toString(36).slice(2)
@@ -1382,7 +1382,7 @@ runTest(
             subscribe: true,
             headers: {
                 'merge-type': 'dt',
-                'X-Accept-Encoding': 'updates(dt)'
+                'Accept-Multiresponse-Encoding': 'dt'
             }
         })
 
@@ -1399,7 +1399,7 @@ runTest(
 )
 
 runTest(
-    "test accept-encoding updates(dt) (with parents which are current version)",
+    "test accept-multiresponse-encoding dt (with parents which are current version)",
     async () => {
         await dt_p
         let key = 'test-' + Math.random().toString(36).slice(2)
@@ -1421,7 +1421,7 @@ runTest(
             subscribe: true,
             headers: {
                 'merge-type': 'dt',
-                'X-Accept-Encoding': 'updates(dt)'
+                'Accept-Multiresponse-Encoding': 'dt'
             }
         })
 
@@ -1438,7 +1438,7 @@ runTest(
 )
 
 runTest(
-    "test accept-encoding updates(dt)",
+    "test accept-multiresponse-encoding dt",
     async () => {
         await dt_p
         let key = 'test-' + Math.random().toString(36).slice(2)
@@ -1457,7 +1457,7 @@ runTest(
             subscribe: true,
             headers: {
                 'merge-type': 'dt',
-                'X-Accept-Encoding': 'updates(dt)'
+                'Accept-Multiresponse-Encoding': 'dt'
             }
         })
 
@@ -1475,7 +1475,7 @@ runTest(
 )
 
 runTest(
-    "test accept-encoding updates(dt), getting non-encoded update",
+    "test accept-multiresponse-encoding dt, getting non-encoded update",
     async () => {
         await dt_p
         let key = 'test-' + Math.random().toString(36).slice(2)
@@ -1494,7 +1494,7 @@ runTest(
             subscribe: true,
             headers: {
                 'merge-type': 'dt',
-                'X-Accept-Encoding': 'updates(dt)'
+                'Accept-Multiresponse-Encoding': 'dt'
             }
         })
 
@@ -1525,6 +1525,45 @@ runTest(
         })
     },
     'xyz'
+)
+
+runTest(
+    "test old accept-encoding updates(dt) headers do NOT trigger dt encoding",
+    async () => {
+        await dt_p
+        let key = 'test-' + Math.random().toString(36).slice(2)
+
+        let r = await braid_fetch(`/${key}`, {
+            method: 'PUT',
+            version: ['hi-1'],
+            parents: [],
+            body: 'xy'
+        })
+        if (!r.ok) throw 'got: ' + r.statusCode
+
+        var results = []
+        for (var old_header of ['Accept-Encoding', 'X-Accept-Encoding']) {
+            var a = new AbortController()
+            let r2 = await braid_fetch(`/${key}`, {
+                signal: a.signal,
+                subscribe: true,
+                headers: {
+                    'merge-type': 'dt',
+                    [old_header]: 'updates(dt)'
+                }
+            })
+
+            results.push(await new Promise(done => {
+                r2.subscribe(u => {
+                    done(u.extra_headers?.['content-encoding'] === 'dt'
+                         ? 'dt' : 'text')
+                    a.abort()
+                })
+            }))
+        }
+        return results.join(',')
+    },
+    'text,text'
 )
 
 runTest(
@@ -2027,7 +2066,7 @@ runTest(
 )
 
 runTest(
-    "test braid_text.sync uses accept-encoding updates(dt)",
+    "test braid_text.sync uses accept-multiresponse-encoding dt",
     async () => {
         var remote_key = 'test-remote-' + Math.random().toString(36).slice(2)
         var local_key = 'test-local-' + Math.random().toString(36).slice(2)

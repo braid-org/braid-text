@@ -276,7 +276,7 @@ function create_braid_text() {
                 await braid_text.get(remote_url, {
                     signal,
                     dont_retry: true,
-                    headers: { ...get_headers, 'Merge-Type': 'dt', 'Accept-Encoding': 'updates(dt)' },
+                    headers: { ...get_headers, 'Merge-Type': 'dt', 'Accept-Multiresponse-Encoding': 'dt' },
                     parents: resource.meta.fork_point,
                     peer: options.peer,
                     heartbeats: 120,
@@ -439,16 +439,6 @@ function create_braid_text() {
             res.setHeader('Merge-Type', merge_type)
             res.setHeader('Accept-Subscribe', 'true')
 
-            // If the client asked for dt-encoded updates (and we can honor it,
-            // i.e. a dt subscription), echo back that the body uses that
-            // encoding, so the client knows the updates are dt blocks.
-            var accept_encoding =
-                req.headers['x-accept-encoding'] ?? req.headers['accept-encoding']
-            var wants_dt = accept_encoding?.match(/updates\s*\((.*)\)/)?.[1]
-                ?.split(',').map(x => x.trim()).includes('dt')
-            if (getting.subscribe && merge_type === 'dt' && wants_dt && !head_override)
-                res.setHeader('Content-Encoding', 'updates(dt)')
-
             // HEAD: headers only, no body needed
             if (is_head) {
                 res.setHeader('Content-Type', content_type)
@@ -524,8 +514,8 @@ function create_braid_text() {
                         merge_type,
                         head: head_override,
                         signal: aborter.signal,
-                        accept_encoding:
-                            req.headers['x-accept-encoding'] ?? req.headers['accept-encoding'],
+                        accept_multiresponse_encoding:
+                            req.headers['accept-multiresponse-encoding'],
                         subscribe: update => {
                             // Add digest for integrity checking on the client
                             // (skipped for header-only updates, which carry
@@ -855,7 +845,7 @@ function create_braid_text() {
                     peer: options.peer,
                     head: !!options.head,
                     send_update: one_at_a_time(options.subscribe),
-                    accept_encoding_dt: !!options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1]?.split(',').map(x=>x.trim()).includes('dt'),
+                    accept_encoding_dt: !!options.accept_multiresponse_encoding?.split(',').map(x=>x.trim()).includes('dt'),
                 }
 
                 // Send initial history
