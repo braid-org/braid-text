@@ -276,7 +276,7 @@ function create_braid_text() {
                 await braid_text.get(remote_url, {
                     signal,
                     dont_retry: true,
-                    headers: { ...get_headers, 'Merge-Type': 'dt', 'accept-encoding': 'updates(dt)' },
+                    headers: { ...get_headers, 'Merge-Type': 'dt', 'Accept-Multiresponse-Encoding': 'dt' },
                     parents: resource.meta.fork_point,
                     peer: options.peer,
                     heartbeats: 120,
@@ -290,7 +290,7 @@ function create_braid_text() {
                     subscribe: async update => {
                         if (signal.aborted) return
 
-                        if (update.extra_headers?.encoding === 'dt') {
+                        if (update.extra_headers?.['content-encoding'] === 'dt') {
                             // DT binary: apply directly
                             await braid_text.put(local_key, {
                                 body: update.body,
@@ -514,8 +514,8 @@ function create_braid_text() {
                         merge_type,
                         head: head_override,
                         signal: aborter.signal,
-                        accept_encoding:
-                            req.headers['x-accept-encoding'] ?? req.headers['accept-encoding'],
+                        accept_multiresponse_encoding:
+                            req.headers['accept-multiresponse-encoding'],
                         subscribe: update => {
                             // Add digest for integrity checking on the client
                             // (skipped for header-only updates, which carry
@@ -529,7 +529,7 @@ function create_braid_text() {
                                 update.patch = update.patches[0]
                                 delete update.patches
                             }
-                            if (!update.encoding && !head_override)
+                            if (!update['Content-Encoding'] && !head_override)
                                 update.content_type = content_type
                             res.sendUpdate(update)
                         },
@@ -674,7 +674,7 @@ function create_braid_text() {
             res.subscribe(async update => {
                 // Convert binary to text, except for dt-encoded blobs
                 // which are passed through as-is for .sync() to handle
-                if (update.extra_headers?.encoding !== 'dt') {
+                if (update.extra_headers?.['content-encoding'] !== 'dt') {
                     update.body = update.body_text
                     if (update.patches)
                         for (var p of update.patches) p.content = p.content_text
@@ -845,7 +845,7 @@ function create_braid_text() {
                     peer: options.peer,
                     head: !!options.head,
                     send_update: one_at_a_time(options.subscribe),
-                    accept_encoding_dt: !!options.accept_encoding?.match(/updates\s*\((.*)\)/)?.[1]?.split(',').map(x=>x.trim()).includes('dt'),
+                    accept_encoding_dt: !!options.accept_multiresponse_encoding?.split(',').map(x=>x.trim()).includes('dt'),
                 }
 
                 // Send initial history
@@ -858,7 +858,7 @@ function create_braid_text() {
                                              parents: options.parents || [] })
                 } else if (client.accept_encoding_dt) {
                     if (!getting.history)
-                        client.send_update({ encoding: 'dt', body: new Doc().toBytes() })
+                        client.send_update({ status: false, 'Content-Encoding': 'dt', body: new Doc().toBytes() })
                     else {
                         var bytes = resource.dt.doc.toBytes()
                         if (getting.history === 'since-parents') {
@@ -867,7 +867,7 @@ function create_braid_text() {
                                 dt_get_local_version(bytes, options.parents))
                             doc.free()
                         }
-                        client.send_update({ encoding: 'dt', body: bytes })
+                        client.send_update({ status: false, 'Content-Encoding': 'dt', body: bytes })
                     }
                 } else {
                     if (getting.history === 'up-to-version') {
@@ -1023,7 +1023,8 @@ function create_braid_text() {
                                         ? { version: resource.version,
                                             parents: version_before_yjs_sync,
                                             body: resource.dt.doc.getPatchSince(yjs_v_before),
-                                            encoding: 'dt'
+                                            'Content-Encoding': 'dt',
+                                            status: false
                                           }
                                     : { version: resource.version,
                                         parents: version_before_yjs_sync,
@@ -1085,7 +1086,7 @@ function create_braid_text() {
                 await resource.dt.log.save(body)
 
                 // Notify non-simpleton clients with the dt-encoded update
-                var dt_update = { body, encoding: 'dt' }
+                var dt_update = { status: false, body, 'Content-Encoding': 'dt' }
                 var head_update = { version: resource.version, parents: version_before_dt_put }
                 for (let client of resource.dt.clients)
                     if (!peer || client.peer !== peer)
