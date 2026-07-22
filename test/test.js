@@ -39,8 +39,35 @@ Examples:
   node test.js --browser               # Start browser test server
   node test.js --browser --port=9000
   node test.js -b 9000                # Short form with port
+
+Runner options (see braid-http/run-tests):
+  --serial               Run tests one at a time (the default here)
+  --in-parallel=N        Run up to N tests at once
+  --hangs                When a test times out, print what it's stuck waiting on
 `)
     process.exit(0)
+}
+
+// The shared runner (braid-http/run-tests) parses --filter/--serial/
+// --in-parallel/--hangs, runs the pool, and prints the reports; this file
+// hosts it: the braid-text server, its fixed test routes, and browser
+// mode. Tests default to --serial here: they share one server, fixed
+// routes, and two braid_text instances, and haven't been hardened for
+// parallelism.
+const runner = require('braid-http/run-tests')({
+    braid_fetch,
+    rerun_command: 'node test/test.js',
+    timeout: 5000,
+    in_parallel: 1
+})
+const { log, claim_request, test_context } = runner
+
+// braid-text also accepts a positional filter (e.g. `node test/test.js
+// yjs`), which the runner's --filter parsing doesn't know about -- so
+// filtering happens here, before tests reach the runner
+const runTest = (name, fn, expected, params) => {
+    if (filterArg && !name.toLowerCase().includes(filterArg.toLowerCase())) return
+    runner.run_test(name, fn, expected, params)
 }
 
 // ============================================================================
@@ -50,8 +77,7 @@ Examples:
 function createTestServer(options = {}) {
     const {
         port = 8889,
-        runTests = false,
-        logRequests = false
+        runTests = false
     } = options
 
     const braid_text = require(`${__dirname}/../server.js`)
@@ -61,9 +87,8 @@ function createTestServer(options = {}) {
     braid_text2.db_folder = null
 
     const server = http.createServer(async (req, res) => {
-        if (logRequests) {
-            console.log(`${req.method} ${req.url}`)
-        }
+        claim_request(req)
+        log(req)
 
         // Free the CORS
         braid_text.free_cors(res)
@@ -129,7 +154,9 @@ function createTestServer(options = {}) {
                 req.on('end', () => done(Buffer.concat(chunks)))
             })
             try {
-                eval('' + body)
+                // Eval'd inside the requesting test's context, so anything
+                // it logs files under that test
+                test_context.run(req.test_report, () => eval('' + body))
             } catch (error) {
                 res.writeHead(500, { 'Content-Type': 'text/plain' })
                 res.end(`Error: ${error.message}`)
@@ -193,32 +220,6 @@ function createTestServer(options = {}) {
 // ============================================================================
 
 async function runConsoleTests() {
-    // Test tracking
-    let totalTests = 0
-    let passedTests = 0
-    let failedTests = 0
-
-    // Handle unhandled rejections during tests (some tests intentionally cause errors)
-    const unhandledRejections = []
-    process.on('unhandledRejection', (reason, promise) => {
-        // Collect but don't crash - some tests intentionally trigger errors
-        unhandledRejections.push({ reason, promise })
-    })
-
-    // Node.js test runner implementation
-    // Store tests to run sequentially instead of in parallel
-    const testsToRun = []
-
-    function runTest(testName, testFunction, expectedResult) {
-        // Apply filter if specified
-        if (filterArg && !testName.toLowerCase().includes(filterArg.toLowerCase())) {
-            return // Skip this test
-        }
-
-        totalTests++
-        testsToRun.push({ testName, testFunction, expectedResult })
-    }
-
     // Create a braid_fetch wrapper that points to localhost
     function createBraidFetch(baseUrl) {
         return async (url, options = {}) => {
@@ -235,8 +236,7 @@ async function runConsoleTests() {
     // Create and start the test server
     const testServer = createTestServer({
         port,
-        runTests: true,
-        logRequests: false
+        runTests: true
     })
 
     await testServer.start()
@@ -259,41 +259,15 @@ async function runConsoleTests() {
     defineTests(runTest, testBraidFetch)
     defineCursorTests(runTest, testBraidFetch)
 
-    // Run tests sequentially (not in parallel) to avoid conflicts
-    var test_timeout_ms = 5000
-    for (const { testName, testFunction, expectedResult } of testsToRun) {
-        try {
-            const result = await Promise.race([
-                testFunction(),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error(`test timed out after ${test_timeout_ms/1000}s`)),
-                        test_timeout_ms))
-            ])
-            if (result == expectedResult) {
-                passedTests++
-                console.log(`✓ ${testName}`)
-            } else {
-                failedTests++
-                console.log(`✗ ${testName}`)
-                console.log(`  Expected: ${expectedResult}`)
-                console.log(`  Got: ${result}`)
-            }
-        } catch (error) {
-            failedTests++
-            console.log(`✗ ${testName}`)
-            console.log(`  Error: ${error.message || error}`)
-        }
-    }
+    let failedTests = await runner.run()
 
-    // Print summary
-    console.log('\n' + '='.repeat(50))
-    console.log(`Total: ${totalTests} | Passed: ${passedTests} | Failed: ${failedTests}`)
     if (failedTests === 0 && !args.includes('fuzz') && !args.includes('all')) {
         console.log(`\nBasic tests complete. Consider 'npm test -- fuzz' for fuzz tests, or 'npm test -- all' for everything.`)
     }
-    console.log('='.repeat(50))
 
-    // Run yjs-text unit tests (direct API, no HTTP)
+    // Run yjs-text unit tests (direct API, no HTTP). These predate the
+    // shared runner and keep their own little loop and summary, running
+    // after runner.run() so their output prints plainly
     var braid_text = require(`${__dirname}/../server.js`)
     var yjs_unit_tests = [
         ['yjs-text: parse exclusive range', () => {
@@ -1256,32 +1230,33 @@ async function runConsoleTests() {
 
     ]
 
+    console.log('\nyjs-text unit tests:')
+    let yjsPassed = 0, yjsFailed = 0
     for (var [name, fn, expected] of yjs_unit_tests) {
         if (filterArg && !name.toLowerCase().includes(filterArg.toLowerCase())) {
             continue
         }
-        totalTests++
         try {
             var result = await fn()
             if (result === expected) {
-                passedTests++
+                yjsPassed++
                 console.log(`✓ ${name}`)
             } else {
-                failedTests++
+                yjsFailed++
                 console.log(`✗ ${name}`)
                 console.log(`  Expected: ${expected}`)
                 console.log(`  Got: ${result}`)
             }
         } catch (e) {
-            failedTests++
+            yjsFailed++
             console.log(`✗ ${name}`)
             console.log(`  Error: ${e.message}`)
         }
     }
+    failedTests += yjsFailed
 
-    // Reprint summary with unit tests included
     console.log('\n' + '='.repeat(50))
-    console.log(`Total: ${totalTests} | Passed: ${passedTests} | Failed: ${failedTests}`)
+    console.log(`yjs-text units: ✓ : ${yjsPassed} | ✗ : ${yjsFailed}`)
     if (failedTests === 0 && !args.includes('fuzz') && !args.includes('all')) {
         console.log(`\nAll tests complete. Consider 'npm test -- fuzz' for all fuzz tests, 'npm test -- fuzz1' for DT fuzz, 'npm test -- fuzz2' for Yjs bridge fuzz, or 'npm test -- all' for everything.`)
     }
@@ -1293,7 +1268,7 @@ async function runConsoleTests() {
         try {
             require('child_process').execSync('node test/fuzz-test.js', {
                 stdio: 'inherit',
-                cwd: path.join(__dirname, '..')
+                cwd: __dirname + '/..'
             })
         } catch (e) {
             console.log('DT fuzz tests failed!')
@@ -1303,7 +1278,7 @@ async function runConsoleTests() {
         try {
             require('child_process').execSync('node test/yjs-fuzz-test.js', {
                 stdio: 'inherit',
-                cwd: path.join(__dirname, '..')
+                cwd: __dirname + '/..'
             })
         } catch (e) {
             console.log('Yjs bridge fuzz tests failed!')
@@ -1363,8 +1338,7 @@ async function runConsoleTests() {
 async function runBrowserMode() {
     const testServer = createTestServer({
         port,
-        runTests: false,
-        logRequests: true
+        runTests: false
     })
 
     await testServer.start()

@@ -27,7 +27,7 @@
   ],
   "dependencies": {
     "@braid.org/diamond-types-node": "^2.0.1",
-    "braid-http": "~1.4.1"
+    "braid-http": "~1.4.2"
   },
   "devDependencies": {
     "yjs": "^13.6.0"
