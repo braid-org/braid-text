@@ -117,25 +117,24 @@ function create_braid_text() {
                     for (var event of version) frontier_set.add(event)
                     frontier = [...frontier_set.values()]
                 } else {
-                    // Slow path: walk the full DT history to compute the frontier
+                    // Slow path: reduce the version set to its maximal
+                    // elements.  Versions absent from local history drop out,
+                    // as they did when this walked the DAG in JS.
                     var looking_for = frontier_set
                     for (var event of version) looking_for.add(event)
 
-                    frontier = []
-                    var shadow = new Set()
+                    var doc = resource.dt.doc
+                    var local = braid_text.dt_get_local_version(
+                        doc.toBytes(), [...looking_for], {tolerant: true})
 
-                    var bytes = resource.dt.doc.toBytes()
-                    var [_, events, parentss] = braid_text.dt_parse([...bytes])
-                    for (var i = events.length - 1; i >= 0 && looking_for.size; i--) {
-                        var e = events[i].join('-')
-                        if (looking_for.has(e)) {
-                            looking_for.delete(e)
-                            if (!shadow.has(e)) frontier.push(e)
-                            shadow.add(e)
-                        }
-                        if (shadow.has(e))
-                            parentss[i].forEach(p => shadow.add(p.join('-')))
-                    }
+                    // mergeVersions requires each argument to be a valid
+                    // frontier (no version dominating another), so fold the
+                    // versions in as singletons
+                    var merged = new Uint32Array(0)
+                    for (var idx of local)
+                        merged = doc.mergeVersions(merged, new Uint32Array([idx]))
+
+                    frontier = doc.localToRemoteVersion([...merged]).map(v => v.join('-'))
                 }
                 return frontier.sort()
             }
@@ -188,7 +187,7 @@ function create_braid_text() {
                 if (!resource.meta.fork_point) {
                     // Binary search through local DT history
                     var bytes = resource.dt.doc.toBytes()
-                    var [_, events, __] = braid_text.dt_parse([...bytes])
+                    var [_, events, __] = braid_text.dt_parse(bytes)
                     events = events.map(x => x.join('-'))
 
                     var min = -1
@@ -1470,7 +1469,7 @@ function create_braid_text() {
     // Rebuild DT version indexes from doc bytes
     function rebuild_dt_indexes(resource) {
         resource.dt.known_versions = {}
-        dt_get_actor_seq_runs([...resource.dt.doc.toBytes()], (actor, base, len) => {
+        dt_get_actor_seq_runs(resource.dt.doc.toBytes(), (actor, base, len) => {
             if (!resource.dt.known_versions[actor])
                 resource.dt.known_versions[actor] = new RangeSet()
             resource.dt.known_versions[actor].add_range(base, base + len - 1)
@@ -2028,7 +2027,7 @@ function create_braid_text() {
         let bytes = doc.toBytes()
         dt_get.last_doc = doc = Doc.fromBytes(bytes, agent)
 
-        let [_agents, versions, parentss] = dt_parse([...bytes])
+        let [_agents, versions, parentss] = dt_parse(bytes)
         if (anti_version) {
             var include_versions = new Set()
             var bad_versions = new Set(anti_version)
@@ -2126,7 +2125,7 @@ function create_braid_text() {
         let bytes = doc.toBytes()
         doc = Doc.fromBytes(bytes)
 
-        let [_agents, versions, parentss] = dt_parse([...bytes])
+        let [_agents, versions, parentss] = dt_parse(bytes)
 
         let op_runs = []
         if (version?.length) {
@@ -2139,7 +2138,7 @@ function create_braid_text() {
             local_version = new Uint32Array(local_version)
 
             let after_bytes = doc.getPatchSince(local_version)
-            ;[_agents, versions, parentss] = dt_parse([...after_bytes])
+            ;[_agents, versions, parentss] = dt_parse(after_bytes)
             op_runs = doc.getOpsSince(local_version)
         } else op_runs = doc.getOpsSince([])
 
@@ -2196,36 +2195,34 @@ function create_braid_text() {
         return patches
     }
 
-    function dt_parse(byte_array) {
-        if (new TextDecoder().decode(new Uint8Array(byte_array.splice(0, 8))) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
-
-        if (byte_array.shift() != 0) throw new Error("dt parse error, expected version 0")
+    function dt_parse(bytes) {
+        let state = dt_make_cursor(bytes)
 
         let agents = []
         let versions = []
         let parentss = []
 
-        while (byte_array.length) {
-            let id = byte_array.shift()
-            let len = dt_read_varint(byte_array)
+        while (state.pos < state.bytes.length) {
+            let id = state.bytes[state.pos++]
+            let len = dt_read_varint(state)
             if (id == 1) {
             } else if (id == 3) {
-                let goal = byte_array.length - len
-                while (byte_array.length > goal) {
-                    agents.push(dt_read_string(byte_array))
+                let goal = state.pos + len
+                while (state.pos < goal) {
+                    agents.push(dt_read_string(state))
                 }
             } else if (id == 20) {
             } else if (id == 21) {
                 let seqs = {}
-                let goal = byte_array.length - len
-                while (byte_array.length > goal) {
-                    let part0 = dt_read_varint(byte_array)
+                let goal = state.pos + len
+                while (state.pos < goal) {
+                    let part0 = dt_read_varint(state)
                     let has_jump = part0 & 1
                     let agent_i = (part0 >> 1) - 1
-                    let run_length = dt_read_varint(byte_array)
+                    let run_length = dt_read_varint(state)
                     let jump = 0
                     if (has_jump) {
-                        let part2 = dt_read_varint(byte_array)
+                        let part2 = dt_read_varint(state)
                         jump = part2 >> 1
                         if (part2 & 1) jump *= -1
                     }
@@ -2238,14 +2235,14 @@ function create_braid_text() {
                 }
             } else if (id == 23) {
                 let count = 0
-                let goal = byte_array.length - len
-                while (byte_array.length > goal) {
-                    let run_len = dt_read_varint(byte_array)
+                let goal = state.pos + len
+                while (state.pos < goal) {
+                    let run_len = dt_read_varint(state)
 
                     let parents = []
                     let has_more = 1
                     while (has_more) {
-                        let x = dt_read_varint(byte_array)
+                        let x = dt_read_varint(state)
                         let is_foreign = 0x1 & x
                         has_more = 0x2 & x
                         let num = x >> 2
@@ -2255,7 +2252,7 @@ function create_braid_text() {
                         } else if (!is_foreign) {
                             parents.push(versions[count - num])
                         } else {
-                            parents.push([agents[num - 1], dt_read_varint(byte_array)])
+                            parents.push([agents[num - 1], dt_read_varint(state)])
                         }
                     }
                     parentss.push(parents)
@@ -2267,41 +2264,39 @@ function create_braid_text() {
                     }
                 }
             } else {
-                byte_array.splice(0, len)
+                state.pos += len
             }
         }
 
         return [agents, versions, parentss]
     }
 
-    function dt_get_actor_seq_runs(byte_array, cb) {
-        if (new TextDecoder().decode(new Uint8Array(byte_array.splice(0, 8))) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
-
-        if (byte_array.shift() != 0) throw new Error("dt parse error, expected version 0")
+    function dt_get_actor_seq_runs(bytes, cb) {
+        let state = dt_make_cursor(bytes)
 
         let agents = []
 
-        while (byte_array.length) {
-            let id = byte_array.shift()
-            let len = dt_read_varint(byte_array)
+        while (state.pos < state.bytes.length) {
+            let id = state.bytes[state.pos++]
+            let len = dt_read_varint(state)
             if (id == 1) {
             } else if (id == 3) {
-                let goal = byte_array.length - len
-                while (byte_array.length > goal) {
-                    agents.push(dt_read_string(byte_array))
+                let goal = state.pos + len
+                while (state.pos < goal) {
+                    agents.push(dt_read_string(state))
                 }
             } else if (id == 20) {
             } else if (id == 21) {
                 let seqs = {}
-                let goal = byte_array.length - len
-                while (byte_array.length > goal) {
-                    let part0 = dt_read_varint(byte_array)
+                let goal = state.pos + len
+                while (state.pos < goal) {
+                    let part0 = dt_read_varint(state)
                     let has_jump = part0 & 1
                     let agent_i = (part0 >> 1) - 1
-                    let run_length = dt_read_varint(byte_array)
+                    let run_length = dt_read_varint(state)
                     let jump = 0
                     if (has_jump) {
-                        let part2 = dt_read_varint(byte_array)
+                        let part2 = dt_read_varint(state)
                         jump = part2 >> 1
                         if (part2 & 1) jump *= -1
                     }
@@ -2311,12 +2306,12 @@ function create_braid_text() {
                     seqs[agent_i] = base + run_length
                 }
             } else {
-                byte_array.splice(0, len)
+                state.pos += len
             }
         }
     }
 
-    function dt_get_local_version(bytes, version) {
+    function dt_get_local_version(bytes, version, options = {}) {
         var looking_for = new Map()
         for (var event of version) {
             var [agent, seq] = decode_version(event)
@@ -2326,37 +2321,34 @@ function create_braid_text() {
         for (var seqs of looking_for.values())
             seqs.sort((a, b) => a - b)
 
-        var byte_array = [...bytes]
         var local_version = []
         var local_version_base = 0
 
-        if (new TextDecoder().decode(new Uint8Array(byte_array.splice(0, 8))) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
-
-        if (byte_array.shift() != 0) throw new Error("dt parse error, expected version 0")
+        var state = dt_make_cursor(bytes)
 
         let agents = []
 
-        while (byte_array.length && looking_for.size) {
-            let id = byte_array.shift()
-            let len = dt_read_varint(byte_array)
+        while (state.pos < state.bytes.length && looking_for.size) {
+            let id = state.bytes[state.pos++]
+            let len = dt_read_varint(state)
             if (id == 1) {
             } else if (id == 3) {
-                let goal = byte_array.length - len
-                while (byte_array.length > goal) {
-                    agents.push(dt_read_string(byte_array))
+                let goal = state.pos + len
+                while (state.pos < goal) {
+                    agents.push(dt_read_string(state))
                 }
             } else if (id == 20) {
             } else if (id == 21) {
                 let seqs = {}
-                let goal = byte_array.length - len
-                while (byte_array.length > goal && looking_for.size) {
-                    let part0 = dt_read_varint(byte_array)
+                let goal = state.pos + len
+                while (state.pos < goal && looking_for.size) {
+                    let part0 = dt_read_varint(state)
                     let has_jump = part0 & 1
                     let agent_i = (part0 >> 1) - 1
-                    let run_length = dt_read_varint(byte_array)
+                    let run_length = dt_read_varint(state)
                     let jump = 0
                     if (has_jump) {
-                        let part2 = dt_read_varint(byte_array)
+                        let part2 = dt_read_varint(state)
                         jump = part2 >> 1
                         if (part2 & 1) jump *= -1
                     }
@@ -2375,11 +2367,11 @@ function create_braid_text() {
                     seqs[agent_i] = base + run_length
                 }
             } else {
-                byte_array.splice(0, len)
+                state.pos += len
             }
         }
 
-        if (looking_for.size) throw new Error(`version not found: ${version}`)
+        if (looking_for.size && !options.tolerant) throw new Error(`version not found: ${version}`)
         return local_version
 
         function splice_out_range(a, s, e) {
@@ -2399,17 +2391,36 @@ function create_braid_text() {
         }
     }
 
-    function dt_read_string(byte_array) {
-        return new TextDecoder().decode(new Uint8Array(byte_array.splice(0, dt_read_varint(byte_array))))
+    // Accepts Uint8Array or plain array (external callers pass either),
+    // checks the DT file header, and returns a read cursor.
+    function dt_make_cursor(bytes) {
+        let state = {
+            bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+            pos: 0
+        }
+
+        if (new TextDecoder().decode(state.bytes.subarray(0, 8)) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
+        state.pos = 8
+
+        if (state.bytes[state.pos++] != 0) throw new Error("dt parse error, expected version 0")
+
+        return state
     }
 
-    function dt_read_varint(byte_array) {
+    function dt_read_string(state) {
+        let len = dt_read_varint(state)
+        let s = new TextDecoder().decode(state.bytes.subarray(state.pos, state.pos + len))
+        state.pos += len
+        return s
+    }
+
+    function dt_read_varint(state) {
         let result = 0
         let shift = 0
         while (true) {
-            if (byte_array.length === 0) throw new Error("byte array does not contain varint")
+            if (state.pos >= state.bytes.length) throw new Error("byte array does not contain varint")
 
-            let byte_val = byte_array.shift()
+            let byte_val = state.bytes[state.pos++]
             result |= (byte_val & 0x7f) << shift
             if ((byte_val & 0x80) == 0) return result
             shift += 7
