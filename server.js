@@ -77,6 +77,7 @@ function create_braid_text() {
         if (content_type) {
             get_headers['Accept'] = content_type
             put_headers['Content-Type'] = content_type
+            put_headers['Repr-Type'] = content_type
         }
 
         // ── Load the local resource and initialize the fork point ──
@@ -329,7 +330,7 @@ function create_braid_text() {
     braid_text.serve = async (req, res, options = {}) => {
         options = {
             key: req.url.split('?')[0],
-            content_type: res.getHeader('Content-Type') || 'text/plain',
+            content_type: 'text/plain',
             put_cb: (key, val, params) => { },
             ...options
         }
@@ -442,6 +443,7 @@ function create_braid_text() {
             // HEAD: headers only, no body needed
             if (is_head) {
                 res.setHeader('Content-Type', content_type)
+                res.setHeader('Repr-Type', content_type)
                 if (!getting.history)
                     res.setHeader('Version', current_version())
                 return my_end(200)
@@ -462,43 +464,34 @@ function create_braid_text() {
 
                 if (getting.transfer_encoding === 'dt') {
                     res.setHeader('X-Transfer-Encoding', 'dt')
+                    res.setHeader('Repr-Type', content_type)
                     res.setHeader('Content-Length', result.body.length)
                     return my_end(209, result.body, 'Multiresponse')
                 } else if (Array.isArray(result)) {
                     // Range of history: send as 209 Multiresponse
-                    res.startSubscription()
+                    res.setHeader('Repr-Type', content_type)
+                    res.startMultiresponse()
                     for (var u of result)
                         res.sendUpdate({
                             version: [u.version],
                             parents: u.parents,
                             patches: [{ unit: u.unit, range: u.range, content: u.content }],
-                            content_type,
                         })
                     return res.end()
-                } else if (false) {
-                    // New path: use sendUpdate (currently broken, investigating)
+                } else {
                     res.sendUpdate({
                         version: result.version,
                         'Repr-Digest': get_digest(result.body),
-                        content_type,
+                        repr_type: content_type,
                         body: result.body,
                     })
                     return res.end()
-                } else {
-                    // Old path: explicit headers
-                    res.setHeader('Content-Type', content_type)
-                    res.setHeader('Version', ascii_ify(result.version
-                                                       .map(v => JSON.stringify(v))
-                                                       .join(', ')))
-                    var buffer = Buffer.from(result.body, 'utf8')
-                    res.setHeader('Repr-Digest', get_digest(buffer))
-                    res.setHeader('Content-Length', buffer.length)
-                    return my_end(200, buffer)
                 }
             } else {
                 // ── Subscribe ──
                 all_subscriptions.add(res)
                 var aborter = new AbortController()
+                res.setHeader('Repr-Type', content_type)
                 res.startSubscription({
                     onClose: () => {
                         all_subscriptions.delete(res)
@@ -529,8 +522,6 @@ function create_braid_text() {
                                 update.patch = update.patches[0]
                                 delete update.patches
                             }
-                            if (!update['Content-Encoding'] && !head_override)
-                                update.content_type = content_type
                             res.sendUpdate(update)
                         },
                     })
@@ -3802,7 +3793,7 @@ async function handle_cursors(resource, req, res) {
         && !content_type.includes('application/text-cursors+json'))
         return false
 
-    res.setHeader('Content-Type', 'application/text-cursors+json')
+    res.setHeader('Repr-Type', 'application/text-cursors+json')
 
     if (!resource.cursors) resource.cursors = new cursor_state()
     var cursors = resource.cursors
@@ -3810,6 +3801,7 @@ async function handle_cursors(resource, req, res) {
 
     if (req.method === 'GET' || req.method === 'HEAD') {
         if (!req.subscribe) {
+            res.setHeader('Content-Type', 'application/text-cursors+json')
             res.writeHead(200)
             if (req.method === 'HEAD')
                 res.end()
