@@ -59,26 +59,25 @@ function create_braid_text() {
         // Normalize so local_key is the string, remote_url is the URL
         if (local_key instanceof URL) { var swap = local_key; local_key = remote_url; remote_url = swap }
 
-        // Split caller's headers into GET headers (Accept) vs PUT headers (Content-Type)
-        var content_type
+        // The media type of the representation being synced.  Callers pass
+        // it as options.repr_type, or (for backwards compatibility) as an
+        // Accept, Content-Type, or Repr-Type header.
+        var repr_type = options.repr_type
         var get_headers = {}
         var put_headers = {}
         if (options.headers) {
             for (var [k, v] of Object.entries(options.headers)) {
                 var lk = k.toLowerCase()
-                if (lk === 'accept' || lk === 'content-type')
-                    content_type = v
+                if (lk === 'accept' || lk === 'content-type' || lk === 'repr-type')
+                    repr_type = repr_type || v
                 else {
                     get_headers[k] = v
                     put_headers[k] = v
                 }
             }
         }
-        if (content_type) {
-            get_headers['Accept'] = content_type
-            put_headers['Content-Type'] = content_type
-            put_headers['Repr-Type'] = content_type
-        }
+        if (repr_type)
+            get_headers['Accept'] = repr_type
 
         // ── Load the local resource and initialize the fork point ──
         //
@@ -223,6 +222,7 @@ function create_braid_text() {
                         dont_retry: true,
                         peer: options.peer,
                         headers: put_headers,
+                        repr_type,
                     })
                     if (signal.aborted) return
 
@@ -329,15 +329,15 @@ function create_braid_text() {
     braid_text.serve = async (req, res, options = {}) => {
         options = {
             key: req.url.split('?')[0],
-            content_type: 'text/plain',
+            repr_type: options.repr_type || options.content_type || 'text/plain',
             put_cb: (key, val, params) => { },
             ...options
         }
 
-        // Ensure charset=utf-8 on the content type
-        var content_type = options.content_type
-        if (!content_type.includes('charset='))
-            content_type += '; charset=utf-8'
+        // Ensure charset=utf-8 on the representation type
+        var repr_type = options.repr_type
+        if (!repr_type.includes('charset='))
+            repr_type += '; charset=utf-8'
 
         // ── Setup: prepare the response and load the resource ──
 
@@ -441,8 +441,8 @@ function create_braid_text() {
 
             // HEAD: headers only, no body needed
             if (is_head) {
-                res.setHeader('Content-Type', content_type)
-                res.setHeader('Repr-Type', content_type)
+                res.setHeader('Content-Type', repr_type)
+                res.setHeader('Repr-Type', repr_type)
                 if (!getting.history)
                     res.setHeader('Version', current_version())
                 return my_end(200)
@@ -463,12 +463,12 @@ function create_braid_text() {
 
                 if (getting.transfer_encoding === 'dt') {
                     res.setHeader('X-Transfer-Encoding', 'dt')
-                    res.setHeader('Repr-Type', content_type)
+                    res.setHeader('Repr-Type', repr_type)
                     res.setHeader('Content-Length', result.body.length)
                     return my_end(209, result.body, 'Multiresponse')
                 } else if (Array.isArray(result)) {
                     // Range of history: send as 209 Multiresponse
-                    res.setHeader('Repr-Type', content_type)
+                    res.setHeader('Repr-Type', repr_type)
                     res.startMultiresponse()
                     for (var u of result)
                         res.sendUpdate({
@@ -481,7 +481,7 @@ function create_braid_text() {
                     res.sendUpdate({
                         version: result.version,
                         'Repr-Digest': get_digest(result.body),
-                        repr_type: content_type,
+                        repr_type,
                         body: result.body,
                     })
                     return res.end()
@@ -490,7 +490,7 @@ function create_braid_text() {
                 // ── Subscribe ──
                 all_subscriptions.add(res)
                 var aborter = new AbortController()
-                res.setHeader('Repr-Type', content_type)
+                res.setHeader('Repr-Type', repr_type)
                 res.startSubscription({
                     onClose: () => {
                         all_subscriptions.delete(res)
@@ -907,7 +907,7 @@ function create_braid_text() {
             }
             if (!options.dont_retry)
                 params.retry = () => true
-            for (var x of ['headers', 'parents', 'version', 'peer', 'body', 'patches'])
+            for (var x of ['headers', 'parents', 'version', 'peer', 'body', 'patches', 'repr_type'])
                 if (options[x] != null) params[x] = options[x]
 
             return { response: await braid_fetch(key.href, params) }

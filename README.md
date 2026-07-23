@@ -76,8 +76,18 @@ http_server.on("request", (req, res) => {
       - `patches` - Array of patches applied (each `{unit, range, content}`), or `null` for full-body replacements
       - `version` - The version after the PUT
       - `parents` - The version prior to the PUT
+    - `repr_type`: <small style="color:lightgrey">[optional]</small> Media type of the representation.  Defaults to `"text/plain"`.  Sent as `Repr-Type` header on all responses, and `Content-Type` on some responses.
   - This is the main method of this library, and does all the work to handle Braid-HTTP `GET` and `PUT` requests concerned with a specific text resource.
   - A `GET` with `Subscribe: true` and `Method-Override: HEAD` headers subscribes to header-only updates: each update carries just `Version` and `Parents` headers, with no body or patches — useful for cheaply knowing *that* something changed. (A `Method-Override: HEAD` on a `GET` without `Subscribe` acts like a normal `HEAD` request.)
+
+`braid_text.sync(local_key, remote_url, options)`
+  - Syncs a local resource to remote server. Updates to either object are synced to the other.
+    - `local_key` is a string
+    - `remote_url` is a `URL` object
+  - `options`: <small style="color:lightgrey">[optional]</small>
+    - `repr_type`: <small style="color:lightgrey">[optional]</small> Media type to sync.  (Sent as `Accept` header on `GET`, and `Repr-Type` & `Content-Type` on `PUT`s.)
+    - `headers`: <small style="color:lightgrey">[optional]</small> Extra HTTP headers for all requests. Put `Cookie` here for auth.
+    - `peer`: <small style="color:lightgrey">[optional]</small> Random ID for us. Cancels echoes of our own `PUT` from server.
 
 `await braid_text.get(key)`
   - `key`: ID of text resource.
