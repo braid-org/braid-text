@@ -367,7 +367,7 @@ function create_braid_text() {
 
         // ── Classify the request ──
 
-        var peer = req.headers['peer'],
+        var peer = req.peer,
             merge_type = req.headers['merge-type'] || 'simpleton'
         if (merge_type !== 'simpleton' && merge_type !== 'dt' && merge_type !== 'yjs')
             return my_end(400, `Unknown merge type: ${merge_type}`)
@@ -3808,7 +3808,7 @@ async function handle_cursors(resource, req, res) {
 
     if (!resource.cursors) resource.cursors = new cursor_state()
     var cursors = resource.cursors
-    var peer = req.headers['peer']
+    var peer = req.peer
 
     if (req.method === 'GET' || req.method === 'HEAD') {
         if (!req.subscribe) {
