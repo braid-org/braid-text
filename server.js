@@ -965,26 +965,22 @@ function create_braid_text() {
                         var syn_seq = 0
                         var version_before_yjs_sync = resource.version
                         var yjs_v_before = resource.dt.doc.getLocalVersion()
-                        var dt_bytes = []
                         var dt_ps = resource.version
                         for (var tp of text_patches) {
                             var tp_range = tp.range.match(/-?\d+/g).map(Number)
                             var tp_del = tp_range[1] - tp_range[0]
-                            var syn_v = `${syn_actor}-${syn_seq}`
                             if (tp_del) {
-                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0], tp_del, null))
+                                resource.dt.doc.applyRemoteOp(syn_actor, syn_seq, dt_ps, tp_range[0], tp_del, null)
                                 dt_ps = [`${syn_actor}-${syn_seq + tp_del - 1}`]
                                 syn_seq += tp_del
-                                syn_v = `${syn_actor}-${syn_seq}`
                             }
                             if (tp.content.length) {
-                                dt_bytes.push(dt_create_bytes(syn_v, dt_ps, tp_range[0], 0, tp.content))
+                                resource.dt.doc.applyRemoteOp(syn_actor, syn_seq, dt_ps, tp_range[0], 0, tp.content)
                                 var cp_len = [...tp.content].length
                                 dt_ps = [`${syn_actor}-${syn_seq + cp_len - 1}`]
                                 syn_seq += cp_len
                             }
                         }
-                        for (var b of dt_bytes) resource.dt.doc.mergeBytes(b)
                         resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
                         if (!resource.dt.known_versions[syn_actor])
                             resource.dt.known_versions[syn_actor] = new RangeSet()
@@ -1198,30 +1194,26 @@ function create_braid_text() {
             let version_before = resource.version
             let v_before = resource.dt.doc.getLocalVersion()
 
-            let bytes = []
-
             let offset = 0
             for (let p of patches) {
                 // delete
                 let del = p.range[1] - p.range[0]
                 if (del) {
-                    bytes.push(dt_create_bytes(v, ps, p.range[0] + offset, del, null))
+                    var [va, vs] = decode_version(v)
+                    resource.dt.doc.applyRemoteOp(va, vs, ps, p.range[0] + offset, del, null)
                     offset -= del
-                    v = decode_version(v)
-                    ps = [`${v[0]}-${v[1] + (del - 1)}`]
-                    v = `${v[0]}-${v[1] + del}`
+                    ps = [`${va}-${vs + (del - 1)}`]
+                    v = `${va}-${vs + del}`
                 }
                 // insert
                 if (p.content?.length) {
-                    bytes.push(dt_create_bytes(v, ps, p.range[1] + offset, 0, p.content))
+                    var [va, vs] = decode_version(v)
+                    resource.dt.doc.applyRemoteOp(va, vs, ps, p.range[1] + offset, 0, p.content)
                     offset += p.content_codepoints.length
-                    v = decode_version(v)
-                    ps = [`${v[0]}-${v[1] + (p.content_codepoints.length - 1)}`]
-                    v = `${v[0]}-${v[1] + p.content_codepoints.length}`
+                    ps = [`${va}-${vs + (p.content_codepoints.length - 1)}`]
+                    v = `${va}-${vs + p.content_codepoints.length}`
                 }
             }
-
-            for (let b of bytes) resource.dt.doc.mergeBytes(b)
             resource.val = resource.dt.doc.get()
             resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
@@ -1465,14 +1457,14 @@ function create_braid_text() {
         }
     }
 
-    // Rebuild DT version indexes from doc bytes
+    // Rebuild DT version indexes from the doc
     function rebuild_dt_indexes(resource) {
         resource.dt.known_versions = {}
-        dt_get_actor_seq_runs(resource.dt.doc.toBytes(), (actor, base, len) => {
+        for (var [actor, base, len] of resource.dt.doc.getAgentSeqRuns()) {
             if (!resource.dt.known_versions[actor])
                 resource.dt.known_versions[actor] = new RangeSet()
             resource.dt.known_versions[actor].add_range(base, base + len - 1)
-        })
+        }
     }
 
     // Set up a write-ahead-plus-compated-state log for a backend (DT or Yjs).
@@ -1657,8 +1649,7 @@ function create_braid_text() {
                         resource.dt.doc.mergeBytes(
                             dt_history instanceof Uint8Array ? dt_history : new Uint8Array(dt_history))
                     } else if (resource.val) {
-                        resource.dt.doc.mergeBytes(
-                            dt_create_bytes('999999999-0', [], 0, 0, resource.val))
+                        resource.dt.doc.applyRemoteOp('999999999', 0, [], 0, 0, resource.val)
                     }
                     rebuild_dt_indexes(resource)
                     resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
@@ -1706,8 +1697,7 @@ function create_braid_text() {
         if (resource.dt) return
         resource.dt = make_dt_backend()
         if (resource.val) {
-            resource.dt.doc.mergeBytes(
-                dt_create_bytes('999999999-0', [], 0, 0, resource.val))
+            resource.dt.doc.applyRemoteOp('999999999', 0, [], 0, 0, resource.val)
         }
         rebuild_dt_indexes(resource)
         resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
