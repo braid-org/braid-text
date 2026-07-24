@@ -726,8 +726,9 @@ function create_braid_text() {
             var bytes = null
             if (req_version || options.parents) {
                 if (req_version) {
-                    var doc = dt_get(resource.dt.doc, req_version)
-                    bytes = doc.toBytes()
+                    bytes = resource.dt.doc.toBytesAt(
+                        resource.dt.doc.remoteToLocalVersion(req_version))
+                    var doc = Doc.fromBytes(bytes)
                 } else {
                     bytes = resource.dt.doc.toBytes()
                     var doc = Doc.fromBytes(bytes)
