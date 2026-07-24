@@ -123,8 +123,7 @@ function create_braid_text() {
                     for (var event of version) looking_for.add(event)
 
                     var doc = resource.dt.doc
-                    var local = braid_text.dt_get_local_version(
-                        doc.toBytes(), [...looking_for], {tolerant: true})
+                    var local = doc.remoteToLocalVersion([...looking_for], true)
 
                     // mergeVersions requires each argument to be a valid
                     // frontier (no version dominating another), so fold the
@@ -735,7 +734,7 @@ function create_braid_text() {
                 }
                 if (options.parents)
                     bytes = doc.getPatchSince(
-                        dt_get_local_version(bytes, options.parents))
+                        doc.remoteToLocalVersion(options.parents))
                 doc.free()
             } else bytes = resource.dt.doc.toBytes()
             return { body: bytes }
@@ -854,7 +853,7 @@ function create_braid_text() {
                         if (getting.history === 'since-parents') {
                             var doc = Doc.fromBytes(bytes)
                             bytes = doc.getPatchSince(
-                                dt_get_local_version(bytes, options.parents))
+                                doc.remoteToLocalVersion(options.parents))
                             doc.free()
                         }
                         client.send_update({ status: false, 'Content-Encoding': 'dt', body: bytes })
@@ -1998,7 +1997,12 @@ function create_braid_text() {
     //////////////////////////////////////////////////////////////////
 
     function dt_len(doc, version) {
-        return count_code_points(dt_get_string(doc, version))
+        // optimization: if version is the latest,
+        // then return the current length..
+        if (v_eq(version, doc.getRemoteVersion().map((x) => x.join("-")).sort()))
+            return doc.len()
+
+        return doc.lenAt(doc.remoteToLocalVersion(version))
     }
 
     function dt_get_string(doc, version) {
@@ -2007,18 +2011,7 @@ function create_braid_text() {
         if (v_eq(version, doc.getRemoteVersion().map((x) => x.join("-")).sort()))
             return doc.get()
 
-        var bytes = doc.toBytes()
-        var oplog = OpLog.fromBytes(bytes)
-
-        var local_version = dt_get_local_version(bytes, version)
-
-        var b = new Branch()
-        b.merge(oplog, new Uint32Array(local_version))
-        var s = b.get()
-        b.free()
-        
-        oplog.free()
-        return s
+        return doc.getStringAt(doc.remoteToLocalVersion(version))
     }
 
     function dt_get(doc, version, agent = null, anti_version = null) {

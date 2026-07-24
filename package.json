@@ -26,7 +26,7 @@
     "server-demo.js"
   ],
   "dependencies": {
-    "@braid.org/diamond-types-node": "^2.0.1",
+    "@braid.org/diamond-types-node": "^2.2.1",
     "braid-http": "~1.4.6"
   },
   "devDependencies": {
