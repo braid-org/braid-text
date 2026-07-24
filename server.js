@@ -1228,13 +1228,7 @@ function create_braid_text() {
                     : { range: [xf.start, xf.end], content: "" }
                 )
             }
-            var xf_patches = relative_to_absolute_patches(
-                xf_patches_relative.map(p => ({
-                    unit: 'text',
-                    range: `[${p.range[0]}:${p.range[1]}]`,
-                    content: p.content
-                }))
-            )
+            var xf_patches = resource.dt.doc.getXFPatches(v_before)
 
             // Sync to Yjs if it exists, using relative (sequential) patches
             if (resource.yjs) {
@@ -2524,24 +2518,7 @@ function create_braid_text() {
     }
 
     function get_xf_patches(doc, v) {
-        let patches = []
-        for (let xf of doc.xfSince(v)) {
-            patches.push(
-                xf.kind == "Ins"
-                    ? {
-                        unit: "text",
-                        range: `[${xf.start}:${xf.start}]`,
-                        content: xf.content,
-                    }
-                : {
-                    unit: "text",
-                    range: `[${xf.start}:${xf.end}]`,
-                    content: "",
-                }
-            )
-        }
-        var result = relative_to_absolute_patches(patches)
-        return result
+        return doc.getXFPatches(v)
     }
 
     function relative_to_absolute_patches(patches) {
