@@ -491,11 +491,8 @@ function create_braid_text() {
                     res.setHeader('Repr-Type', repr_type)
                     res.startMultiresponse()
                     for (var u of result)
-                        res.sendUpdate({
-                            version: [u.version],
-                            parents: u.parents,
-                            patches: [{ unit: u.unit, range: u.range, content: u.content }],
-                        })
+                        res.sendUpdate({ version: u.version, parents: u.parents,
+                                         patches: u.patches })
                     return res.end()
                 } else {
                     res.sendUpdate({
@@ -819,7 +816,7 @@ function create_braid_text() {
             await ensure_dt_exists(resource)
 
             if (getting.history && !getting.subscribe)
-                return dt_get_patches(resource.dt.doc,
+                return dt_get_updates(resource.dt.doc,
                                       getting.history === 'since-parents' ? options.parents : undefined)
 
             if (getting.subscribe) {
@@ -852,7 +849,7 @@ function create_braid_text() {
             await ensure_dt_exists(resource)
 
             if (getting.history && !getting.subscribe)
-                return dt_get_patches(resource.dt.doc,
+                return dt_get_updates(resource.dt.doc,
                                       getting.history === 'since-parents' ? options.parents : undefined)
 
             if (getting.subscribe) {
@@ -885,16 +882,15 @@ function create_braid_text() {
                 } else {
                     if (getting.history === 'up-to-version') {
                         client.send_update({ version: [], parents: [], body: "" })
-                        var updates = dt_get_patches(resource.dt.doc)
+                        var updates = dt_get_updates(resource.dt.doc)
                     } else if (getting.history === 'since-parents')
-                        var updates = dt_get_patches(resource.dt.doc, options.parents || options.version)
+                        var updates = dt_get_updates(resource.dt.doc, options.parents || options.version)
 
                     if (updates) {
                         for (var u of updates)
-                            client.send_update({
-                                version: [u.version], parents: u.parents,
-                                patches: [{ unit: u.unit, range: u.range, content: u.content }],
-                            })
+                            client.send_update({ version: u.version,
+                                                 parents: u.parents,
+                                                 patches: u.patches })
 
                     }
                 }
@@ -1972,26 +1968,26 @@ function create_braid_text() {
 
     function validate_old_patches(resource, base_v, parents, patches) {
         // if we have seen it already, make sure it's the same as before
-        let updates = dt_get_patches(resource.dt.doc, parents)
+        let updates = dt_get_updates(resource.dt.doc, parents)
 
         let seen = {}
         for (let u of updates) {
-            u.version = decode_version(u.version)
+            let v = decode_version(u.version[0])
+            let patch = u.patches[0]
+            let [start, end] = patch.range.match(/\d+/g).map(Number)
 
-            if (!u.content) {
+            if (!patch.content) {
                 // delete
-                let v = u.version
-                for (let i = 0; i < u.end - u.start; i++) {
-                    let ps = (i < u.end - u.start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
-                    seen[JSON.stringify([v[0], v[1] - i, ps, u.start + i])] = true
+                for (let i = 0; i < end - start; i++) {
+                    let ps = (i < end - start - 1) ? [`${v[0]}-${v[1] - i - 1}`] : u.parents
+                    seen[JSON.stringify([v[0], v[1] - i, ps, start + i])] = true
                 }
             } else {
                 // insert
-                let v = u.version
-                let content = [...u.content]
+                let content = [...patch.content]
                 for (let i = 0; i < content.length; i++) {
                     let ps = (i > 0) ? [`${v[0]}-${v[1] - content.length + i}`] : u.parents
-                    seen[JSON.stringify([v[0], v[1] + 1 - content.length + i, ps, u.start + i, content[i]])] = true
+                    seen[JSON.stringify([v[0], v[1] + 1 - content.length + i, ps, start + i, content[i]])] = true
                 }
             }
         }
@@ -2048,8 +2044,8 @@ function create_braid_text() {
         return doc.getStringAt(doc.remoteToLocalVersion(version))
     }
 
-    function dt_get_patches(doc, version = null) {
-        return doc.getPatches(version)
+    function dt_get_updates(doc, version = null) {
+        return doc.getUpdates(version)
     }
 
     // Accepts Uint8Array or plain array (external callers pass either),
@@ -3269,7 +3265,7 @@ function create_braid_text() {
     braid_text.encode_filename = encode_filename
     braid_text.decode_filename = decode_filename
 
-    braid_text.dt_get_patches = dt_get_patches
+    braid_text.dt_get_updates = dt_get_updates
     braid_text.dt_create_bytes = dt_create_bytes
 
     braid_text.decode_version = decode_version
