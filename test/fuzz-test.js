@@ -1,7 +1,7 @@
 
 let { Doc } = require("@braid.org/diamond-types-node")
 let braid_text = require('../server.js')
-let {dt_get, dt_get_patches, dt_parse, dt_create_bytes, dt_get_local_version, RangeSet} = braid_text
+let {dt_get_patches, dt_create_bytes, RangeSet} = braid_text
 
 process.on("unhandledRejection", (x) =>
     console.log(`unhandledRejection: ${x.stack ?? x}`)
@@ -25,108 +25,6 @@ async function test_db() {
     braid_text.db_folder = null
 }
 
-async function test_dt_get_local_version() {
-    for (var tt = 0; tt < 100; tt++) {
-        var st = Date.now()
-
-        var doc = new Doc('x')
-        var n = 100
-        var v_array = []
-        var p_array = []
-        var agents = ['hi']
-        var agent_rangesets = {}
-
-        for (var i = 0; i < n; i++) {
-            // console.log(`i = ${i}`)
-
-            // Math.randomSeed('seed::::' + i)
-
-            var agent = agents[0]
-
-            var seq = null
-            if (!agent_rangesets[agent]) agent_rangesets[agent] = new RangeSet()
-            var ranges = agent_rangesets[agent].ranges
-            if (!ranges.length) {
-                seq = Math.floor(Math.random() * 10)
-            } else {
-                var ii
-                if (ranges[0]?.[0] === 0)
-                    ii = Math.floor(Math.random() * ranges.length)
-                else
-                    ii = Math.floor(Math.random() * (ranges.length + 1)) - 1
-                var low = ii < 0 ? 0 : ranges[ii][1] + 1
-                var high = ii + 1 < ranges.length ? ranges[ii + 1][0] - 1 : ranges[ii][1] + 10
-                seq = Math.random() < 0.8 ? low : low + Math.floor(Math.random() * (high - low + 1))
-            }
-            agent_rangesets[agent].add_range(seq, seq)
-            v_array.push(`${agent}-${seq}`)
-
-            var parents = []
-            var shadow = new Set()
-            if (p_array.length) {
-                var starting_point = Math.floor(Math.random() * p_array.length)
-                parents.push(starting_point)
-                for (var p of p_array[starting_point]) shadow.add(p)
-                for (var ii = starting_point - 1; ii >= 0 && Math.random() < 0.9; ii--) {
-                    if (!shadow.has(ii) && Math.random() < 0.5) {
-                        parents.push(ii)
-                        shadow.add(ii)
-                    }
-                    if (shadow.has(ii))
-                        for (var p of p_array[ii])
-                            shadow.add(p)
-                }
-            }
-            p_array.push(parents)
-            parents = parents.map(p => v_array[p])
-        
-            let args = [`${agent}-${seq}`, parents, 0, 0, 'x']
-            // console.log(args)
-
-            doc.mergeBytes(dt_create_bytes(...args))
-        }
-
-        var bytes = doc.toBytes()
-
-        for (var t = 0; t < 100; t++) {
-            // if (t % 10 === 0) console.log(`  t = ${t}`)
-
-            var version = []
-            var vv_array = [...v_array]
-            while (!version.length || (vv_array.length && Math.random() < 0.9)) {
-                version.push(vv_array.splice(Math.floor(Math.random() * vv_array.length), 1)[0])
-            }
-
-            var local_new = dt_get_local_version(bytes, version)
-            var local_old = old_dt_get_local_version(bytes, version)
-
-            if (local_new.some((x, i) => x != local_old[i])) {
-                throw new Error('bad!')
-            }
-        }
-
-        console.log(`[tt=${tt}] total T = ${Date.now() - st}`)
-    }
-}
-
-function old_dt_get_local_version(bytes, version) {
-    var [_agents, versions, _parentss] = dt_parse([...bytes])
-
-    var frontier = new Set(version)
-
-    var local_version = []
-    for (var i = 0; i < versions.length; i++) {
-        var v = versions[i].join("-")
-        if (frontier.has(v)) {
-            local_version.push(i)
-            frontier.delete(v)
-        }
-    }
-
-    if (frontier.size) throw new Error(`version not found: ${version}`)
-
-    return local_version
-}
 
 async function test_misc() {
     // make sure we get a "missing parent version"
@@ -152,7 +50,6 @@ async function main() {
 
     await test_misc()
 
-    await test_dt_get_local_version()
 
     await test_db()
 
@@ -192,7 +89,7 @@ async function main() {
                 await braid_text.get(key, {})
                 for (let x of dt_get_patches(doc)) {
                     var resource = await braid_text.get_resource(key)
-                    var [actor, seq] = braid_text.decode_version(x.version)
+                    var [agent, seq] = braid_text.decode_version(x.version)
                     var old_text = await braid_text.get(key)
 
                     console.log(`x = `, x)
@@ -309,7 +206,14 @@ async function main() {
 }
 
 function make_random_edit(doc) {
-    let [agents, versions, _parentss] = dt_parse([...doc.toBytes()])
+    // DT hands back history as (agent, first seq, length) runs, in the order
+    // the versions were created. Expand them to the per-edit list this
+    // generator wants.
+    let runs = doc.getAgentSeqRuns()
+    let agents = [...new Set(runs.map(r => r[0]))]
+    let versions = []
+    for (let [a, base, len] of runs)
+        for (let k = 0; k < len; k++) versions.push([a, base + k])
 
     let agent = (agents.length && Math.random() > 0.5) ?
         agents[Math.floor(Math.random() * agents.length)] :
@@ -340,7 +244,8 @@ function make_random_edit(doc) {
 
     console.log({agents, versions, include_versions})
 
-    let parent_doc = dt_get(doc, include_versions)
+    let parent_doc = Doc.fromBytes(
+        doc.toBytesAt(doc.remoteToLocalVersion(include_versions)))
 
     let parents = parent_doc.getRemoteVersion().map(x => x.join('-'))
 

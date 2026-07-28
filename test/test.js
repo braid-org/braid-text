@@ -1140,10 +1140,11 @@ async function runConsoleTests() {
             await tick()
 
             var r = await braid_text.get_resource(key)
+            var server_text = r.val
             if (r.dt) r.dt.doc.free()
             if (r.yjs) r.yjs.doc.destroy()
             delete braid_text.cache[key]
-            return simp.text === r.val ? 'ok' : 'simp=' + simp.text + ' server=' + r.val
+            return simp.text === server_text ? 'ok' : 'simp=' + simp.text + ' server=' + server_text
         }, 'ok'],
 
         ['convergence: simpleton sends edit, receives external, sends another', async () => {
@@ -1206,10 +1207,11 @@ async function runConsoleTests() {
             await tick()
 
             var r = await braid_text.get_resource(key)
+            var server_text = r.val
             if (r.dt) r.dt.doc.free()
             if (r.yjs) r.yjs.doc.destroy()
             delete braid_text.cache[key]
-            return simp.text === r.val ? 'ok' : 'simp=' + simp.text + ' server=' + r.val
+            return simp.text === server_text ? 'ok' : 'simp=' + simp.text + ' server=' + server_text
         }, 'ok'],
 
 

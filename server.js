@@ -9,6 +9,11 @@ try { Y = require('yjs') } catch(e) {}
 
 var all_subscriptions = new Set()
 
+// The default put_cb. Serving a PUT compares this by identity to tell
+// whether anyone actually wants the document's text, which is worth
+// knowing because producing it costs O(document length).
+var no_put_cb = (key, val, params) => { }
+
 // Converts this to a forced serialized function, that is only called one at a
 // time, and in order.  Even if the inner `fun` is async, it will guarantee
 // that the prior one is always finished before the next one is called.
@@ -87,6 +92,12 @@ function create_braid_text() {
 
         var resource = (typeof local_key == 'string') ? await get_resource(local_key) : local_key
         await ensure_dt_exists(resource)
+
+        // How the remote is named in our own subscription bookkeeping, so an
+        // edit that arrived from it doesn't get sent straight back. The full
+        // URL because several remotes can live on one host. This never goes
+        // over the wire; options.peer is what identifies us out there.
+        var remote_peer = remote_url.href
 
         if (!resource.meta.fork_point && options.fork_point_hint) {
             resource.meta.fork_point = options.fork_point_hint
@@ -183,16 +194,26 @@ function create_braid_text() {
                 if (signal.aborted) return
 
                 if (!resource.meta.fork_point) {
-                    // Binary search through local DT history
-                    var bytes = resource.dt.doc.toBytes()
-                    var [_, events, __] = braid_text.dt_parse(bytes)
-                    events = events.map(x => x.join('-'))
+                    // Binary search our history for the most recent version
+                    // the remote knows, asking about whole runs rather than
+                    // individual edits. A run is a stretch of consecutive
+                    // edits by one author, and there are far fewer of them: a
+                    // document with half a million edits typically has a few
+                    // hundred runs, which is several round trips saved.
+                    //
+                    // The fork point this settles on lands on a run boundary,
+                    // so it can sit slightly earlier in history than the
+                    // finest one available. That only costs re-sending the
+                    // edits in between, which both sides already discard as
+                    // duplicates.
+                    var runs = resource.dt.doc.getAgentSeqRuns()
+                    var last_edit_of = (run) => `${run[0]}-${run[1] + run[2] - 1}`
 
                     var min = -1
-                    var max = events.length
+                    var max = runs.length
                     while (min + 1 < max) {
                         var i = Math.floor((min + max) / 2)
-                        var version = [events[i]]
+                        var version = [last_edit_of(runs[i])]
                         if (await check_version(version)) {
                             if (signal.aborted) return
                             min = i
@@ -253,7 +274,7 @@ function create_braid_text() {
                 braid_text.get(local_key, {
                     signal,
                     merge_type: 'dt',
-                    peer: options.peer,
+                    peer: remote_peer,
                     ...resource.meta.fork_point && {parents: resource.meta.fork_point},
                     subscribe: update => {
                         if (signal.aborted) return
@@ -294,7 +315,7 @@ function create_braid_text() {
                             await braid_text.put(local_key, {
                                 body: update.body,
                                 transfer_encoding: 'dt',
-                                peer: options.peer
+                                peer: remote_peer
                             })
                             if (signal.aborted) return
                             if (remote_current_version) extend_fork_point({
@@ -303,7 +324,7 @@ function create_braid_text() {
                             })
                         } else {
                             // Text patches: forward as-is
-                            if (options.peer) update.peer = options.peer
+                            update.peer = remote_peer
                             await braid_text.put(local_key, update)
                             if (signal.aborted) return
                             if (update.version) extend_fork_point(update)
@@ -329,7 +350,7 @@ function create_braid_text() {
         options = {
             key: req.url.split('?')[0],
             repr_type: options.repr_type || options.content_type || 'text/plain',
-            put_cb: (key, val, params) => { },
+            put_cb: no_put_cb,
             ...options
         }
 
@@ -397,8 +418,8 @@ function create_braid_text() {
             // Validate requested versions exist
             var unknowns = []
             for (var event of (req.version || []).concat(req.parents || [])) {
-                var [actor, seq] = decode_version(event)
-                if (!resource.dt?.known_versions[actor]?.has(seq))
+                var [agent, seq] = decode_version(event)
+                if (!resource.dt?.doc.knownSeqSpan(agent, seq, seq))
                     unknowns.push(event)
             }
             if (unknowns.length)
@@ -560,7 +581,7 @@ function create_braid_text() {
                     await ensure_dt_exists(resource)
                     await wait_for_events(
                         options.key, req.parents,
-                        resource.dt.known_versions,
+                        resource.dt.doc,
                         body != null ? body.length :
                             patches.reduce((a, b) => a + b.range.length + b.content.length, 0),
                         options.recv_buffer_max_time,
@@ -568,8 +589,8 @@ function create_braid_text() {
 
                     var unknowns = []
                     for (var event of req.parents) {
-                        var [actor, seq] = decode_version(event)
-                        if (!resource.dt.known_versions[actor]?.has(seq))
+                        var [agent, seq] = decode_version(event)
+                        if (!resource.dt.doc.knownSeqSpan(agent, seq, seq))
                             unknowns.push(event)
                     }
                     if (unknowns.length)
@@ -580,7 +601,8 @@ function create_braid_text() {
                 }
 
                 // Apply the edit
-                var old_val = resource.val
+                var wants_text = options.put_cb !== no_put_cb
+                var old_val = wants_text ? resource.val : null
                 var old_version = resource.version
                 var put_patches = patches?.map(p => ({
                     unit: p.unit, range: p.range, content: p.content
@@ -602,10 +624,11 @@ function create_braid_text() {
 
                 res.setHeader('Version', current_version())
 
-                options.put_cb(options.key, resource.val, {
-                    old_val, patches: put_patches,
-                    version: resource.version, parents: old_version
-                })
+                if (wants_text)
+                    options.put_cb(options.key, resource.val, {
+                        old_val, patches: put_patches,
+                        version: resource.version, parents: old_version
+                    })
             } catch (e) {
                 console.log(`${req.method} ERROR: ${e.stack}`)
                 return done_my_turn(500, 'The server failed to apply this version. The error generated was: ' + e)
@@ -724,19 +747,22 @@ function create_braid_text() {
             if (req_version && v_eq(req_version, version)) req_version = null
 
             var bytes = null
-            if (req_version || options.parents) {
-                if (req_version) {
-                    bytes = resource.dt.doc.toBytesAt(
-                        resource.dt.doc.remoteToLocalVersion(req_version))
+            if (req_version) {
+                // History as of the requested version, then -- if they also
+                // said where they're up to -- narrowed to what came after it
+                bytes = resource.dt.doc.toBytesAt(
+                    resource.dt.doc.remoteToLocalVersion(req_version))
+                if (options.parents) {
                     var doc = Doc.fromBytes(bytes)
-                } else {
-                    bytes = resource.dt.doc.toBytes()
-                    var doc = Doc.fromBytes(bytes)
-                }
-                if (options.parents)
                     bytes = doc.getPatchSince(
                         doc.remoteToLocalVersion(options.parents))
-                doc.free()
+                    doc.free()
+                }
+            } else if (options.parents) {
+                // Everything after where they're up to, read straight off the
+                // live document
+                bytes = resource.dt.doc.getPatchSince(
+                    resource.dt.doc.remoteToLocalVersion(options.parents))
             } else bytes = resource.dt.doc.toBytes()
             return { body: bytes }
         }
@@ -850,13 +876,10 @@ function create_braid_text() {
                     if (!getting.history)
                         client.send_update({ status: false, 'Content-Encoding': 'dt', body: new Doc().toBytes() })
                     else {
-                        var bytes = resource.dt.doc.toBytes()
-                        if (getting.history === 'since-parents') {
-                            var doc = Doc.fromBytes(bytes)
-                            bytes = doc.getPatchSince(
-                                doc.remoteToLocalVersion(options.parents))
-                            doc.free()
-                        }
+                        var bytes = getting.history === 'since-parents'
+                            ? resource.dt.doc.getPatchSince(
+                                resource.dt.doc.remoteToLocalVersion(options.parents))
+                            : resource.dt.doc.toBytes()
                         client.send_update({ status: false, 'Content-Encoding': 'dt', body: bytes })
                     }
                 } else {
@@ -962,30 +985,31 @@ function create_braid_text() {
                 if (resource.dt && delta) {
                     var text_patches = yjs_delta_to_patches(delta, prev_text)
                     if (text_patches.length) {
-                        var syn_actor = `yjs-${Date.now()}-${Math.random().toString(36).slice(2)}`
+                        var syn_agent = `yjs-${Date.now()}-${Math.random().toString(36).slice(2)}`
                         var syn_seq = 0
                         var version_before_yjs_sync = resource.version
                         var yjs_v_before = resource.dt.doc.getLocalVersion()
+                        var dt_ops = []
                         var dt_ps = resource.version
                         for (var tp of text_patches) {
                             var tp_range = tp.range.match(/-?\d+/g).map(Number)
                             var tp_del = tp_range[1] - tp_range[0]
                             if (tp_del) {
-                                resource.dt.doc.applyRemoteOp(syn_actor, syn_seq, dt_ps, tp_range[0], tp_del, null)
-                                dt_ps = [`${syn_actor}-${syn_seq + tp_del - 1}`]
+                                dt_ops.push({ agent: syn_agent, seq: syn_seq,
+                                              parents: dt_ps, pos: tp_range[0], del: tp_del })
+                                dt_ps = [`${syn_agent}-${syn_seq + tp_del - 1}`]
                                 syn_seq += tp_del
                             }
                             if (tp.content.length) {
-                                resource.dt.doc.applyRemoteOp(syn_actor, syn_seq, dt_ps, tp_range[0], 0, tp.content)
+                                dt_ops.push({ agent: syn_agent, seq: syn_seq,
+                                              parents: dt_ps, pos: tp_range[0], ins: tp.content })
                                 var cp_len = [...tp.content].length
-                                dt_ps = [`${syn_actor}-${syn_seq + cp_len - 1}`]
+                                dt_ps = [`${syn_agent}-${syn_seq + cp_len - 1}`]
                                 syn_seq += cp_len
                             }
                         }
+                        resource.dt.doc.applyRemoteOps(dt_ops)
                         resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
-                        if (!resource.dt.known_versions[syn_actor])
-                            resource.dt.known_versions[syn_actor] = new RangeSet()
-                        resource.dt.known_versions[syn_actor].add_range(0, syn_seq - 1)
                         await resource.dt.log.save(resource.dt.doc.getPatchSince(yjs_v_before))
 
                         // Broadcast to simpleton and DT clients
@@ -1061,12 +1085,8 @@ function create_braid_text() {
                 resource.dt.doc.mergeBytes(body)
 
                 var end_i = resource.dt.doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
-                for (var i = start_i; i <= end_i; i++) {
-                    let v = resource.dt.doc.localToRemoteVersion([i])[0]
-                    if (!resource.dt.known_versions[v[0]]) resource.dt.known_versions[v[0]] = new braid_text.RangeSet()
-                    resource.dt.known_versions[v[0]].add_range(v[1], v[1])
-                }
-                resource.val = resource.dt.doc.get()
+
+                resource.invalidate_val()
                 resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
                 await resource.dt.log.save(body)
@@ -1099,7 +1119,7 @@ function create_braid_text() {
                 // make sure we have all these parents
                 for (let p of parents) {
                     let P = decode_version(p)
-                    if (!resource.dt.known_versions[P[0]]?.has(P[1]))
+                    if (!resource.dt.doc.knownSeqSpan(P[0], P[1], P[1]))
                         throw new Error(`missing parent version: ${p}`)
                 }
             }
@@ -1134,14 +1154,14 @@ function create_braid_text() {
             // or patches that delete and insert zero characters.
             if (change_count === 0) return { dt: { change_count } }
 
-            version = version?.[0] || `${(is_valid_actor(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
+            version = version?.[0] || `${(is_valid_agent(peer) && peer) || Math.random().toString(36).slice(2, 7)}-${change_count - 1}`
 
             let v = decode_version(version)
             var low_seq = v[1] + 1 - change_count
             if (low_seq < 0) throw new Error(`version seq ${v[1]} is too low for ${change_count} changes — use seq >= ${change_count - 1}`)
 
             // make sure we haven't seen this already
-            var intersects_range = resource.dt.known_versions[v[0]]?.has(low_seq, v[1])
+            var intersects_range = resource.dt.doc.knownSeqSpan(v[0], low_seq, v[1])
             if (intersects_range) {
                 // if low_seq is below the range min,
                 // then the intersection has gaps,
@@ -1184,9 +1204,6 @@ function create_braid_text() {
                 a + (b.content_codepoints?.length ?? 0) - (b.range[1] - b.range[0]),
                 max_pos))
 
-            if (!resource.dt.known_versions[v[0]]) resource.dt.known_versions[v[0]] = new RangeSet()
-            resource.dt.known_versions[v[0]].add_range(low_seq, v[1])
-
             // get the version of the first character-wise edit
             v = `${v[0]}-${low_seq}`
 
@@ -1195,13 +1212,19 @@ function create_braid_text() {
             let version_before = resource.version
             let v_before = resource.dt.doc.getLocalVersion()
 
+            // Collect the whole write before handing it to DT. Each op is
+            // positioned against the document as it stood at its own parents,
+            // so they can all go in together, and one merge at the end brings
+            // the document up to date for the lot of them.
+            let ops = []
             let offset = 0
             for (let p of patches) {
                 // delete
                 let del = p.range[1] - p.range[0]
                 if (del) {
                     var [va, vs] = decode_version(v)
-                    resource.dt.doc.applyRemoteOp(va, vs, ps, p.range[0] + offset, del, null)
+                    ops.push({ agent: va, seq: vs, parents: ps,
+                               pos: p.range[0] + offset, del })
                     offset -= del
                     ps = [`${va}-${vs + (del - 1)}`]
                     v = `${va}-${vs + del}`
@@ -1209,30 +1232,36 @@ function create_braid_text() {
                 // insert
                 if (p.content?.length) {
                     var [va, vs] = decode_version(v)
-                    resource.dt.doc.applyRemoteOp(va, vs, ps, p.range[1] + offset, 0, p.content)
+                    ops.push({ agent: va, seq: vs, parents: ps,
+                               pos: p.range[1] + offset, ins: p.content })
                     offset += p.content_codepoints.length
                     ps = [`${va}-${vs + (p.content_codepoints.length - 1)}`]
                     v = `${va}-${vs + p.content_codepoints.length}`
                 }
             }
-            resource.val = resource.dt.doc.get()
+            resource.dt.doc.applyRemoteOps(ops)
+            resource.invalidate_val()
             resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
 
-            // Get transformed patches (resolved after DT merge)
-            // xf_patches: absolute positions (for simpleton clients)
-            // xf_patches_relative: sequential positions (for Yjs sync)
-            var xf_patches_relative = []
-            for (let xf of resource.dt.doc.xfSince(v_before)) {
-                xf_patches_relative.push(
-                    xf.kind == "Ins"
-                        ? { range: [xf.start, xf.start], content: xf.content }
-                    : { range: [xf.start, xf.end], content: "" }
-                )
-            }
+            // What this write changed, transformed against everything it
+            // merged with, in absolute positions: what simpleton clients and
+            // subscribers receive.
             var xf_patches = resource.dt.doc.getXFPatches(v_before)
 
             // Sync to Yjs if it exists, using relative (sequential) patches
             if (resource.yjs) {
+                // Yjs applies edits one after another, so it wants the same
+                // changes in relative positions -- each one read against the
+                // document as the previous ones left it.
+                var xf_patches_relative = []
+                for (let xf of resource.dt.doc.xfSince(v_before)) {
+                    xf_patches_relative.push(
+                        xf.kind == "Ins"
+                            ? { range: [xf.start, xf.start], content: xf.content }
+                        : { range: [xf.start, xf.end], content: "" }
+                    )
+                }
+
                 var captured_yjs_update = null
                 var yjs_update_handler = (update, origin) => {
                     if (origin === 'braid_text_dt_sync') captured_yjs_update = update
@@ -1432,7 +1461,6 @@ function create_braid_text() {
     function make_dt_backend() {
         return {
             doc: new Doc("server"),
-            known_versions: {},
             length_at_version: create_simple_cache(braid_text.length_cache_size),
             clients: new Set(),
             log: { save: () => {} },
@@ -1449,16 +1477,6 @@ function create_braid_text() {
             channel,
             clients: new Set(),
             log: { save: () => {} },
-        }
-    }
-
-    // Rebuild DT version indexes from the doc
-    function rebuild_dt_indexes(resource) {
-        resource.dt.known_versions = {}
-        for (var [actor, base, len] of resource.dt.doc.getAgentSeqRuns()) {
-            if (!resource.dt.known_versions[actor])
-                resource.dt.known_versions[actor] = new RangeSet()
-            resource.dt.known_versions[actor].add_range(base, base + len - 1)
         }
     }
 
@@ -1567,7 +1585,8 @@ function create_braid_text() {
                 dt: null,
                 yjs: null,
                 simpleton: { clients: new Set() },
-                val: '',
+                _val: '',
+                _val_stale: false,
                 version: [],
                 cursors: null,
                 // Returns all subscriber clients across all merge types
@@ -1577,7 +1596,35 @@ function create_braid_text() {
                     if (this.yjs) all.push(...this.yjs.clients)
                     return all
                 },
+                // Drop the cached text, so the next read of .val rebuilds it
+                // from DT. Callers that change the DT document use this
+                // instead of assigning, so that a document written many times
+                // without being read only pays to build its text once.
+                invalidate_val() { this._val_stale = true },
             }
+
+            // The document's text.
+            //
+            // This is a cache over the DT document's rope rather than a second
+            // source of truth: building it copies the whole document, so we do
+            // it on demand and hold the result until the document next
+            // changes. Assigning stores a value directly, which is how
+            // Yjs-backed and plain-text resources -- the ones with no DT
+            // document to rebuild from -- keep it up to date.
+            Object.defineProperty(resource, 'val', {
+                enumerable: true,
+                get() {
+                    if (this._val_stale) {
+                        this._val = this.dt.doc.get()
+                        this._val_stale = false
+                    }
+                    return this._val
+                },
+                set(v) {
+                    this._val = v
+                    this._val_stale = false
+                },
+            })
 
             // Always load meta first
             await setup_meta(resource)
@@ -1599,8 +1646,7 @@ function create_braid_text() {
                 await setup_compacting_log(resource, 'dt',
                                            (bytes) => resource.dt.doc.mergeBytes(bytes),
                                            () => resource.dt.doc.toBytes())
-                rebuild_dt_indexes(resource)
-                resource.val = resource.dt.doc.get()
+                resource.invalidate_val()
                 resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
             }
             if (has_yjs) {
@@ -1646,9 +1692,8 @@ function create_braid_text() {
                     } else if (resource.val) {
                         resource.dt.doc.applyRemoteOp('999999999', 0, [], 0, 0, resource.val)
                     }
-                    rebuild_dt_indexes(resource)
                     resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
-                    if (!resource.val) resource.val = resource.dt.doc.get()
+                    if (!resource.val) resource.invalidate_val()
                     await setup_compacting_log(resource, 'dt',
                                                (bytes) => resource.dt.doc.mergeBytes(bytes),
                                                () => resource.dt.doc.toBytes())
@@ -1666,6 +1711,9 @@ function create_braid_text() {
 
             // Delete method
             resource.delete = async () => {
+                // Settle the text while there's still a document to build it
+                // from, so a caller holding this resource can still read it
+                resource.val
                 if (resource.dt) resource.dt.doc.free()
                 if (resource.yjs) resource.yjs.doc.destroy()
                 delete braid_text.cache[key]
@@ -1690,11 +1738,12 @@ function create_braid_text() {
     // Internal: create DT backend on demand, synced from resource.val
     async function ensure_dt_exists(resource) {
         if (resource.dt) return
+        // Read the text before there's a DT document to read it from
+        var text = resource.val
         resource.dt = make_dt_backend()
-        if (resource.val) {
-            resource.dt.doc.applyRemoteOp('999999999', 0, [], 0, 0, resource.val)
+        if (text) {
+            resource.dt.doc.applyRemoteOp('999999999', 0, [], 0, 0, text)
         }
-        rebuild_dt_indexes(resource)
         resource.version = resource.dt.doc.getRemoteVersion().map(x => x.join("-")).sort()
         await setup_compacting_log(resource, 'dt',
                                    (bytes) => resource.dt.doc.mergeBytes(bytes),
@@ -1824,7 +1873,7 @@ function create_braid_text() {
     async function wait_for_events(
         key,
         events,
-        actor_seqs,
+        doc,
         my_space,
         max_time = 3000,
         max_space = 5 * 1024 * 1024) {
@@ -1847,13 +1896,13 @@ function create_braid_text() {
         }
         
         for (let event of events) {
-            var [actor, seq] = decode_version(event)
-            if (actor_seqs?.[actor]?.has(seq)) continue
+            var [agent, seq] = decode_version(event)
+            if (doc?.knownSeqSpan(agent, seq, seq)) continue
             missing++
 
-            if (!ns.actor_seqs) ns.actor_seqs = {}
-            if (!ns.actor_seqs[actor]) ns.actor_seqs[actor] = []
-            sorted_set_insert(ns.actor_seqs[actor], seq)
+            if (!ns.agent_seqs) ns.agent_seqs = {}
+            if (!ns.agent_seqs[agent]) ns.agent_seqs[agent] = []
+            sorted_set_insert(ns.agent_seqs[agent], seq)
 
             if (!ns.events) ns.events = {}
             if (!ns.events[event]) ns.events[event] = new Set()
@@ -1863,8 +1912,8 @@ function create_braid_text() {
         if (missing) {
             var t = setTimeout(() => {
                 for (let event of events) {
-                    var [actor, seq] = decode_version(event)
-                    
+                    var [agent, seq] = decode_version(event)
+
                     var cbs = ns.events[event]
                     if (!cbs) continue
 
@@ -1873,13 +1922,13 @@ function create_braid_text() {
 
                     delete ns.events[event]
 
-                    var seqs = ns.actor_seqs[actor]
+                    var seqs = ns.agent_seqs[agent]
                     if (!seqs) continue
 
                     sorted_set_delete(seqs, seq)
                     if (seqs.length) continue
-                    
-                    delete ns.actor_seqs[actor]
+
+                    delete ns.agent_seqs[agent]
                 }
                 p_done()
             }, max_time)
@@ -1895,10 +1944,10 @@ function create_braid_text() {
         var ns = wait_for_events.namespaces?.[key]
         if (!ns) return
 
-        var [actor, seq] = decode_version(event)
+        var [agent, seq] = decode_version(event)
         var base_seq = seq + 1 - change_count
 
-        var seqs = ns.actor_seqs?.[actor]
+        var seqs = ns.agent_seqs?.[agent]
         if (!seqs) return
 
         // binary search to find the first i >= base_seq
@@ -1911,14 +1960,14 @@ function create_braid_text() {
 
         // iterate up through seq
         while (i < seqs.length && seqs[i] <= seq) {
-            var e = actor + "-" + seqs[i]
+            var e = agent + "-" + seqs[i]
             ns.events?.[e]?.forEach(cb => cb())
             delete ns.events?.[e]
             i++
         }
 
         seqs.splice(start, i - start)
-        if (!seqs.length) delete ns.actor_seqs[actor]
+        if (!seqs.length) delete ns.agent_seqs[agent]
     }
 
     function validate_old_patches(resource, base_v, parents, patches) {
@@ -1999,336 +2048,12 @@ function create_braid_text() {
         return doc.getStringAt(doc.remoteToLocalVersion(version))
     }
 
-    function dt_get(doc, version, agent = null, anti_version = null) {
-        if (dt_get.last_doc) dt_get.last_doc.free()
-
-        let bytes = doc.toBytes()
-        dt_get.last_doc = doc = Doc.fromBytes(bytes, agent)
-
-        let [_agents, versions, parentss] = dt_parse(bytes)
-        if (anti_version) {
-            var include_versions = new Set()
-            var bad_versions = new Set(anti_version)
-
-            for (let i = 0; i < versions.length; i++) {
-                var v = versions[i].join("-")
-                var ps = parentss[i].map(x => x.join('-'))
-                if (bad_versions.has(v) || ps.some(x => bad_versions.has(x)))
-                    bad_versions.add(v)
-                else
-                    include_versions.add(v)
-            }
-        } else {
-            var include_versions = new Set(version)
-            var looking_for = new Set(version)
-            var local_version = []
-
-            for (let i = versions.length - 1; i >= 0; i--) {
-                var v = versions[i].join("-")
-                var ps = parentss[i].map(x => x.join('-'))
-                if (looking_for.has(v)) {
-                    local_version.push(i)
-                    looking_for.delete(v)
-                }
-                if (include_versions.has(v))
-                    ps.forEach(x => include_versions.add(x))
-            }
-            local_version.reverse()
-
-            // NOTE: currently used by braid-chrome in dt.js at the bottom
-            dt_get.last_local_version = new Uint32Array(local_version)
-
-            if (looking_for.size) throw new Error(`version not found: ${version}`)
-        }
-
-        let new_doc = new Doc(agent)
-        let op_runs = doc.getOpsSince([])
-
-        let i = 0
-        op_runs.forEach((op_run) => {
-            if (op_run.content) op_run.content = [...op_run.content]
-
-            let len = op_run.end - op_run.start
-            let base_i = i
-            for (let j = 1; j <= len; j++) {
-                let I = base_i + j
-                if (
-                    j == len ||
-                        parentss[I].length != 1 ||
-                        parentss[I][0][0] != versions[I - 1][0] ||
-                        parentss[I][0][1] != versions[I - 1][1] ||
-                        versions[I][0] != versions[I - 1][0] ||
-                        versions[I][1] != versions[I - 1][1] + 1
-                ) {
-                    for (; i < I; i++) {
-                        let version = versions[i].join("-")
-                        if (!include_versions.has(version)) continue
-                        let og_i = i
-                        let content = []
-                        if (op_run.content?.[i - base_i]) content.push(op_run.content[i - base_i])
-                        if (!!op_run.content === op_run.fwd)
-                            while (i + 1 < I && include_versions.has(versions[i + 1].join("-"))) {
-                                i++
-                                if (op_run.content?.[i - base_i]) content.push(op_run.content[i - base_i])
-                            }
-                        content = content.length ? content.join("") : null
-
-                        new_doc.mergeBytes(
-                            dt_create_bytes(
-                                version,
-                                parentss[og_i].map((x) => x.join("-")),
-                                op_run.fwd ?
-                                    (op_run.content ?
-                                     op_run.start + (og_i - base_i) :
-                                     op_run.start) :
-                                    op_run.end - 1 - (i - base_i),
-                                op_run.content ? 0 : i - og_i + 1,
-                                content
-                            )
-                        )
-                    }
-                }
-            }
-        })
-        return new_doc
-    }
-
     function dt_get_patches(doc, version = null) {
         return doc.getPatches(version)
     }
 
-    function dt_parse(bytes) {
-        let state = dt_make_cursor(bytes)
-
-        let agents = []
-        let versions = []
-        let parentss = []
-
-        while (state.pos < state.bytes.length) {
-            let id = state.bytes[state.pos++]
-            let len = dt_read_varint(state)
-            if (id == 1) {
-            } else if (id == 3) {
-                let goal = state.pos + len
-                while (state.pos < goal) {
-                    agents.push(dt_read_string(state))
-                }
-            } else if (id == 20) {
-            } else if (id == 21) {
-                let seqs = {}
-                let goal = state.pos + len
-                while (state.pos < goal) {
-                    let part0 = dt_read_varint(state)
-                    let has_jump = part0 & 1
-                    let agent_i = (part0 >> 1) - 1
-                    let run_length = dt_read_varint(state)
-                    let jump = 0
-                    if (has_jump) {
-                        let part2 = dt_read_varint(state)
-                        jump = part2 >> 1
-                        if (part2 & 1) jump *= -1
-                    }
-                    let base = (seqs[agent_i] || 0) + jump
-
-                    for (let i = 0; i < run_length; i++) {
-                        versions.push([agents[agent_i], base + i])
-                    }
-                    seqs[agent_i] = base + run_length
-                }
-            } else if (id == 23) {
-                let count = 0
-                let goal = state.pos + len
-                while (state.pos < goal) {
-                    let run_len = dt_read_varint(state)
-
-                    let parents = []
-                    let has_more = 1
-                    while (has_more) {
-                        let x = dt_read_varint(state)
-                        let is_foreign = 0x1 & x
-                        has_more = 0x2 & x
-                        let num = x >> 2
-
-                        if (x == 1) {
-                            // no parents (e.g. parent is "root")
-                        } else if (!is_foreign) {
-                            parents.push(versions[count - num])
-                        } else {
-                            parents.push([agents[num - 1], dt_read_varint(state)])
-                        }
-                    }
-                    parentss.push(parents)
-                    count++
-
-                    for (let i = 0; i < run_len - 1; i++) {
-                        parentss.push([versions[count - 1]])
-                        count++
-                    }
-                }
-            } else {
-                state.pos += len
-            }
-        }
-
-        return [agents, versions, parentss]
-    }
-
-    function dt_get_actor_seq_runs(bytes, cb) {
-        let state = dt_make_cursor(bytes)
-
-        let agents = []
-
-        while (state.pos < state.bytes.length) {
-            let id = state.bytes[state.pos++]
-            let len = dt_read_varint(state)
-            if (id == 1) {
-            } else if (id == 3) {
-                let goal = state.pos + len
-                while (state.pos < goal) {
-                    agents.push(dt_read_string(state))
-                }
-            } else if (id == 20) {
-            } else if (id == 21) {
-                let seqs = {}
-                let goal = state.pos + len
-                while (state.pos < goal) {
-                    let part0 = dt_read_varint(state)
-                    let has_jump = part0 & 1
-                    let agent_i = (part0 >> 1) - 1
-                    let run_length = dt_read_varint(state)
-                    let jump = 0
-                    if (has_jump) {
-                        let part2 = dt_read_varint(state)
-                        jump = part2 >> 1
-                        if (part2 & 1) jump *= -1
-                    }
-                    let base = (seqs[agent_i] || 0) + jump
-
-                    cb(agents[agent_i], base, run_length)
-                    seqs[agent_i] = base + run_length
-                }
-            } else {
-                state.pos += len
-            }
-        }
-    }
-
-    function dt_get_local_version(bytes, version, options = {}) {
-        var looking_for = new Map()
-        for (var event of version) {
-            var [agent, seq] = decode_version(event)
-            if (!looking_for.has(agent)) looking_for.set(agent, [])
-            looking_for.get(agent).push(seq)
-        }
-        for (var seqs of looking_for.values())
-            seqs.sort((a, b) => a - b)
-
-        var local_version = []
-        var local_version_base = 0
-
-        var state = dt_make_cursor(bytes)
-
-        let agents = []
-
-        while (state.pos < state.bytes.length && looking_for.size) {
-            let id = state.bytes[state.pos++]
-            let len = dt_read_varint(state)
-            if (id == 1) {
-            } else if (id == 3) {
-                let goal = state.pos + len
-                while (state.pos < goal) {
-                    agents.push(dt_read_string(state))
-                }
-            } else if (id == 20) {
-            } else if (id == 21) {
-                let seqs = {}
-                let goal = state.pos + len
-                while (state.pos < goal && looking_for.size) {
-                    let part0 = dt_read_varint(state)
-                    let has_jump = part0 & 1
-                    let agent_i = (part0 >> 1) - 1
-                    let run_length = dt_read_varint(state)
-                    let jump = 0
-                    if (has_jump) {
-                        let part2 = dt_read_varint(state)
-                        jump = part2 >> 1
-                        if (part2 & 1) jump *= -1
-                    }
-                    let base = (seqs[agent_i] || 0) + jump
-
-                    var agent = agents[agent_i]
-                    looking_for_seqs = looking_for.get(agent)
-                    if (looking_for_seqs) {
-                        for (var seq of splice_out_range(
-                            looking_for_seqs, base, base + run_length - 1))
-                            local_version.push(local_version_base + (seq - base))
-                        if (!looking_for_seqs.length) looking_for.delete(agent)
-                    }
-                    local_version_base += run_length
-
-                    seqs[agent_i] = base + run_length
-                }
-            } else {
-                state.pos += len
-            }
-        }
-
-        if (looking_for.size && !options.tolerant) throw new Error(`version not found: ${version}`)
-        return local_version
-
-        function splice_out_range(a, s, e) {
-            if (!a?.length) return []
-            var l = 0, r = a.length
-            while (l < r) {
-                var m = Math.floor((l + r) / 2)
-                if (a[m] < s) l = m + 1; else r = m
-            }
-            var i = l
-            l = i; r = a.length
-            while (l < r) {
-                m = Math.floor((l + r) / 2)
-                if (a[m] <= e) l = m + 1; else r = m
-            }
-            return a.splice(i, l - i)
-        }
-    }
-
     // Accepts Uint8Array or plain array (external callers pass either),
     // checks the DT file header, and returns a read cursor.
-    function dt_make_cursor(bytes) {
-        let state = {
-            bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
-            pos: 0
-        }
-
-        if (new TextDecoder().decode(state.bytes.subarray(0, 8)) !== "DMNDTYPS") throw new Error("dt parse error, expected DMNDTYPS")
-        state.pos = 8
-
-        if (state.bytes[state.pos++] != 0) throw new Error("dt parse error, expected version 0")
-
-        return state
-    }
-
-    function dt_read_string(state) {
-        let len = dt_read_varint(state)
-        let s = new TextDecoder().decode(state.bytes.subarray(state.pos, state.pos + len))
-        state.pos += len
-        return s
-    }
-
-    function dt_read_varint(state) {
-        let result = 0
-        let shift = 0
-        while (true) {
-            if (state.pos >= state.bytes.length) throw new Error("byte array does not contain varint")
-
-            let byte_val = state.bytes[state.pos++]
-            result |= (byte_val & 0x7f) << shift
-            if ((byte_val & 0x80) == 0) return result
-            shift += 7
-        }
-    }
-
     function dt_create_bytes(version, parents, pos, del, ins) {
         if (del) pos += del - 1
 
@@ -2499,18 +2224,10 @@ function create_braid_text() {
     }
 
 
+    // Translate a frontier of remote version ids into local versions, or
+    // false if this document doesn't know all of them
     function OpLog_remote_to_local(doc, frontier) {
-        let map = Object.fromEntries(frontier.map((x) => [x, true]))
-
-        let local_version = []
-
-        let max_version = doc.getLocalVersion().reduce((a, b) => Math.max(a, b), -1)
-        for (let i = 0; i <= max_version; i++) {
-            if (map[doc.localToRemoteVersion([i])[0].join("-")]) {
-                local_version.push(i)
-            }
-        }
-
+        let local_version = doc.remoteToLocalVersion(frontier, true)
         return frontier.length == local_version.length && new Uint32Array(local_version)
     }
 
@@ -2852,30 +2569,30 @@ function create_braid_text() {
     function validate_version_array(x) {
         if (!Array.isArray(x)) throw new Error(`invalid version array: not an array`)
         x.sort()
-        for (var xx of x) validate_actor_seq(xx)
+        for (var xx of x) validate_agent_seq(xx)
     }
 
-    function validate_actor_seq(x) {
-        if (typeof x !== 'string') throw new Error(`invalid actor-seq: not a string`)
-        let [actor, seq] = decode_version(x)
-        validate_actor(actor)
+    function validate_agent_seq(x) {
+        if (typeof x !== 'string') throw new Error(`invalid agent-seq: not a string`)
+        let [agent, seq] = decode_version(x)
+        validate_agent(agent)
     }
 
-    function validate_actor(x) {
-        if (typeof x !== 'string') throw new Error(`invalid actor: not a string`)
-        if (Buffer.byteLength(x, 'utf8') >= 50) throw new Error(`actor value too long (max 49): ${x}`) // restriction coming from dt
+    function validate_agent(x) {
+        if (typeof x !== 'string') throw new Error(`invalid agent: not a string`)
+        if (Buffer.byteLength(x, 'utf8') >= 50) throw new Error(`agent value too long (max 49): ${x}`) // restriction coming from dt
     }
 
-    function is_valid_actor(x) {
+    function is_valid_agent(x) {
         try {
-            validate_actor(x)
+            validate_agent(x)
             return true
         } catch (e) { }
     }
 
     function decode_version(v) {
         let m = v.match(/^(.*)-(\d+)$/s)
-        if (!m) throw new Error(`invalid actor-seq version: ${v}`)
+        if (!m) throw new Error(`invalid agent-seq version: ${v}`)
         return [m[1], parseInt(m[2])]
     }
 
@@ -3552,10 +3269,7 @@ function create_braid_text() {
     braid_text.encode_filename = encode_filename
     braid_text.decode_filename = decode_filename
 
-    braid_text.dt_get = dt_get
     braid_text.dt_get_patches = dt_get_patches
-    braid_text.dt_parse = dt_parse
-    braid_text.dt_get_local_version = dt_get_local_version
     braid_text.dt_create_bytes = dt_create_bytes
 
     braid_text.decode_version = decode_version
