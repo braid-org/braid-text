@@ -29,7 +29,6 @@ function create_braid_text() {
     let braid_text = {
         verbose: false,
         db_folder: './braid-text-db',
-        length_cache_size: 10,
         meta_file_save_period_ms: 1000,
         debug_sync_checks: false,
         simpletonSetTimeout: setTimeout,   // Can be customized for fuzz testing
@@ -1122,8 +1121,8 @@ function create_braid_text() {
 
             if (!parents) parents = resource.version
 
-            let max_pos = resource.dt.length_at_version.get('' + parents) ??
-                (v_eq(resource.version, parents) ? resource.dt.doc.len() : dt_len(resource.dt.doc, parents))
+            let max_pos = v_eq(resource.version, parents)
+                ? resource.dt.doc.len() : dt_len(resource.dt.doc, parents)
 
             if (body != null) {
                 patches = [{
@@ -1181,8 +1180,8 @@ function create_braid_text() {
                 change_count = new_count
                 low_seq = v[1] + 1 - change_count
                 parents = [`${v[0]}-${low_seq - 1}`]
-                max_pos = resource.dt.length_at_version.get('' + parents) ??
-                    (v_eq(resource.version, parents) ? resource.dt.doc.len() : dt_len(resource.dt.doc, parents))
+                max_pos = v_eq(resource.version, parents)
+                    ? resource.dt.doc.len() : dt_len(resource.dt.doc, parents)
                 patches = new_patches
             }
 
@@ -1196,9 +1195,6 @@ function create_braid_text() {
                 must_be_at_least = p.range[1]
             }
 
-            resource.dt.length_at_version.put(`${v[0]}-${v[1]}`, patches.reduce((a, b) =>
-                a + (b.content_codepoints?.length ?? 0) - (b.range[1] - b.range[0]),
-                max_pos))
 
             // get the version of the first character-wise edit
             v = `${v[0]}-${low_seq}`
@@ -1457,7 +1453,6 @@ function create_braid_text() {
     function make_dt_backend() {
         return {
             doc: new Doc("server"),
-            length_at_version: create_simple_cache(braid_text.length_cache_size),
             clients: new Set(),
             log: { save: () => {} },
         }
@@ -2032,7 +2027,12 @@ function create_braid_text() {
         if (v_eq(version, doc.getRemoteVersion().map((x) => x.join("-")).sort()))
             return doc.len()
 
-        return doc.lenAt(doc.remoteToLocalVersion(version))
+        // The engine knows its current length outright, so the length at an
+        // earlier version is that length minus everything that has happened
+        // since. Only the operations between the two versions are walked, so
+        // an edit written a few versions back costs almost nothing to place,
+        // however long the document has been edited.
+        return doc.len() - doc.lenSince(doc.remoteToLocalVersion(version))
     }
 
     function dt_get_string(doc, version) {
@@ -2964,27 +2964,6 @@ function create_braid_text() {
     }
 
     // Create a LRU cache.  It evicts stuff when it gets greater than `size` in LRU order.
-    function create_simple_cache(size) {
-        // This map will iterate over keys in the order they were inserted.
-        // Eviction will remove from the front of the map.
-        // So we want every delete() and set() operation to move a key/value to the end.
-        var map = new Map()
-        return {
-            put(key, value) {
-                map.delete(key)  // remove first so existing keys don't trigger eviction
-                if (map.size >= size) map.delete(map.keys().next().value)
-                map.set(key, value)
-            },
-            get(key) {
-                if (!map.has(key)) return null
-                var value = map.get(key)
-                map.delete(key)
-                map.set(key, value)
-                return value
-            },
-        }
-    }
-
     function apply_patch(obj, range, content) {
 
         // Descend down a bunch of objects until we get to the final object
